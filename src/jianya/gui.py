@@ -43,9 +43,9 @@ class _App:
         root = tk.Tk()
         self.root = root
         root.title(f"简压 {__version__} — 简洁 · 免费 · 无广告")
-        root.geometry("480x420")
-        # 固定最小尺寸，保证底部按钮不会因窗口缩小被遮挡。
-        root.minsize(480, 420)
+        root.geometry("480x500")
+        # 固定最小尺寸，保证底部按钮与说明文字不会因窗口缩小被遮挡。
+        root.minsize(480, 500)
         root.configure(bg="white")
 
         self._set_window_icon()
@@ -90,6 +90,7 @@ class _App:
             style.configure("Status.TLabel", background=WHITE, foreground="#555555")
             style.configure("Big.TButton", font=("Microsoft YaHei", 16, "bold"), padding=18)
             style.configure("Link.TButton", font=("Microsoft YaHei", 9), padding=6)
+            style.configure("Footer.TLabel", background=WHITE, foreground="#9aa0a6")
         except Exception:
             pass
 
@@ -124,15 +125,31 @@ class _App:
         )
         self.btn_extract.grid(row=0, column=1, sticky="ew", padx=(8, 0))
 
-        # 先把底部固定区域贴到窗口底部，保证任何情况下都不被遮挡。
+        # 最底部：软件说明（先 pack，贴在窗口最底端）
+        footer = ttk.Frame(container, style="White.TFrame")
+        footer.pack(side="bottom", fill="x", pady=(10, 0))
+        ttk.Separator(footer, orient="horizontal").pack(fill="x", pady=(0, 8))
+        for text in (
+            "本软件由 Opus 4.8 模型自动生成",
+            "致力于造福全人类，共建简单、和平、美好的生态",
+            "—— 洞穴理论工作室 出品",
+        ):
+            ttk.Label(
+                footer, text=text, style="Footer.TLabel",
+                font=("Microsoft YaHei", 8), anchor="center", justify="center",
+            ).pack(fill="x")
+
+        # 底部固定区域（右键菜单管理），位于说明文字上方，保证不被遮挡。
         bottom = ttk.Frame(container, style="White.TFrame")
         bottom.pack(side="bottom", fill="x", pady=(14, 0))
+        inner = ttk.Frame(bottom, style="White.TFrame")
+        inner.pack(anchor="center")
         ttk.Button(
-            bottom, text="安装右键菜单", style="Link.TButton",
+            inner, text="安装右键菜单", style="Link.TButton",
             command=self._on_install_menu,
         ).pack(side="left")
         ttk.Button(
-            bottom, text="移除右键菜单", style="Link.TButton",
+            inner, text="移除右键菜单", style="Link.TButton",
             command=self._on_uninstall_menu,
         ).pack(side="left", padx=(8, 0))
 
