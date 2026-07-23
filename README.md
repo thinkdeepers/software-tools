@@ -150,6 +150,12 @@ bash scripts/build_windows_wine.sh # 生成 dist/简压.exe 与 release/简压�
     └── test_core.py
 ```
 
+## 代码签名（消除下载/SmartScreen 警告）
+
+未签名的 exe 会触发浏览器下载警告和 Windows SmartScreen 提示。本项目已做好
+接入 **SignPath Foundation**（面向开源项目的免费代码签名）的准备：CI 中预置了
+受密钥保护的签名步骤，配置好密钥即自动签名。详细申请与配置见 [`SIGNPATH.md`](SIGNPATH.md)。
+
 ## 许可
 
-免费使用。
+本项目采用 [MIT 许可证](LICENSE)，免费使用。
