@@ -52,7 +52,14 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _has_console() -> bool:
+    """打包为 --windowed exe 时 sys.stdout/stderr 为 None。"""
+    return sys.stdout is not None
+
+
 def _console_progress(done: int, total: int, name: str) -> None:
+    if not _has_console():
+        return
     pct = int(done / total * 100) if total else 100
     sys.stdout.write(f"\r[{pct:3d}%] {name[:60]:<60}")
     sys.stdout.flush()
@@ -60,13 +67,34 @@ def _console_progress(done: int, total: int, name: str) -> None:
         sys.stdout.write("\n")
 
 
+def _notify(title: str, message: str, error: bool = False) -> None:
+    """有控制台时打印到终端；无控制台（右键菜单调用 exe）时弹窗提示。"""
+    if _has_console():
+        stream = sys.stderr if error else sys.stdout
+        print(message, file=stream)
+        return
+    try:
+        import tkinter as tk
+        from tkinter import messagebox
+
+        root = tk.Tk()
+        root.withdraw()
+        if error:
+            messagebox.showerror(title, message)
+        else:
+            messagebox.showinfo(title, message)
+        root.destroy()
+    except Exception:
+        pass
+
+
 def _run_compress(paths: List[str], output: Optional[str]) -> int:
     try:
         result = core.compress_to_zip(paths, output=output, progress=_console_progress)
     except core.ArchiveError as exc:
-        print(f"错误：{exc}", file=sys.stderr)
+        _notify("简压 - 压缩失败", f"错误：{exc}", error=True)
         return 1
-    print(f"已压缩到：{result}")
+    _notify("简压", f"已压缩到：{result}")
     return 0
 
 
@@ -74,9 +102,9 @@ def _run_extract(archive: str, output: Optional[str]) -> int:
     try:
         result = core.extract_archive(archive, output_dir=output, progress=_console_progress)
     except core.ArchiveError as exc:
-        print(f"错误：{exc}", file=sys.stderr)
+        _notify("简压 - 解压失败", f"错误：{exc}", error=True)
         return 1
-    print(f"已解压到：{result}")
+    _notify("简压", f"已解压到：{result}")
     return 0
 
 
@@ -90,13 +118,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         try:
             if args.install:
                 context_menu.install()
-                print("右键菜单已注册。")
+                _notify("简压", "右键菜单已注册。")
             else:
                 context_menu.uninstall()
-                print("右键菜单已移除。")
+                _notify("简压", "右键菜单已移除。")
             return 0
         except context_menu.ContextMenuError as exc:
-            print(f"错误：{exc}", file=sys.stderr)
+            _notify("简压", f"错误：{exc}", error=True)
             return 1
 
     if args.compress:
