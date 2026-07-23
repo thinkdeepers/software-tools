@@ -1,0 +1,233 @@
+"""极简图形界面：只有"压缩"和"解压"两个大按钮。"""
+
+from __future__ import annotations
+
+import queue
+import sys
+import threading
+from pathlib import Path
+from typing import List, Optional
+
+from . import __version__
+from . import core
+
+
+def launch() -> int:
+    try:
+        import tkinter as tk
+        from tkinter import filedialog, messagebox, ttk
+    except Exception as exc:  # pragma: no cover - 缺少 tkinter 时
+        print(f"无法启动图形界面（缺少 tkinter）：{exc}", file=sys.stderr)
+        print("你也可以使用命令行：jianya --compress <文件> 或 jianya --extract <压缩包>")
+        return 1
+
+    app = _App(tk, filedialog, messagebox, ttk)
+    app.run()
+    return 0
+
+
+class _App:
+    """封装 tkinter 主窗口，避免在模块顶层导入 tkinter。"""
+
+    def __init__(self, tk, filedialog, messagebox, ttk):
+        self.tk = tk
+        self.filedialog = filedialog
+        self.messagebox = messagebox
+        self.ttk = ttk
+
+        self._events: "queue.Queue[tuple]" = queue.Queue()
+        self._busy = False
+
+        root = tk.Tk()
+        self.root = root
+        root.title(f"简压 {__version__} — 简洁 · 免费 · 无广告")
+        root.geometry("460x300")
+        root.minsize(420, 280)
+
+        self._build_ui()
+        root.after(80, self._drain_events)
+
+    # ------------------------------------------------------------------
+    # 界面
+    # ------------------------------------------------------------------
+    def _build_ui(self) -> None:
+        tk, ttk = self.tk, self.ttk
+
+        try:
+            style = ttk.Style()
+            if "clam" in style.theme_names():
+                style.theme_use("clam")
+            style.configure("Big.TButton", font=("Microsoft YaHei", 16, "bold"), padding=18)
+        except Exception:
+            pass
+
+        container = ttk.Frame(self.root, padding=24)
+        container.pack(fill="both", expand=True)
+
+        title = ttk.Label(
+            container, text="简压", font=("Microsoft YaHei", 22, "bold")
+        )
+        title.pack(pady=(0, 4))
+        subtitle = ttk.Label(
+            container,
+            text="压缩统一为 ZIP · 解压支持常见格式",
+            font=("Microsoft YaHei", 10),
+        )
+        subtitle.pack(pady=(0, 18))
+
+        buttons = ttk.Frame(container)
+        buttons.pack(fill="x")
+        buttons.columnconfigure(0, weight=1)
+        buttons.columnconfigure(1, weight=1)
+
+        self.btn_compress = ttk.Button(
+            buttons, text="压缩", style="Big.TButton", command=self._on_compress
+        )
+        self.btn_compress.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+
+        self.btn_extract = ttk.Button(
+            buttons, text="解压", style="Big.TButton", command=self._on_extract
+        )
+        self.btn_extract.grid(row=0, column=1, sticky="ew", padx=(8, 0))
+
+        self.progress = ttk.Progressbar(container, mode="determinate")
+        self.progress.pack(fill="x", pady=(22, 6))
+
+        self.status = ttk.Label(
+            container, text="选择文件开始压缩，或选择压缩包进行解压",
+            font=("Microsoft YaHei", 9), foreground="#555555",
+        )
+        self.status.pack(fill="x")
+
+        # 底部：右键菜单管理（仅 Windows 有效）
+        bottom = ttk.Frame(container)
+        bottom.pack(fill="x", side="bottom", pady=(14, 0))
+        link = ttk.Button(
+            bottom, text="安装右键菜单", command=self._on_install_menu
+        )
+        link.pack(side="left")
+        ttk.Button(
+            bottom, text="移除右键菜单", command=self._on_uninstall_menu
+        ).pack(side="left", padx=(8, 0))
+
+    # ------------------------------------------------------------------
+    # 事件处理
+    # ------------------------------------------------------------------
+    def _set_busy(self, busy: bool) -> None:
+        self._busy = busy
+        state = "disabled" if busy else "normal"
+        self.btn_compress.configure(state=state)
+        self.btn_extract.configure(state=state)
+
+    def _on_compress(self) -> None:
+        if self._busy:
+            return
+        # 先尝试选择文件；用户可取消后改为选择文件夹。
+        files = self.filedialog.askopenfilenames(title="选择要压缩的文件（可多选）")
+        paths: List[str] = list(files)
+        if not paths:
+            folder = self.filedialog.askdirectory(title="或选择要压缩的文件夹")
+            if folder:
+                paths = [folder]
+        if not paths:
+            return
+
+        output = self.filedialog.asksaveasfilename(
+            title="保存 ZIP 为",
+            defaultextension=".zip",
+            initialfile=core.default_zip_output([Path(p) for p in paths]).name,
+            filetypes=[("ZIP 压缩包", "*.zip")],
+        )
+        if not output:
+            return
+
+        self._start_task(self._do_compress, paths, output)
+
+    def _on_extract(self) -> None:
+        if self._busy:
+            return
+        archive = self.filedialog.askopenfilename(
+            title="选择要解压的压缩包",
+            filetypes=[
+                ("压缩包", "*.zip *.tar *.gz *.tgz *.bz2 *.xz *.7z *.rar"),
+                ("所有文件", "*.*"),
+            ],
+        )
+        if not archive:
+            return
+        output = self.filedialog.askdirectory(title="选择解压到的目录（取消则解压到同名目录）")
+        self._start_task(self._do_extract, archive, output or None)
+
+    def _start_task(self, target, *args) -> None:
+        self._set_busy(True)
+        self.progress.configure(value=0)
+        self.status.configure(text="处理中…")
+        thread = threading.Thread(target=target, args=args, daemon=True)
+        thread.start()
+
+    def _progress(self, done: int, total: int, name: str) -> None:
+        self._events.put(("progress", done, total, name))
+
+    def _do_compress(self, paths: List[str], output: str) -> None:
+        try:
+            result = core.compress_to_zip(paths, output=output, progress=self._progress)
+            self._events.put(("done", "压缩完成", str(result)))
+        except Exception as exc:
+            self._events.put(("error", str(exc)))
+
+    def _do_extract(self, archive: str, output: Optional[str]) -> None:
+        try:
+            result = core.extract_archive(archive, output_dir=output, progress=self._progress)
+            self._events.put(("done", "解压完成", str(result)))
+        except Exception as exc:
+            self._events.put(("error", str(exc)))
+
+    def _on_install_menu(self) -> None:
+        self._manage_menu(install=True)
+
+    def _on_uninstall_menu(self) -> None:
+        self._manage_menu(install=False)
+
+    def _manage_menu(self, install: bool) -> None:
+        from . import context_menu
+
+        try:
+            if install:
+                context_menu.install()
+                self.messagebox.showinfo("简压", "右键菜单已安装。\n右键任意文件即可看到压缩/解压。")
+            else:
+                context_menu.uninstall()
+                self.messagebox.showinfo("简压", "右键菜单已移除。")
+        except context_menu.ContextMenuError as exc:
+            self.messagebox.showerror("简压", str(exc))
+
+    # ------------------------------------------------------------------
+    # 主循环辅助
+    # ------------------------------------------------------------------
+    def _drain_events(self) -> None:
+        try:
+            while True:
+                event = self._events.get_nowait()
+                kind = event[0]
+                if kind == "progress":
+                    _, done, total, name = event
+                    pct = int(done / total * 100) if total else 100
+                    self.progress.configure(value=pct)
+                    self.status.configure(text=f"[{pct}%] {name}")
+                elif kind == "done":
+                    _, title, path = event
+                    self.progress.configure(value=100)
+                    self.status.configure(text=f"{title}：{path}")
+                    self._set_busy(False)
+                    self.messagebox.showinfo("简压", f"{title}\n{path}")
+                elif kind == "error":
+                    _, msg = event
+                    self._set_busy(False)
+                    self.status.configure(text="操作失败")
+                    self.messagebox.showerror("简压", msg)
+        except queue.Empty:
+            pass
+        self.root.after(80, self._drain_events)
+
+    def run(self) -> None:
+        self.root.mainloop()
