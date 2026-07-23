@@ -13,11 +13,6 @@ jobs:
   build:
     runs-on: windows-latest
 
-    # 把签名密钥映射到环境变量，便于用 if 判断是否已配置 SignPath。
-    env:
-      SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
-      SIGNPATH_ORG_ID: ${{ secrets.SIGNPATH_ORG_ID }}
-
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
@@ -46,42 +41,10 @@ jobs:
       - name: 制作安装程序
         run: '& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer\jianya.iss'
 
-      - name: 上传安装程序（未签名）
-        id: upload_installer
+      - name: 上传安装程序
         uses: actions/upload-artifact@v4
         with:
           name: 简压安装程序
-          path: release/*.exe
-          if-no-files-found: error
-
-      # ---- 可选：SignPath Foundation 代码签名 ----
-      # 仅当在仓库 Secrets 中配置了 SIGNPATH_API_TOKEN / SIGNPATH_ORG_ID 时才执行；
-      # 未配置时自动跳过，不影响正常构建。
-      # 申请与门户配置见 SIGNPATH.md；下面的 slug 需与你在 SignPath 门户里创建的一致。
-      - name: SignPath 代码签名
-        id: signpath
-        if: env.SIGNPATH_API_TOKEN != ''
-        uses: signpath/github-action-submit-signing-request@v1
-        with:
-          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-          organization-id: ${{ secrets.SIGNPATH_ORG_ID }}
-          project-slug: jianya
-          signing-policy-slug: release-signing
-          artifact-configuration-slug: installer
-          github-artifact-id: ${{ steps.upload_installer.outputs.artifact-id }}
-          wait-for-completion: true
-          output-artifact-directory: signed
-
-      - name: 用已签名文件替换发行文件
-        if: env.SIGNPATH_API_TOKEN != ''
-        shell: bash
-        run: cp -f signed/*.exe release/
-
-      - name: 上传已签名安装程序
-        if: env.SIGNPATH_API_TOKEN != ''
-        uses: actions/upload-artifact@v4
-        with:
-          name: 简压安装程序-已签名
           path: release/*.exe
           if-no-files-found: error
 
