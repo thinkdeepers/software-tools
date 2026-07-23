@@ -35,15 +35,19 @@
 └─────────────────────────────────────┘
 ```
 
-## 下载 / 获取 exe
+## 下载 / 安装（安装版，非便携）
 
-- **开箱即用**：仓库内已附带打包好的 Windows 可执行文件 [`release/简压.exe`](release/)，
-  下载后双击即可运行，无需安装 Python。
-- **自动构建**：每次推送都会由 GitHub Actions 在 Windows 上重新打包，
-  可在 Actions 运行页下载构建产物 `简压-windows-exe`；打 `v*` 标签时还会自动发布到 Release。
+简压是需要**安装到电脑**的软件（不提供便携免安装版）。
 
-> 附带的 exe 使用真实的 Windows Python + PyInstaller 打包（通过 Wine 构建），为标准的
-> Windows PE 可执行文件；若你不放心第三方二进制，也可以按下文自行打包。
+- **安装程序**：仓库内已附带打包好的安装包 [`release/简压安装程序.exe`](release/)，
+  双击运行安装向导即可。默认按**当前用户**安装到 `%LocalAppData%\Programs\简压`（无需管理员权限），
+  并创建开始菜单/桌面快捷方式；安装时可勾选把「压缩/解压」加入右键菜单。
+- **卸载**：从"设置 → 应用"或开始菜单中的"卸载 简压"进行卸载，会自动清理右键菜单。
+- **自动构建**：每次推送都会由 GitHub Actions 在 Windows 上重新打包并制作安装程序，
+  可在 Actions 运行页下载产物 `简压安装程序`；打 `v*` 标签时还会自动发布到 Release。
+
+> 安装程序内的主程序使用真实的 Windows Python + PyInstaller 打包，为标准的 Windows PE
+> 可执行文件；安装包由 Inno Setup 生成。若你不放心第三方二进制，也可以按下文自行打包。
 
 ## 使用方式
 
@@ -62,18 +66,21 @@ python main.py --install                    # 注册 Windows 右键菜单
 python main.py --uninstall                  # 移除 Windows 右键菜单
 ```
 
-### 方式二：打包为 Windows 可执行文件（推荐给普通用户）
+### 方式二：自行制作安装程序（推荐给普通用户）
 
 在 Windows 上：
 
 ```bash
-pip install pyinstaller
-python build_windows.py
+pip install pyinstaller       # 1) 先打包主程序
+python build_windows.py       #    生成 dist\简压.exe（自带 assets/app.ico 图标）
+
+# 2) 再用 Inno Setup 生成安装程序（需安装 Inno Setup 6）
+"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\jianya.iss
 ```
 
-生成的 `dist\简压.exe` 双击即可运行，无需安装 Python。exe 会自带 `assets/app.ico` 图标。
+生成的安装程序位于 `release\简压安装程序.exe`，分发给用户双击安装即可。
 
-> 提示：右键菜单调用 exe 完成压缩/解压后，会弹出一个"完成"提示框告知输出位置；
+> 提示：右键菜单调用主程序完成压缩/解压后，会弹出一个"完成"提示框告知输出位置；
 > 出错时会弹出错误提示。
 
 ## 右键菜单集成（Windows）
@@ -114,10 +121,12 @@ python -m pytest
 ├── assets/
 │   ├── make_icon.py            # 生成应用图标
 │   └── app.ico / app.png       # 应用图标
+├── installer/
+│   └── jianya.iss              # Inno Setup 安装程序脚本
 ├── release/
-│   └── 简压.exe                # 预编译好的 Windows 可执行文件
+│   └── 简压安装程序.exe        # 预编译好的 Windows 安装程序
 ├── .github/workflows/
-│   └── build-windows.yml       # 自动打包 exe 的 CI
+│   └── build-windows.yml       # 自动打包 exe + 制作安装程序的 CI
 ├── src/jianya/
 │   ├── core.py                 # 压缩/解压核心逻辑
 │   ├── gui.py                  # 极简图形界面
