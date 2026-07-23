@@ -35,6 +35,16 @@
 └─────────────────────────────────────┘
 ```
 
+## 下载 / 获取 exe
+
+- **开箱即用**：仓库内已附带打包好的 Windows 可执行文件 [`release/简压.exe`](release/)，
+  下载后双击即可运行，无需安装 Python。
+- **自动构建**：每次推送都会由 GitHub Actions 在 Windows 上重新打包，
+  可在 Actions 运行页下载构建产物 `简压-windows-exe`；打 `v*` 标签时还会自动发布到 Release。
+
+> 附带的 exe 使用真实的 Windows Python + PyInstaller 打包（通过 Wine 构建），为标准的
+> Windows PE 可执行文件；若你不放心第三方二进制，也可以按下文自行打包。
+
 ## 使用方式
 
 ### 方式一：直接运行源码（需要 Python 3.8+）
@@ -61,7 +71,10 @@ pip install pyinstaller
 python build_windows.py
 ```
 
-生成的 `dist\简压.exe` 双击即可运行，无需安装 Python。
+生成的 `dist\简压.exe` 双击即可运行，无需安装 Python。exe 会自带 `assets/app.ico` 图标。
+
+> 提示：右键菜单调用 exe 完成压缩/解压后，会弹出一个"完成"提示框告知输出位置；
+> 出错时会弹出错误提示。
 
 ## 右键菜单集成（Windows）
 
@@ -95,14 +108,21 @@ python -m pytest
 
 ```
 .
-├── main.py                 # 入口
-├── build_windows.py        # PyInstaller 打包脚本
+├── main.py                     # 入口
+├── build_windows.py            # PyInstaller 打包脚本
 ├── requirements.txt
+├── assets/
+│   ├── make_icon.py            # 生成应用图标
+│   └── app.ico / app.png       # 应用图标
+├── release/
+│   └── 简压.exe                # 预编译好的 Windows 可执行文件
+├── .github/workflows/
+│   └── build-windows.yml       # 自动打包 exe 的 CI
 ├── src/jianya/
-│   ├── core.py             # 压缩/解压核心逻辑
-│   ├── gui.py              # 极简图形界面
-│   ├── cli.py              # 命令行解析
-│   └── context_menu.py     # Windows 右键菜单注册
+│   ├── core.py                 # 压缩/解压核心逻辑
+│   ├── gui.py                  # 极简图形界面
+│   ├── cli.py                  # 命令行解析
+│   └── context_menu.py         # Windows 右键菜单注册
 └── tests/
     └── test_core.py
 ```
