@@ -180,17 +180,17 @@ class _App:
                 font=("Microsoft YaHei", 8), anchor="center", justify="center",
             ).pack(fill="x")
 
-        # 底部固定区域（右键菜单管理），位于说明文字上方，保证不被遮挡。
+        # 底部固定区域（文件关联 / 右键菜单），位于说明文字上方，保证不被遮挡。
         bottom = ttk.Frame(container, style="White.TFrame")
         bottom.pack(side="bottom", fill="x", pady=(14, 0))
         inner = ttk.Frame(bottom, style="White.TFrame")
         inner.pack(anchor="center")
         ttk.Button(
-            inner, text="安装右键菜单", style="Link.TButton",
+            inner, text="设为默认打开", style="Link.TButton",
             command=self._on_install_menu,
         ).pack(side="left")
         ttk.Button(
-            inner, text="移除右键菜单", style="Link.TButton",
+            inner, text="取消默认打开", style="Link.TButton",
             command=self._on_uninstall_menu,
         ).pack(side="left", padx=(8, 0))
 
@@ -291,10 +291,16 @@ class _App:
         try:
             if install:
                 context_menu.install()
-                self.messagebox.showinfo("简压", "右键菜单已安装。\n右键任意文件即可看到压缩/解压。")
+                self.messagebox.showinfo(
+                    "简压",
+                    "已设为默认打开程序。\n"
+                    "· zip/7z/rar 等压缩包将显示简压图标\n"
+                    "· 双击压缩包即可用简压解压\n"
+                    "· 右键文件可压缩，右键压缩包可解压",
+                )
             else:
                 context_menu.uninstall()
-                self.messagebox.showinfo("简压", "右键菜单已移除。")
+                self.messagebox.showinfo("简压", "已取消默认打开，并移除右键菜单。")
         except context_menu.ContextMenuError as exc:
             self.messagebox.showerror("简压", str(exc))
 

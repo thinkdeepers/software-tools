@@ -32,7 +32,7 @@ Name: "chinesesimplified"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加图标:"
-Name: "contextmenu"; Description: "在右键菜单中加入压缩/解压（推荐）"; GroupDescription: "系统集成:"
+Name: "contextmenu"; Description: "将简压设为压缩包默认打开程序，并加入右键菜单（推荐）"; GroupDescription: "系统集成:"
 
 [Files]
 Source: "..\dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
@@ -44,7 +44,7 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 
 [Run]
 ; 安装完成后静默注册右键菜单
-Filename: "{app}\{#MyAppExeName}"; Parameters: "--install --quiet"; Tasks: contextmenu; Flags: runhidden; StatusMsg: "正在注册右键菜单..."
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--install --quiet"; Tasks: contextmenu; Flags: runhidden; StatusMsg: "正在关联压缩包格式并注册右键菜单..."
 ; 安装结束可选立即运行
 Filename: "{app}\{#MyAppExeName}"; Description: "立即运行 {#MyAppName}"; Flags: nowait postinstall skipifsilent
 

@@ -4,8 +4,8 @@
     jianya                      # 打开极简图形界面
     jianya --compress FILE...   # 直接把文件/目录压缩为 zip（右键菜单调用）
     jianya --extract ARCHIVE    # 直接解压压缩包（右键菜单调用）
-    jianya --install            # 注册 Windows 右键菜单
-    jianya --uninstall          # 移除 Windows 右键菜单
+    jianya --install            # 注册文件关联与右键菜单（默认用简压打开压缩包）
+    jianya --uninstall          # 移除文件关联与右键菜单
 """
 
 from __future__ import annotations
@@ -36,10 +36,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="解压指定压缩包",
     )
     group.add_argument(
-        "--install", action="store_true", help="注册 Windows 右键菜单",
+        "--install", action="store_true",
+        help="注册文件关联与右键菜单（压缩包显示简压图标并默认由简压打开）",
     )
     group.add_argument(
-        "--uninstall", action="store_true", help="移除 Windows 右键菜单",
+        "--uninstall", action="store_true",
+        help="移除文件关联与右键菜单",
     )
 
     parser.add_argument(
@@ -51,7 +53,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--quiet", action="store_true",
-        help="静默模式：不弹出提示框（供安装程序注册/移除右键菜单时使用）",
+        help="静默模式：不弹出提示框（供安装程序注册/移除文件关联时使用）",
     )
     return parser
 
@@ -123,11 +125,14 @@ def main(argv: Optional[List[str]] = None) -> int:
             if args.install:
                 context_menu.install()
                 if not args.quiet:
-                    _notify("简压", "右键菜单已注册。")
+                    _notify(
+                        "简压",
+                        "已设为默认打开程序：压缩包将显示简压图标，双击即可解压。",
+                    )
             else:
                 context_menu.uninstall()
                 if not args.quiet:
-                    _notify("简压", "右键菜单已移除。")
+                    _notify("简压", "已取消默认打开，并移除右键菜单。")
             return 0
         except context_menu.ContextMenuError as exc:
             if not args.quiet:

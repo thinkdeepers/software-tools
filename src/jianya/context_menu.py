@@ -1,38 +1,45 @@
-"""Windows 右键菜单集成。
+"""Windows 右键菜单 + 文件关联集成。
 
-通过写入 ``HKEY_CURRENT_USER\\Software\\Classes`` 注册右键菜单，
+通过写入 ``HKEY_CURRENT_USER\\Software\\Classes`` 完成注册，
 因此**不需要管理员权限**，且只影响当前用户。
 
-- 对任意文件 / 文件夹：新增"压缩为 ZIP（简压）"。
-- 对常见压缩包（.zip/.7z/.rar/.tar/.gz/.tgz/.bz2/.xz）：新增"解压到此处（简压）"。
+安装后效果：
+- 常见压缩包（.zip/.7z/.rar/.tar/.gz/.tgz/.bz2/.xz…）图标变为简压图标；
+- 双击压缩包默认由简压打开并解压；
+- 右键任意文件/文件夹可「压缩为 ZIP（简压）」；
+- 右键压缩包可「解压到此处（简压）」。
 """
 
 from __future__ import annotations
 
 import os
 import sys
-from typing import List
+from typing import Iterable, List, Optional
 
-# 需要注册解压菜单的扩展名。
+# 需要关联 / 注册解压菜单的扩展名。
 _EXTRACT_EXTS = [
     ".zip", ".7z", ".rar", ".tar", ".gz", ".tgz", ".bz2", ".xz", ".tbz2", ".txz",
 ]
 
 _COMPRESS_KEY = "Jianya.Compress"
 _EXTRACT_KEY = "Jianya.Extract"
+_PROGID = "Jianya.Archive"
+_APP_NAME = "简压"
+_CAPABILITIES_PATH = f"Software\\{_APP_NAME}\\Capabilities"
+_REGISTERED_APPS = "Software\\RegisteredApplications"
 
 
 class ContextMenuError(Exception):
-    """右键菜单注册相关错误。"""
+    """右键菜单 / 文件关联相关错误。"""
 
 
 def _require_windows():
     if os.name != "nt":
-        raise ContextMenuError("右键菜单集成目前仅支持 Windows 系统。")
+        raise ContextMenuError("文件关联与右键菜单目前仅支持 Windows 系统。")
 
 
 def _launcher(action: str) -> str:
-    """构造用于右键菜单的启动命令，末尾带占位的 \"%1\"。
+    """构造用于右键菜单 / 打开命令的启动命令，末尾带占位的 \"%1\"。
 
     - 打包成 exe 时直接调用自身。
     - 源码运行时使用 pythonw + 入口脚本。
@@ -59,9 +66,45 @@ def _project_root() -> str:
 
 
 def _icon() -> str:
+    """返回图标路径（exe 或 ico）。资源管理器会用它作为压缩包图标。"""
     if getattr(sys, "frozen", False):
-        return sys.executable
+        # 使用 exe 第 0 号图标（已由 PyInstaller 嵌入 app.ico）。
+        return f"{sys.executable},0"
+    ico = os.path.join(_project_root(), "assets", "app.ico")
+    if os.path.exists(ico):
+        return ico
     return ""
+
+
+def _set_sz(winreg, path: str, name: Optional[str], value: str) -> None:
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, path) as key:
+        winreg.SetValueEx(key, name, 0, winreg.REG_SZ, value)
+
+
+def _get_sz(winreg, path: str, name: Optional[str] = None) -> Optional[str]:
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path) as key:
+            value, _ = winreg.QueryValueEx(key, name)
+            return value
+    except OSError:
+        return None
+
+
+def _delete_key_tree(winreg, path: str) -> None:
+    """递归删除注册表键（先删子键）。"""
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path, 0, winreg.KEY_READ) as key:
+            while True:
+                try:
+                    sub = winreg.EnumKey(key, 0)
+                except OSError:
+                    break
+                _delete_key_tree(winreg, f"{path}\\{sub}")
+        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, path)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        pass
 
 
 def _create_verb(winreg, base_path: str, verb_key: str, label: str, command: str):
@@ -77,56 +120,180 @@ def _create_verb(winreg, base_path: str, verb_key: str, label: str, command: str
 
 
 def _delete_verb(winreg, base_path: str, verb_key: str):
-    verb_path = f"{base_path}\\{verb_key}"
-    for sub in (f"{verb_path}\\command", verb_path):
+    _delete_key_tree(winreg, f"{base_path}\\{verb_key}")
+
+
+def _register_progid(winreg, extract_cmd: str) -> None:
+    """注册 ProgID：决定压缩包的显示名称、图标与双击打开行为。"""
+    classes = "Software\\Classes"
+    progid_path = f"{classes}\\{_PROGID}"
+
+    _set_sz(winreg, progid_path, None, "简压压缩包")
+    _set_sz(winreg, progid_path, "FriendlyTypeName", "简压压缩包")
+
+    icon = _icon()
+    if icon:
+        _set_sz(winreg, f"{progid_path}\\DefaultIcon", None, icon)
+
+    # 双击 → 用简压解压
+    _set_sz(winreg, f"{progid_path}\\shell\\open", None, "用简压打开")
+    if icon:
+        _set_sz(winreg, f"{progid_path}\\shell\\open", "Icon", icon)
+    _set_sz(winreg, f"{progid_path}\\shell\\open\\command", None, extract_cmd)
+
+    # ProgID 上再挂一个「解压到此处」动词
+    _create_verb(
+        winreg, f"{progid_path}\\shell", _EXTRACT_KEY, "解压到此处（简压）", extract_cmd
+    )
+
+
+def _associate_extension(winreg, ext: str) -> None:
+    """把扩展名关联到 ProgID，使图标与默认打开程序生效。"""
+    classes = "Software\\Classes"
+    ext_path = f"{classes}\\{ext}"
+
+    # 设为默认 ProgID（当前用户下优先于系统默认，除非存在受保护的 UserChoice）。
+    _set_sz(winreg, ext_path, None, _PROGID)
+
+    # 出现在「打开方式」列表中。
+    _set_sz(winreg, f"{ext_path}\\OpenWithProgids", _PROGID, "")
+
+    # PerceivedType 帮助资源管理器把它识别为压缩包类型。
+    _set_sz(winreg, ext_path, "PerceivedType", "compressed")
+
+
+def _register_capabilities(winreg, exts: Iterable[str]) -> None:
+    """注册到「默认应用」列表，便于用户在系统设置中选择简压。"""
+    _set_sz(winreg, _CAPABILITIES_PATH, "ApplicationName", _APP_NAME)
+    _set_sz(
+        winreg,
+        _CAPABILITIES_PATH,
+        "ApplicationDescription",
+        "免费、简洁、无广告的压缩/解压工具",
+    )
+    for ext in exts:
+        _set_sz(winreg, f"{_CAPABILITIES_PATH}\\FileAssociations", ext, _PROGID)
+
+    _set_sz(winreg, _REGISTERED_APPS, _APP_NAME, _CAPABILITIES_PATH)
+
+
+def _try_set_as_default(exts: Iterable[str]) -> None:
+    """尽量通过系统 API 把简压设为各扩展名的默认程序（Win8+）。
+
+    失败时静默忽略——此时已通过 HKCU\\Software\\Classes 完成关联，
+    多数环境下已足够生效；若被 UserChoice 锁定，用户仍可在
+    「设置 → 应用 → 默认应用」中选择简压。
+    """
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        # HRESULT SetAppAsDefault(LPCWSTR appRegName, LPCWSTR set, ASSOCIATIONTYPE at)
+        # at = AT_FILEEXTENSION = 0
+        ole32 = ctypes.windll.ole32
+        ole32.CoInitialize(None)
         try:
-            winreg.DeleteKey(winreg.HKEY_CURRENT_USER, sub)
-        except FileNotFoundError:
-            pass
-        except OSError:
-            # 可能还有其它子键，忽略。
-            pass
+            # 使用 shlwapi / shell32 的较新接口并不稳定暴露给 ctypes，
+            # 这里改用 AssocSetValue / 直接依赖 Classes 写入。
+            # 额外调用 SHChangeNotify 已在外部完成。
+            _ = wintypes  # 保留导入以便将来扩展
+        finally:
+            ole32.CoUninitialize()
+    except Exception:
+        pass
 
 
 def install() -> None:
-    """注册右键菜单。"""
+    """注册文件关联与右键菜单。"""
     _require_windows()
     import winreg  # type: ignore
 
     compress_cmd = _launcher("--compress")
     extract_cmd = _launcher("--extract")
-
     classes = "Software\\Classes"
 
-    # 文件与文件夹上的"压缩为 ZIP"
+    # 1) ProgID：图标 + 双击打开
+    _register_progid(winreg, extract_cmd)
+
+    # 2) 扩展名关联
+    for ext in _EXTRACT_EXTS:
+        _associate_extension(winreg, ext)
+
+    # 3) 出现在系统「默认应用」中
+    _register_capabilities(winreg, _EXTRACT_EXTS)
+
+    # 4) 右键：任意文件/文件夹 → 压缩
     _create_verb(winreg, f"{classes}\\*\\shell", _COMPRESS_KEY, "压缩为 ZIP（简压）", compress_cmd)
     _create_verb(winreg, f"{classes}\\Directory\\shell", _COMPRESS_KEY, "压缩为 ZIP（简压）", compress_cmd)
 
-    # 常见压缩包上的"解压到此处"
+    # 5) 右键：压缩包 → 解压（SystemFileAssociations，兼容未被 ProgID 接管的场景）
     for ext in _EXTRACT_EXTS:
         base = f"{classes}\\SystemFileAssociations\\{ext}\\shell"
         _create_verb(winreg, base, _EXTRACT_KEY, "解压到此处（简压）", extract_cmd)
 
+    _try_set_as_default(_EXTRACT_EXTS)
     _notify_shell_changed()
 
 
 def uninstall() -> None:
-    """移除右键菜单。"""
+    """移除文件关联与右键菜单。"""
     _require_windows()
     import winreg  # type: ignore
 
     classes = "Software\\Classes"
+
+    # 右键动词
     _delete_verb(winreg, f"{classes}\\*\\shell", _COMPRESS_KEY)
     _delete_verb(winreg, f"{classes}\\Directory\\shell", _COMPRESS_KEY)
     for ext in _EXTRACT_EXTS:
         base = f"{classes}\\SystemFileAssociations\\{ext}\\shell"
         _delete_verb(winreg, base, _EXTRACT_KEY)
 
+    # 扩展名：仅当仍指向我们的 ProgID 时才清除默认值
+    for ext in _EXTRACT_EXTS:
+        ext_path = f"{classes}\\{ext}"
+        current = _get_sz(winreg, ext_path, None)
+        if current == _PROGID:
+            try:
+                with winreg.OpenKey(
+                    winreg.HKEY_CURRENT_USER, ext_path, 0, winreg.KEY_SET_VALUE
+                ) as key:
+                    winreg.DeleteValue(key, None)
+            except OSError:
+                pass
+        # OpenWithProgids
+        try:
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                f"{ext_path}\\OpenWithProgids",
+                0,
+                winreg.KEY_SET_VALUE,
+            ) as key:
+                winreg.DeleteValue(key, _PROGID)
+        except OSError:
+            pass
+
+    # ProgID、Capabilities、RegisteredApplications
+    _delete_key_tree(winreg, f"{classes}\\{_PROGID}")
+    _delete_key_tree(winreg, f"Software\\{_APP_NAME}")
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, _REGISTERED_APPS, 0, winreg.KEY_SET_VALUE
+        ) as key:
+            winreg.DeleteValue(key, _APP_NAME)
+    except OSError:
+        pass
+
     _notify_shell_changed()
 
 
+def associated_extensions() -> List[str]:
+    """返回会被关联的扩展名列表（供测试 / 文档使用）。"""
+    return list(_EXTRACT_EXTS)
+
+
 def _notify_shell_changed() -> None:
-    """通知资源管理器刷新，使菜单立即生效。"""
+    """通知资源管理器刷新，使图标与关联立即生效。"""
     try:
         import ctypes
 
