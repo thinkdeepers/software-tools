@@ -111,6 +111,20 @@ pip install pytest
 python -m pytest
 ```
 
+## 在 Linux / 云端环境打包（Wine）
+
+仓库自带 Cursor 云端 Agent 环境配置，首次启动会自动安装 wine、Windows 版
+Python 3.12、PyInstaller、Inno Setup 6 与 pytest（见 `.cursor/environment.json`
+与 `.cursor/install.sh`）。之后一条命令即可在 Linux 上打出 Windows 安装程序：
+
+```bash
+bash .cursor/install.sh            # 首次准备环境（幂等，可重复运行）
+bash scripts/build_windows_wine.sh # 生成 dist/简压.exe 与 release/简压安装程序.exe
+```
+
+> 说明：Wine 下的 Python 在标准输出被重定向时会报 `init_sys_streams` 错误，
+> 上述脚本通过分配伪终端（`script`）规避该问题。
+
 ## 目录结构
 
 ```
