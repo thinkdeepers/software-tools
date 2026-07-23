@@ -32,12 +32,20 @@ def main() -> int:
         "--windowed",          # 不显示控制台窗口
         "--name", "简压",
         "--paths", os.path.join(root, "src"),
-        entry,
     ]
 
-    icon = os.path.join(root, "assets", "app.ico")
+    assets = os.path.join(root, "assets")
+    icon = os.path.join(assets, "app.ico")
     if os.path.exists(icon):
         cmd += ["--icon", icon]
+
+    # 把图标一并打包，供运行时设置窗口图标（与 exe 图标一致）。
+    for res in ("app.ico", "app.png"):
+        res_path = os.path.join(assets, res)
+        if os.path.exists(res_path):
+            cmd += ["--add-data", f"{res_path}{os.pathsep}."]
+
+    cmd.append(entry)
 
     print("运行：", " ".join(cmd))
     return subprocess.call(cmd)

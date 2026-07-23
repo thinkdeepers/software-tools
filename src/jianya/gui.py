@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import queue
 import sys
 import threading
@@ -10,6 +11,7 @@ from typing import List, Optional
 
 from . import __version__
 from . import core
+from .resources import resource_path
 
 
 def launch() -> int:
@@ -41,11 +43,33 @@ class _App:
         root = tk.Tk()
         self.root = root
         root.title(f"简压 {__version__} — 简洁 · 免费 · 无广告")
-        root.geometry("460x300")
-        root.minsize(420, 280)
+        root.geometry("480x420")
+        # 固定最小尺寸，保证底部按钮不会因窗口缩小被遮挡。
+        root.minsize(480, 420)
+        root.configure(bg="white")
 
+        self._set_window_icon()
         self._build_ui()
         root.after(80, self._drain_events)
+
+    def _set_window_icon(self) -> None:
+        """把窗口图标设置为与 exe 一致的应用图标。"""
+        tk = self.tk
+        # Windows 下优先使用 .ico（标题栏 / 任务栏一致）。
+        ico = resource_path("app.ico")
+        if ico:
+            try:
+                self.root.iconbitmap(default=ico)
+            except Exception:
+                pass
+        # 跨平台回退：用 PNG 作为窗口图标。
+        png = resource_path("app.png")
+        if png:
+            try:
+                self._icon_image = tk.PhotoImage(file=png)
+                self.root.iconphoto(True, self._icon_image)
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # 界面
@@ -53,30 +77,40 @@ class _App:
     def _build_ui(self) -> None:
         tk, ttk = self.tk, self.ttk
 
+        WHITE = "#ffffff"
         try:
             style = ttk.Style()
             if "clam" in style.theme_names():
                 style.theme_use("clam")
+            # 统一白色背景，去掉难看的灰底。
+            style.configure("White.TFrame", background=WHITE)
+            style.configure("White.TLabel", background=WHITE)
+            style.configure("Title.TLabel", background=WHITE, foreground="#0f766e")
+            style.configure("Sub.TLabel", background=WHITE, foreground="#555555")
+            style.configure("Status.TLabel", background=WHITE, foreground="#555555")
             style.configure("Big.TButton", font=("Microsoft YaHei", 16, "bold"), padding=18)
+            style.configure("Link.TButton", font=("Microsoft YaHei", 9), padding=6)
         except Exception:
             pass
 
-        container = ttk.Frame(self.root, padding=24)
+        container = ttk.Frame(self.root, padding=24, style="White.TFrame")
         container.pack(fill="both", expand=True)
 
-        title = ttk.Label(
-            container, text="简压", font=("Microsoft YaHei", 22, "bold")
-        )
-        title.pack(pady=(0, 4))
-        subtitle = ttk.Label(
-            container,
-            text="压缩统一为 ZIP · 解压支持常见格式",
-            font=("Microsoft YaHei", 10),
-        )
-        subtitle.pack(pady=(0, 18))
+        # 顶部标题
+        header = ttk.Frame(container, style="White.TFrame")
+        header.pack(side="top", fill="x")
+        ttk.Label(
+            header, text="简压", style="Title.TLabel",
+            font=("Microsoft YaHei", 22, "bold"),
+        ).pack(pady=(0, 4))
+        ttk.Label(
+            header, text="压缩统一为 ZIP · 解压支持常见格式",
+            style="Sub.TLabel", font=("Microsoft YaHei", 10),
+        ).pack(pady=(0, 18))
 
-        buttons = ttk.Frame(container)
-        buttons.pack(fill="x")
+        # 主操作按钮
+        buttons = ttk.Frame(container, style="White.TFrame")
+        buttons.pack(side="top", fill="x")
         buttons.columnconfigure(0, weight=1)
         buttons.columnconfigure(1, weight=1)
 
@@ -90,25 +124,30 @@ class _App:
         )
         self.btn_extract.grid(row=0, column=1, sticky="ew", padx=(8, 0))
 
-        self.progress = ttk.Progressbar(container, mode="determinate")
+        # 先把底部固定区域贴到窗口底部，保证任何情况下都不被遮挡。
+        bottom = ttk.Frame(container, style="White.TFrame")
+        bottom.pack(side="bottom", fill="x", pady=(14, 0))
+        ttk.Button(
+            bottom, text="安装右键菜单", style="Link.TButton",
+            command=self._on_install_menu,
+        ).pack(side="left")
+        ttk.Button(
+            bottom, text="移除右键菜单", style="Link.TButton",
+            command=self._on_uninstall_menu,
+        ).pack(side="left", padx=(8, 0))
+
+        # 中间区域填充剩余空间（进度与状态）
+        middle = ttk.Frame(container, style="White.TFrame")
+        middle.pack(side="top", fill="both", expand=True)
+
+        self.progress = ttk.Progressbar(middle, mode="determinate")
         self.progress.pack(fill="x", pady=(22, 6))
 
         self.status = ttk.Label(
-            container, text="选择文件开始压缩，或选择压缩包进行解压",
-            font=("Microsoft YaHei", 9), foreground="#555555",
+            middle, text="选择文件开始压缩，或选择压缩包进行解压",
+            style="Status.TLabel", font=("Microsoft YaHei", 9),
         )
         self.status.pack(fill="x")
-
-        # 底部：右键菜单管理（仅 Windows 有效）
-        bottom = ttk.Frame(container)
-        bottom.pack(fill="x", side="bottom", pady=(14, 0))
-        link = ttk.Button(
-            bottom, text="安装右键菜单", command=self._on_install_menu
-        )
-        link.pack(side="left")
-        ttk.Button(
-            bottom, text="移除右键菜单", command=self._on_uninstall_menu
-        ).pack(side="left", padx=(8, 0))
 
     # ------------------------------------------------------------------
     # 事件处理
