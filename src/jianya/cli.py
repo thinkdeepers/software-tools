@@ -49,6 +49,10 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--gui", action="store_true", help="强制打开图形界面",
     )
+    parser.add_argument(
+        "--quiet", action="store_true",
+        help="静默模式：不弹出提示框（供安装程序注册/移除右键菜单时使用）",
+    )
     return parser
 
 
@@ -118,13 +122,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         try:
             if args.install:
                 context_menu.install()
-                _notify("简压", "右键菜单已注册。")
+                if not args.quiet:
+                    _notify("简压", "右键菜单已注册。")
             else:
                 context_menu.uninstall()
-                _notify("简压", "右键菜单已移除。")
+                if not args.quiet:
+                    _notify("简压", "右键菜单已移除。")
             return 0
         except context_menu.ContextMenuError as exc:
-            _notify("简压", f"错误：{exc}", error=True)
+            if not args.quiet:
+                _notify("简压", f"错误：{exc}", error=True)
             return 1
 
     if args.compress:
