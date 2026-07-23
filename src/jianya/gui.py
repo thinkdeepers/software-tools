@@ -14,7 +14,36 @@ from . import core
 from .resources import resource_path
 
 
+def _enable_high_dpi() -> None:
+    """在创建窗口前声明 DPI 感知，避免高分屏下界面被系统位图拉伸而发虚。
+
+    仅 Windows 有效；失败时静默降级。
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        # Per-Monitor v2（Windows 10 1703+），效果最佳。
+        try:
+            ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+            return
+        except Exception:
+            pass
+        # Per-Monitor（Windows 8.1+）
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)
+            return
+        except Exception:
+            pass
+        # System DPI aware（Vista+）
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
+
 def launch() -> int:
+    _enable_high_dpi()
     try:
         import tkinter as tk
         from tkinter import filedialog, messagebox, ttk
@@ -43,9 +72,21 @@ class _App:
         root = tk.Tk()
         self.root = root
         root.title(f"简压 {__version__} — 简洁 · 免费 · 无广告")
-        root.geometry("480x500")
+
+        # 按屏幕真实 DPI 缩放窗口尺寸（96 dpi 为 100%）。声明 DPI 感知后，
+        # 文字/图标由系统清晰绘制，窗口尺寸也随缩放等比放大以容纳内容。
+        try:
+            scale = root.winfo_fpixels("1i") / 96.0
+        except Exception:
+            scale = 1.0
+        if scale < 1.0:
+            scale = 1.0
+        self._scale = scale
+        base_w, base_h = 480, 500
+        win_w, win_h = int(base_w * scale), int(base_h * scale)
+        root.geometry(f"{win_w}x{win_h}")
         # 固定最小尺寸，保证底部按钮与说明文字不会因窗口缩小被遮挡。
-        root.minsize(480, 500)
+        root.minsize(win_w, win_h)
         root.configure(bg="white")
 
         self._set_window_icon()
