@@ -58,7 +58,30 @@ def configure_tk_scaling(root: Any) -> float:
 
 
 def scaled_font(size: int, bold: bool = False, scale: float = 1.0) -> tuple:
-    """返回按 DPI 放大后的字体元组（点数随 scale 增加，保证高分屏清晰够大）。"""
-    # 不把字号再乘 scale：Tk scaling 已处理；这里只保证用清晰字体族
+    """返回字体元组。Tk scaling 已处理 DPI，不再二次放大字号。"""
     weight = "bold" if bold else "normal"
     return ("Microsoft YaHei UI", int(size), weight)
+
+
+def pick_ui_font(root: Any, size: int, bold: bool = False) -> tuple:
+    """选择当前系统实际可用的清晰 UI 字体。"""
+    weight = "bold" if bold else "normal"
+    candidates = (
+        "Microsoft YaHei UI",
+        "Microsoft YaHei",
+        "Segoe UI",
+        "PingFang SC",
+        "Noto Sans CJK SC",
+        "Source Han Sans SC",
+        "SimHei",
+    )
+    try:
+        import tkinter.font as tkfont
+
+        families = set(tkfont.families(root))
+        for name in candidates:
+            if name in families:
+                return (name, int(size), weight)
+    except Exception:
+        pass
+    return ("TkDefaultFont", int(size), weight)

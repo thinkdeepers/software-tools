@@ -180,6 +180,11 @@ def main() -> int:
     if os.path.exists(manifest):
         cmd += ["--manifest", manifest]
 
+    # 运行时尽早声明 DPI（bootloader 之后、业务窗口之前）
+    dpi_hook = os.path.join(root, "hooks", "pyi_rth_jianya_dpi.py")
+    if os.path.exists(dpi_hook):
+        cmd += ["--runtime-hook", dpi_hook]
+
     # 把图标一并打包，供运行时设置窗口图标（与 exe 图标一致）。
     for res in ("app.ico", "app.png"):
         res_path = os.path.join(assets, res)

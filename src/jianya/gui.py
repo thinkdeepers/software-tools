@@ -475,7 +475,7 @@ class _App:
                     self._set_busy(False)
                     dlg = self._progress_dialog
                     if dlg is not None:
-                        dlg.finish_error("简压 - 需要密码", msg)
+                        dlg.dismiss()
                         self._progress_dialog = None
                     pwd = self.ask_password(
                         "需要密码", f"{Path(archive).name}\n{msg}"
