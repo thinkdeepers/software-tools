@@ -836,7 +836,7 @@ def _extract_7z(
             names = zf.getnames()
             total = len(names) or 1
             if progress:
-                progress(0, total, archive.name)
+                progress(max(1, total // 100), total, archive.name)
             zf.extractall(path=dest)
             if progress:
                 progress(total, total, archive.name)
@@ -873,7 +873,8 @@ def _extract_rar(
                 _safe_join(dest, safe_name)
             total = len(members) or 1
             if progress:
-                progress(0, total, archive.name)
+                # 1% 起步，让进度条从动画切到确定模式并保持可见
+                progress(max(1, total // 100), total, archive.name)
             # 头加密 RAR5 下逐文件 extract 可能 CRC 失败；extractall 更可靠。
             rf.extractall(dest)
             # 若落盘文件名乱码，尝试重命名为修正后的中文名。

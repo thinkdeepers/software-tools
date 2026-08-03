@@ -140,24 +140,19 @@ def _run_compress(paths: List[str], output: Optional[str], password: Optional[st
         return 0
 
     # 无控制台：显示进度条，完成后再提示
-    from .dialogs import ProgressDialog
+    from .dialogs import run_job_with_progress
 
-    dialog = ProgressDialog(title="简压 — 正在压缩", status="正在压缩…")
-
-    def worker() -> None:
+    def worker(progress, finish_ok, finish_error) -> None:
         try:
             result = core.compress_to_zip(
-                paths, output=output, progress=dialog.progress, password=password
+                paths, output=output, progress=progress, password=password
             )
             tip = "（已加密）" if password else ""
-            dialog.finish_ok("简压", f"已压缩到：\n{result}{tip}")
+            finish_ok("简压", f"已压缩到：\n{result}{tip}")
         except Exception as exc:
-            dialog.finish_error("简压 - 压缩失败", str(exc))
+            finish_error("简压 - 压缩失败", str(exc))
 
-    import threading
-
-    threading.Thread(target=worker, daemon=True).start()
-    dialog.run()
+    run_job_with_progress("简压 — 正在压缩", "正在压缩…", worker)
     return 0
 
 
@@ -185,11 +180,10 @@ def _run_extract(archive: str, output: Optional[str], password: Optional[str]) -
         _notify("简压 - 解压失败", "密码不正确。", error=True)
         return 1
 
-    # 无控制台：进度条 → 100% → 再弹「已解压」
-    from .dialogs import ProgressDialog
+    # 无控制台：进度条（含动画）→ 100% → 再弹清晰的「已解压」
+    from .dialogs import run_job_with_progress
 
     pwd = password
-    # 若已知需要密码，先询问（避免进度窗与密码窗抢焦点）
     if pwd is None:
         try:
             if core.archive_is_encrypted(archive):
@@ -200,36 +194,24 @@ def _run_extract(archive: str, output: Optional[str], password: Optional[str]) -
         except Exception:
             pass
 
-    dialog = ProgressDialog(title="简压 — 正在解压", status="正在解压…")
+    def worker(progress, finish_ok, finish_error) -> None:
+        try:
+            result = core.extract_archive(
+                archive,
+                output_dir=output,
+                progress=progress,
+                password=pwd,
+            )
+            finish_ok("简压", f"已解压到：\n{result}")
+        except core.PasswordRequiredError:
+            finish_error(
+                "简压 - 需要密码",
+                "压缩包已加密。请右键重新解压，或在预览窗口中输入密码。",
+            )
+        except Exception as exc:
+            finish_error("简压 - 解压失败", str(exc))
 
-    def worker() -> None:
-        nonlocal pwd
-        for _attempt in range(3):
-            try:
-                result = core.extract_archive(
-                    archive,
-                    output_dir=output,
-                    progress=dialog.progress,
-                    password=pwd,
-                )
-                dialog.finish_ok("简压", f"已解压\n{result}")
-                return
-            except core.PasswordRequiredError:
-                # 进度线程里不宜弹窗；结束进度后由主流程处理较复杂。
-                # 这里直接报错，提示用户重试并带 -p。
-                dialog.finish_error(
-                    "简压 - 需要密码",
-                    "压缩包已加密。请右键重新解压，或在预览窗口中输入密码。",
-                )
-                return
-            except Exception as exc:
-                dialog.finish_error("简压 - 解压失败", str(exc))
-                return
-
-    import threading
-
-    threading.Thread(target=worker, daemon=True).start()
-    dialog.run()
+    run_job_with_progress("简压 — 正在解压", "正在解压，请稍候…", worker)
     return 0
 
 

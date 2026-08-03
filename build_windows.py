@@ -175,6 +175,11 @@ def main() -> int:
     if os.path.exists(icon):
         cmd += ["--icon", icon]
 
+    # DPI 感知清单：避免高分屏下文字/对话框被系统拉伸发虚
+    manifest = os.path.join(assets, "app.manifest")
+    if os.path.exists(manifest):
+        cmd += ["--manifest", manifest]
+
     # 把图标一并打包，供运行时设置窗口图标（与 exe 图标一致）。
     for res in ("app.ico", "app.png"):
         res_path = os.path.join(assets, res)

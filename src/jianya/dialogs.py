@@ -1,8 +1,4 @@
-"""DPI 感知的进度窗口与提示对话框。
-
-- 进程级先声明 DPI，避免对话框发虚
-- 完成提示只在进度到 100% 且操作结束后再弹出
-"""
+"""DPI 感知的进度窗口与提示对话框。"""
 
 from __future__ import annotations
 
@@ -11,23 +7,19 @@ import sys
 import threading
 from typing import Any, Callable, Optional
 
-from .dpi import configure_tk_scaling, enable_high_dpi
+from .dpi import configure_tk_scaling, enable_high_dpi, scaled_font
 from .resources import resource_path
 
 
 ProgressFn = Callable[[int, int, str], None]
 
 
-def _font(size: int, bold: bool = False) -> tuple:
-    weight = "bold" if bold else "normal"
-    return ("Microsoft YaHei UI", size, weight)
-
-
 class ProgressDialog:
-    """带进度条的进度窗口。
+    """始终置顶可见的进度窗口。
 
-    - 若传入 ``parent``（已有 Tk 应用），使用 Toplevel，避免多 Tk 冲突
-    - 否则自行创建 Tk（供右键菜单等无主界面场景）
+    - 开始时使用 indeterminate 动画，避免「长时间停在 0% 像没进度条」
+    - 收到真实进度后切换为确定进度
+    - 到 100% 并完成后再弹出结果
     """
 
     def __init__(
@@ -44,6 +36,7 @@ class ProgressDialog:
         self._events: "queue.Queue[tuple]" = queue.Queue()
         self._closed = False
         self._finished = False
+        self._indeterminate = True
         self._owns_root = parent is None
         self._result_title = ""
         self._result_message = ""
@@ -58,23 +51,30 @@ class ProgressDialog:
         else:
             self.root = parent
             try:
-                self.scale = float(parent.winfo_fpixels("1i")) / 96.0
+                self.scale = max(1.0, float(parent.winfo_fpixels("1i")) / 96.0)
             except Exception:
                 self.scale = 1.0
-            if self.scale < 1.0:
-                self.scale = 1.0
+            # 即使 parent 被 withdraw，也创建独立可见的 Toplevel
             self.win = tk.Toplevel(parent)
             self._wait_var = tk.BooleanVar(master=parent, value=False)
 
         win = self.win
         win.title(title)
-        win.configure(bg="white")
-        w, h = int(420 * self.scale), int(160 * self.scale)
+        win.configure(bg="#ffffff")
+        w, h = int(460 * self.scale), int(180 * self.scale)
         win.geometry(f"{w}x{h}")
         win.minsize(w, h)
         win.resizable(False, False)
+
         try:
             win.attributes("-topmost", True)
+        except Exception:
+            pass
+        try:
+            # 确保不被隐藏的 parent 拖累
+            win.deiconify()
+            win.lift()
+            win.focus_force()
         except Exception:
             pass
 
@@ -89,36 +89,59 @@ class ProgressDialog:
             style = ttk.Style(win)
             if "clam" in style.theme_names():
                 style.theme_use("clam")
-            style.configure("Dlg.TFrame", background="white")
-            style.configure("Dlg.TLabel", background="white", foreground="#222222")
+            style.configure("P.TFrame", background="#ffffff")
             style.configure(
-                "DlgTitle.TLabel",
-                background="white",
+                "PTitle.TLabel",
+                background="#ffffff",
                 foreground="#0f766e",
-                font=_font(12, True),
+                font=scaled_font(13, True, self.scale),
             )
-            style.configure("DlgStatus.TLabel", background="white", foreground="#555555")
+            style.configure(
+                "PStatus.TLabel",
+                background="#ffffff",
+                foreground="#333333",
+                font=scaled_font(10, False, self.scale),
+            )
+            style.configure(
+                "PPct.TLabel",
+                background="#ffffff",
+                foreground="#0f766e",
+                font=scaled_font(11, True, self.scale),
+            )
+            style.configure(
+                "P.Horizontal.TProgressbar",
+                troughcolor="#e5e7eb",
+                background="#0f766e",
+                thickness=int(18 * self.scale),
+            )
         except Exception:
             pass
 
-        frame = ttk.Frame(win, padding=int(18 * self.scale), style="Dlg.TFrame")
+        pad = int(20 * self.scale)
+        frame = ttk.Frame(win, padding=pad, style="P.TFrame")
         frame.pack(fill="both", expand=True)
 
-        ttk.Label(frame, text=title, style="DlgTitle.TLabel").pack(anchor="w")
-        self.status_label = ttk.Label(
-            frame, text=status, style="DlgStatus.TLabel", font=_font(9)
-        )
-        self.status_label.pack(anchor="w", pady=(10, 8))
+        self.title_label = ttk.Label(frame, text=title, style="PTitle.TLabel")
+        self.title_label.pack(anchor="w")
 
-        self.bar = ttk.Progressbar(frame, mode="determinate", maximum=100)
-        self.bar.pack(fill="x")
-        self.pct_label = ttk.Label(
-            frame, text="0%", style="DlgStatus.TLabel", font=_font(9)
+        self.status_label = ttk.Label(frame, text=status, style="PStatus.TLabel")
+        self.status_label.pack(anchor="w", pady=(12, 10))
+
+        self.bar = ttk.Progressbar(
+            frame,
+            mode="indeterminate",
+            style="P.Horizontal.TProgressbar",
+            maximum=100,
         )
-        self.pct_label.pack(anchor="e", pady=(6, 0))
+        self.bar.pack(fill="x", ipady=int(2 * self.scale))
+        self.bar.start(12)
+
+        self.pct_label = ttk.Label(frame, text="请稍候…", style="PPct.TLabel")
+        self.pct_label.pack(anchor="e", pady=(8, 0))
 
         win.protocol("WM_DELETE_WINDOW", self._on_user_close)
-        win.update_idletasks()
+
+        # 强制立刻绘制，再开始后台任务，避免「看不见进度条」
         try:
             sw = win.winfo_screenwidth()
             sh = win.winfo_screenheight()
@@ -127,8 +150,10 @@ class ProgressDialog:
             win.geometry(f"{w}x{h}+{x}+{y}")
         except Exception:
             pass
+        win.update_idletasks()
+        win.update()
 
-        win.after(40, self._drain)
+        win.after(30, self._drain)
 
     def _on_user_close(self) -> None:
         if not self._finished:
@@ -144,6 +169,17 @@ class ProgressDialog:
     def finish_error(self, title: str, message: str) -> None:
         self._events.put(("done", title, message, True))
 
+    def _set_determinate(self, pct: int) -> None:
+        if self._indeterminate:
+            try:
+                self.bar.stop()
+            except Exception:
+                pass
+            self.bar.configure(mode="determinate", maximum=100)
+            self._indeterminate = False
+        self.bar.configure(value=pct)
+        self.pct_label.configure(text=f"{pct}%")
+
     def _drain(self) -> None:
         if self._closed:
             return
@@ -155,26 +191,35 @@ class ProgressDialog:
                     _, done, total, name = event
                     pct = int(done / total * 100) if total else 0
                     pct = max(0, min(100, pct))
-                    self.bar.configure(mode="determinate", value=pct)
-                    self.pct_label.configure(text=f"{pct}%")
-                    shown = name if len(name) <= 48 else ("…" + name[-47:])
-                    self.status_label.configure(text=f"正在处理：{shown}")
+                    if pct > 0:
+                        self._set_determinate(pct)
+                    shown = name if len(name) <= 42 else ("…" + name[-41:])
+                    self.status_label.configure(text=f"正在解压：{shown}")
+                    try:
+                        self.win.update_idletasks()
+                    except Exception:
+                        pass
                 elif kind == "done":
                     _, title, message, is_error = event
                     self._finished = True
-                    self.bar.configure(value=100)
-                    self.pct_label.configure(text="100%")
-                    self.status_label.configure(text="失败" if is_error else "已完成")
+                    self._set_determinate(100)
+                    self.status_label.configure(
+                        text=("操作失败" if is_error else "解压完成")
+                    )
                     self._result_title = title
                     self._result_message = message
                     self._result_error = is_error
-                    self.win.update_idletasks()
-                    # 先让用户看到 100%，再提示结果
-                    self.win.after(150, self._show_result_and_close)
+                    try:
+                        self.win.update_idletasks()
+                        self.win.update()
+                    except Exception:
+                        pass
+                    # 让用户清楚看到 100%，再弹结果
+                    self.win.after(280, self._show_result_and_close)
         except queue.Empty:
             pass
         if not self._closed:
-            self.win.after(40, self._drain)
+            self.win.after(30, self._drain)
 
     def _show_result_and_close(self) -> None:
         if self._closed:
@@ -190,6 +235,11 @@ class ProgressDialog:
             return
         self._closed = True
         try:
+            if self._indeterminate:
+                self.bar.stop()
+        except Exception:
+            pass
+        try:
             self.win.destroy()
         except Exception:
             pass
@@ -200,12 +250,11 @@ class ProgressDialog:
                 pass
 
     def run(self) -> None:
-        """阻塞直到进度窗关闭。"""
         if self._owns_root:
             self.root.mainloop()
         else:
             try:
-                self.win.transient(self.root)
+                self.win.lift()
                 self.win.grab_set()
             except Exception:
                 pass
@@ -216,30 +265,20 @@ class ProgressDialog:
 
 
 def show_alert(title: str, message: str, error: bool = False) -> None:
-    """清晰的提示对话框。"""
+    """清晰的自定义完成/错误对话框（不使用易发虚的系统 MessageBox）。"""
     enable_high_dpi()
-
-    if sys.platform == "win32":
-        try:
-            import ctypes
-
-            MB_OK = 0x0
-            MB_ICONERROR = 0x10
-            MB_ICONINFORMATION = 0x40
-            flags = MB_OK | (MB_ICONERROR if error else MB_ICONINFORMATION)
-            ctypes.windll.user32.MessageBoxW(None, str(message), str(title), flags)
-            return
-        except Exception:
-            pass
-
     import tkinter as tk
     from tkinter import ttk
 
     root = tk.Tk()
     scale = configure_tk_scaling(root)
     root.title(title)
-    root.configure(bg="white")
+    root.configure(bg="#ffffff")
     root.resizable(False, False)
+    try:
+        root.attributes("-topmost", True)
+    except Exception:
+        pass
     try:
         ico = resource_path("app.ico")
         if ico:
@@ -247,32 +286,101 @@ def show_alert(title: str, message: str, error: bool = False) -> None:
     except Exception:
         pass
 
-    frame = ttk.Frame(root, padding=int(20 * scale))
+    try:
+        style = ttk.Style(root)
+        if "clam" in style.theme_names():
+            style.theme_use("clam")
+        style.configure("A.TFrame", background="#ffffff")
+        style.configure(
+            "AOk.TButton",
+            font=scaled_font(11, True, scale),
+            padding=(18, 8),
+        )
+    except Exception:
+        pass
+
+    pad = int(24 * scale)
+    frame = ttk.Frame(root, padding=pad, style="A.TFrame")
     frame.pack(fill="both", expand=True)
-    color = "#b91c1c" if error else "#0f766e"
-    ttk.Label(
-        frame, text=title, font=_font(12, True), foreground=color, background="white"
-    ).pack(anchor="w")
-    ttk.Label(
+
+    accent = "#b91c1c" if error else "#0f766e"
+    badge = "失败" if error else "已解压"
+    if "压缩" in title or "已压缩" in message:
+        badge = "失败" if error else "已压缩"
+    if error:
+        badge = "出错"
+
+    tk.Label(
+        frame,
+        text=badge,
+        font=scaled_font(16, True, scale),
+        fg=accent,
+        bg="#ffffff",
+        anchor="w",
+    ).pack(fill="x")
+
+    tk.Label(
+        frame,
+        text=title,
+        font=scaled_font(11, True, scale),
+        fg="#111827",
+        bg="#ffffff",
+        anchor="w",
+    ).pack(fill="x", pady=(10, 0))
+
+    tk.Label(
         frame,
         text=message,
-        font=_font(10),
-        foreground="#333333",
-        background="white",
-        wraplength=int(360 * scale),
+        font=scaled_font(10, False, scale),
+        fg="#374151",
+        bg="#ffffff",
+        anchor="w",
         justify="left",
-    ).pack(anchor="w", pady=(12, 16))
+        wraplength=int(380 * scale),
+    ).pack(fill="x", pady=(8, 18))
 
     def _ok() -> None:
-        root.destroy()
+        try:
+            root.destroy()
+        except Exception:
+            pass
 
-    ttk.Button(frame, text="确定", command=_ok).pack(anchor="e")
+    btn = ttk.Button(frame, text="确定", style="AOk.TButton", command=_ok)
+    btn.pack(anchor="e")
     root.bind("<Return>", lambda _e: _ok())
     root.bind("<Escape>", lambda _e: _ok())
+
     root.update_idletasks()
-    w = max(int(320 * scale), root.winfo_reqwidth())
-    h = max(int(140 * scale), root.winfo_reqheight())
+    w = max(int(400 * scale), root.winfo_reqwidth() + pad)
+    h = max(int(200 * scale), root.winfo_reqheight() + pad)
     sw = root.winfo_screenwidth()
     sh = root.winfo_screenheight()
     root.geometry(f"{w}x{h}+{(sw - w) // 2}+{(sh - h) // 3}")
+    try:
+        root.deiconify()
+        root.lift()
+        root.focus_force()
+    except Exception:
+        pass
     root.mainloop()
+
+
+def run_job_with_progress(
+    title: str,
+    status: str,
+    worker: Callable[[ProgressFn, Callable[[str, str], None], Callable[[str, str], None]], None],
+) -> None:
+    """创建进度窗并在后台执行 worker。
+
+    worker(progress, finish_ok, finish_error)
+    """
+    dialog = ProgressDialog(title=title, status=status)
+
+    def _wrap() -> None:
+        try:
+            worker(dialog.progress, dialog.finish_ok, dialog.finish_error)
+        except Exception as exc:
+            dialog.finish_error(title, str(exc))
+
+    threading.Thread(target=_wrap, daemon=True).start()
+    dialog.run()

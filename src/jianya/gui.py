@@ -341,19 +341,23 @@ class _App:
         if self._main_built:
             self.progress.configure(value=0)
             self.status.configure(text="处理中…")
-        # 预览模式：弹出独立进度窗（Toplevel），完成到 100% 后再提示「已解压」
-        use_dialog = (not self._main_built) or bool(self._preview_windows)
-        if use_dialog:
-            self._progress_dialog = ProgressDialog(
-                title="简压 — 正在解压",
-                status="正在解压…",
-                parent=self.root,
-            )
+
+        # 进度窗挂到可见窗口上（预览窗优先）；避免挂在已隐藏的 root 导致看不见
+        parent = None
+        if self._preview_windows:
+            parent = self._preview_windows[-1].win
+        elif self._main_built:
+            parent = self.root
+
+        self._progress_dialog = ProgressDialog(
+            title="简压 — 正在处理",
+            status="正在处理，请稍候…",
+            parent=parent,
+        )
         thread = threading.Thread(target=target, args=args, daemon=True)
         thread.start()
-        if self._progress_dialog is not None:
-            self._progress_dialog.run()
-            self._progress_dialog = None
+        self._progress_dialog.run()
+        self._progress_dialog = None
 
     def _progress(self, done: int, total: int, name: str) -> None:
         self._events.put(("progress", done, total, name))
