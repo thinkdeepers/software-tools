@@ -20,6 +20,7 @@ from typing import List, Optional
 
 from . import __version__
 from . import core
+from .dpi import enable_high_dpi
 from .win_argv import get_unicode_argv
 
 
@@ -92,24 +93,14 @@ def _console_progress(done: int, total: int, name: str) -> None:
 
 
 def _notify(title: str, message: str, error: bool = False) -> None:
-    """有控制台时打印到终端；无控制台（右键菜单调用 exe）时弹窗提示。"""
+    """有控制台时打印；无控制台时弹出 DPI 感知的清晰对话框。"""
     if _has_console():
         stream = sys.stderr if error else sys.stdout
         print(message, file=stream)
         return
-    try:
-        import tkinter as tk
-        from tkinter import messagebox
+    from .dialogs import show_alert
 
-        root = tk.Tk()
-        root.withdraw()
-        if error:
-            messagebox.showerror(title, message)
-        else:
-            messagebox.showinfo(title, message)
-        root.destroy()
-    except Exception:
-        pass
+    show_alert(title, message, error=error)
 
 
 def _prompt_password(prompt: str = "请输入密码：") -> Optional[str]:
@@ -118,11 +109,15 @@ def _prompt_password(prompt: str = "请输入密码：") -> Optional[str]:
             return getpass.getpass(prompt)
         except Exception:
             return None
+    enable_high_dpi()
     try:
         import tkinter as tk
         from tkinter import simpledialog
 
+        from .dpi import configure_tk_scaling
+
         root = tk.Tk()
+        configure_tk_scaling(root)
         root.withdraw()
         value = simpledialog.askstring("简压", prompt, show="*", parent=root)
         root.destroy()
@@ -132,40 +127,110 @@ def _prompt_password(prompt: str = "请输入密码：") -> Optional[str]:
 
 
 def _run_compress(paths: List[str], output: Optional[str], password: Optional[str]) -> int:
-    try:
-        result = core.compress_to_zip(
-            paths, output=output, progress=_console_progress, password=password
-        )
-    except core.ArchiveError as exc:
-        _notify("简压 - 压缩失败", f"错误：{exc}", error=True)
-        return 1
-    tip = "（已加密）" if password else ""
-    _notify("简压", f"已压缩到：{result}{tip}")
+    if _has_console():
+        try:
+            result = core.compress_to_zip(
+                paths, output=output, progress=_console_progress, password=password
+            )
+        except core.ArchiveError as exc:
+            _notify("简压 - 压缩失败", f"错误：{exc}", error=True)
+            return 1
+        tip = "（已加密）" if password else ""
+        _notify("简压", f"已压缩到：{result}{tip}")
+        return 0
+
+    # 无控制台：显示进度条，完成后再提示
+    from .dialogs import ProgressDialog
+
+    dialog = ProgressDialog(title="简压 — 正在压缩", status="正在压缩…")
+
+    def worker() -> None:
+        try:
+            result = core.compress_to_zip(
+                paths, output=output, progress=dialog.progress, password=password
+            )
+            tip = "（已加密）" if password else ""
+            dialog.finish_ok("简压", f"已压缩到：\n{result}{tip}")
+        except Exception as exc:
+            dialog.finish_error("简压 - 压缩失败", str(exc))
+
+    import threading
+
+    threading.Thread(target=worker, daemon=True).start()
+    dialog.run()
     return 0
 
 
 def _run_extract(archive: str, output: Optional[str], password: Optional[str]) -> int:
-    pwd = password
-    for _attempt in range(3):
-        try:
-            result = core.extract_archive(
-                archive,
-                output_dir=output,
-                progress=_console_progress,
-                password=pwd,
-            )
-            _notify("简压", f"已解压到：{result}")
-            return 0
-        except core.PasswordRequiredError as exc:
-            pwd = _prompt_password(f"{Path(archive).name}：{exc}\n请输入密码：")
-            if pwd is None:
-                _notify("简压 - 解压失败", "已取消（需要密码）。", error=True)
+    if _has_console():
+        pwd = password
+        for _attempt in range(3):
+            try:
+                result = core.extract_archive(
+                    archive,
+                    output_dir=output,
+                    progress=_console_progress,
+                    password=pwd,
+                )
+                _notify("简压", f"已解压到：{result}")
+                return 0
+            except core.PasswordRequiredError as exc:
+                pwd = _prompt_password(f"{Path(archive).name}：{exc}\n请输入密码：")
+                if pwd is None:
+                    _notify("简压 - 解压失败", "已取消（需要密码）。", error=True)
+                    return 1
+            except core.ArchiveError as exc:
+                _notify("简压 - 解压失败", f"错误：{exc}", error=True)
                 return 1
-        except core.ArchiveError as exc:
-            _notify("简压 - 解压失败", f"错误：{exc}", error=True)
-            return 1
-    _notify("简压 - 解压失败", "密码不正确。", error=True)
-    return 1
+        _notify("简压 - 解压失败", "密码不正确。", error=True)
+        return 1
+
+    # 无控制台：进度条 → 100% → 再弹「已解压」
+    from .dialogs import ProgressDialog
+
+    pwd = password
+    # 若已知需要密码，先询问（避免进度窗与密码窗抢焦点）
+    if pwd is None:
+        try:
+            if core.archive_is_encrypted(archive):
+                pwd = _prompt_password(f"{Path(archive).name} 已加密，请输入密码：")
+                if pwd is None:
+                    _notify("简压 - 解压失败", "已取消（需要密码）。", error=True)
+                    return 1
+        except Exception:
+            pass
+
+    dialog = ProgressDialog(title="简压 — 正在解压", status="正在解压…")
+
+    def worker() -> None:
+        nonlocal pwd
+        for _attempt in range(3):
+            try:
+                result = core.extract_archive(
+                    archive,
+                    output_dir=output,
+                    progress=dialog.progress,
+                    password=pwd,
+                )
+                dialog.finish_ok("简压", f"已解压\n{result}")
+                return
+            except core.PasswordRequiredError:
+                # 进度线程里不宜弹窗；结束进度后由主流程处理较复杂。
+                # 这里直接报错，提示用户重试并带 -p。
+                dialog.finish_error(
+                    "简压 - 需要密码",
+                    "压缩包已加密。请右键重新解压，或在预览窗口中输入密码。",
+                )
+                return
+            except Exception as exc:
+                dialog.finish_error("简压 - 解压失败", str(exc))
+                return
+
+    import threading
+
+    threading.Thread(target=worker, daemon=True).start()
+    dialog.run()
+    return 0
 
 
 def _run_open(archives: List[str]) -> int:
@@ -175,8 +240,10 @@ def _run_open(archives: List[str]) -> int:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    # 尽早声明 DPI，避免后续任何弹窗发虚。
+    enable_high_dpi()
+
     # Windows 双击中文路径时，通过 GetCommandLineW 修正 argv 乱码。
-    # 传入 argv=None 表示从系统命令行读取；测试时可显式传入参数列表。
     if argv is None:
         parse_argv = get_unicode_argv()[1:]
     else:
