@@ -74,6 +74,14 @@ def test_is_archive():
     assert not core.is_archive("foo.txt")
 
 
+def test_fix_archive_filename_gbk_mojibake():
+    raw = "测试文件.txt"
+    mojibake = raw.encode("gbk").decode("cp437")
+    assert core.fix_archive_filename(mojibake) == raw
+    # 已是正确中文时保持不变
+    assert core.fix_archive_filename(raw) == raw
+
+
 def test_extract_missing_file(tmp_path):
     with pytest.raises(core.ArchiveError):
         core.extract_archive(tmp_path / "nope.zip")

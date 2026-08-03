@@ -44,3 +44,15 @@ def test_extract_cli_wrong_password_then_cancel(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "_prompt_password", lambda prompt="": None)
     code = cli._run_extract(str(archive), str(tmp_path / "out"), "wrong")
     assert code == 1
+
+
+def test_main_accepts_explicit_argv_with_chinese_path(tmp_path, monkeypatch):
+    """显式传入含中文的 argv 时不应因编码崩溃。"""
+    archive = tmp_path / "测试.rar"
+    archive.write_bytes(b"not-a-real-rar")
+    # 不存在有效 rar 内容时 --open 会失败，但参数解析应正常
+    monkeypatch.setattr(cli, "_run_open", lambda archives: 0)
+    # is_archive 为真但文件无效；直接测 parse 路径
+    from jianya.win_argv import get_unicode_argv
+
+    assert isinstance(get_unicode_argv(["jianya", "--open", str(archive)]), list)

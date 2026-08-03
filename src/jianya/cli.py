@@ -20,6 +20,7 @@ from typing import List, Optional
 
 from . import __version__
 from . import core
+from .win_argv import get_unicode_argv
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -174,8 +175,15 @@ def _run_open(archives: List[str]) -> int:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    # Windows 双击中文路径时，通过 GetCommandLineW 修正 argv 乱码。
+    # 传入 argv=None 表示从系统命令行读取；测试时可显式传入参数列表。
+    if argv is None:
+        parse_argv = get_unicode_argv()[1:]
+    else:
+        parse_argv = list(argv)
+
     parser = _build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(parse_argv)
 
     if args.install or args.uninstall:
         from . import context_menu

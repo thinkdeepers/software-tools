@@ -3,7 +3,7 @@
 ; 编译：ISCC.exe installer\jianya.iss   （需先用 build_windows.py 生成 dist\简压.exe）
 
 #define MyAppName "简压"
-#define MyAppVersion "1.1.0"
+#define MyAppVersion "1.1.1"
 #define MyAppExeName "简压.exe"
 #define MyAppPublisher "简压"
 
@@ -36,6 +36,9 @@ Name: "contextmenu"; Description: "将简压设为压缩包默认打开程序，
 
 [Files]
 Source: "..\dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+; 安装目录内嵌控制台 UnRAR（勿使用 rarlab 的 SFX 自解压包）
+Source: "..\vendor\UnRAR.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\vendor\unrar_license.txt"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

@@ -11,7 +11,9 @@ build/
 dist/
 *.spec
 
-# 下载的第三方二进制（由 scripts/fetch_vendor_tools.sh / build_windows.py 获取）
-vendor/UnRAR.exe
-vendor/*.exe
+# 第三方二进制中间文件（正式 UnRAR.exe 需提交/构建产出控制台版）
+vendor/*.sfx
+vendor/.unrar_extract/
 vendor/.*.partial
+vendor/.unrarw64.sfx
+vendor/license.txt

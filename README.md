@@ -66,7 +66,7 @@
 
 > 安装程序内的主程序使用真实的 Windows Python + PyInstaller 打包，为标准的 Windows PE
 > 可执行文件；安装包由 Inno Setup 生成。若你不放心第三方二进制，也可以按下文自行打包。
-> 安装版已捆绑 UnRAR，可直接解压 rar。
+> 安装版会在安装目录内嵌**控制台版** UnRAR（不是自解压 SFX），可直接解压 rar。
 
 ## 使用方式
 

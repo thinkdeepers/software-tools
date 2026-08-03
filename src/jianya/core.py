@@ -22,7 +22,7 @@ import tarfile
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, List, Optional, Sequence
+from typing import Callable, Iterable, List, Optional, Sequence, Tuple
 
 # 可选依赖：安装后自动启用对应格式的解压 / 加密能力。
 try:  # 7z 支持
@@ -105,8 +105,16 @@ def is_archive(path: os.PathLike | str) -> bool:
 
 
 def _vendor_candidates() -> List[Path]:
-    """查找随程序分发的第三方工具目录。"""
+    """查找随程序分发的第三方工具目录。
+
+    优先顺序：安装目录（与 简压.exe 同级）→ PyInstaller 临时目录 → 源码 vendor。
+    """
     candidates: List[Path] = []
+    if getattr(sys, "frozen", False):
+        exe_dir = Path(sys.executable).resolve().parent
+        # 安装程序会把 UnRAR.exe 放到与主程序同级，优先使用，避免误用临时目录中的旧文件。
+        candidates.append(exe_dir)
+        candidates.append(exe_dir / "vendor")
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass:
         candidates.append(Path(meipass))
@@ -115,10 +123,39 @@ def _vendor_candidates() -> List[Path]:
     project_root = here.parent.parent
     candidates.append(project_root / "vendor")
     candidates.append(project_root / "assets")
-    if getattr(sys, "frozen", False):
-        candidates.append(Path(sys.executable).resolve().parent)
-        candidates.append(Path(sys.executable).resolve().parent / "vendor")
     return candidates
+
+
+def fix_archive_filename(name: str) -> str:
+    """修正压缩包内文件名的中文乱码（常见于本地编码 ZIP）。"""
+    if not name:
+        return name
+    # 已含常见汉字则认为解码正确。
+    if any("\u4e00" <= ch <= "\u9fff" for ch in name):
+        return name
+
+    def _try(encode_as: str, decode_as: str) -> Optional[str]:
+        try:
+            fixed = name.encode(encode_as).decode(decode_as)
+        except (UnicodeEncodeError, UnicodeDecodeError, LookupError):
+            return None
+        if fixed == name:
+            return None
+        # 结果应更像正常路径：包含汉字或减少替换字符。
+        if any("\u4e00" <= ch <= "\u9fff" for ch in fixed):
+            return fixed
+        return None
+
+    for enc, dec in (
+        ("cp437", "gbk"),
+        ("cp437", "gb18030"),
+        ("latin-1", "gbk"),
+        ("latin-1", "gb18030"),
+    ):
+        fixed = _try(enc, dec)
+        if fixed:
+            return fixed
+    return name
 
 
 def _is_executable_tool(path: Path) -> bool:
@@ -417,15 +454,74 @@ def compress_to_zip(
 # 列表 / 预览
 # ---------------------------------------------------------------------------
 
+def _zip_cjk_score(names: List[str]) -> int:
+    return sum(1 for n in names for ch in n if "\u4e00" <= ch <= "\u9fff")
+
+
+def _open_best_zip(archive: Path, password: Optional[str]):
+    """打开 ZIP，自动选择中文文件名更正确的编码。"""
+    pwd = _pwd_bytes(password)
+    candidates = []
+    # 默认编码 + 国内常见 GBK（Python 3.11+）
+    attempts = [{}]
+    if sys.version_info >= (3, 11):
+        attempts.append({"metadata_encoding": "gbk"})
+        attempts.append({"metadata_encoding": "utf-8"})
+
+    last_exc: Optional[BaseException] = None
+    for kwargs in attempts:
+        zf = None
+        try:
+            if HAS_PYZIPPER:
+                try:
+                    zf = pyzipper.AESZipFile(archive, **kwargs)  # type: ignore[attr-defined]
+                except TypeError:
+                    if kwargs:
+                        continue
+                    zf = pyzipper.AESZipFile(archive)  # type: ignore[attr-defined]
+            else:
+                zf = zipfile.ZipFile(archive, **kwargs)
+            if pwd:
+                zf.setpassword(pwd)
+            infos = zf.infolist()
+            names = [fix_archive_filename(i.filename) for i in infos]
+            score = _zip_cjk_score(names)
+            # 也给“无需修复就已含汉字”的加分
+            score += _zip_cjk_score([i.filename for i in infos])
+            candidates.append((score, zf, infos))
+        except Exception as exc:
+            last_exc = exc
+            if zf is not None:
+                try:
+                    zf.close()
+                except Exception:
+                    pass
+
+    if not candidates:
+        if last_exc is not None:
+            _raise_password_error(last_exc)
+            raise last_exc
+        raise ArchiveError("无法打开 zip 压缩包。")
+
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    best_score, best_zf, best_infos = candidates[0]
+    # 关闭落选的句柄
+    for score, zf, _infos in candidates[1:]:
+        try:
+            zf.close()
+        except Exception:
+            pass
+    return best_zf, best_infos
+
+
 def _list_zip(archive: Path, password: Optional[str]) -> List[ArchiveMember]:
     members: List[ArchiveMember] = []
-    pwd = _pwd_bytes(password)
-
-    def _collect(zf) -> None:
-        for info in zf.infolist():
-            name = info.filename
+    zf, infos = _open_best_zip(archive, password)
+    try:
+        for info in infos:
+            name = fix_archive_filename(info.filename)
             is_dir = name.endswith("/")
-            encrypted = bool(info.flag_bits & 0x1)
+            encrypted = bool(getattr(info, "flag_bits", 0) & 0x1)
             members.append(
                 ArchiveMember(
                     name=name,
@@ -435,21 +531,8 @@ def _list_zip(archive: Path, password: Optional[str]) -> List[ArchiveMember]:
                     encrypted=encrypted,
                 )
             )
-
-    try:
-        if HAS_PYZIPPER:
-            with pyzipper.AESZipFile(archive) as zf:  # type: ignore[attr-defined]
-                if pwd:
-                    zf.setpassword(pwd)
-                _collect(zf)
-        else:
-            with zipfile.ZipFile(archive) as zf:
-                if pwd:
-                    zf.setpassword(pwd)
-                _collect(zf)
-    except Exception as exc:
-        _raise_password_error(exc)
-        raise
+    finally:
+        zf.close()
     return members
 
 
@@ -527,21 +610,57 @@ def _list_7z(archive: Path, password: Optional[str]) -> List[ArchiveMember]:
     return members
 
 
-def _list_rar(archive: Path, password: Optional[str]) -> List[ArchiveMember]:
+def _open_rar(archive: Path, password: Optional[str]):
+    """打开 rar，并尽量兼容中文文件名编码。"""
     _ensure_rar_ready()
+    # RAR5 多为 UTF-8；旧版中文 rar 常见 GBK/ANSI。
+    charsets: Tuple[Optional[str], ...] = (None, "utf-8", "gbk", "gb18030")
+    last_exc: Optional[BaseException] = None
+    for charset in charsets:
+        rf = None
+        try:
+            kwargs = {}
+            if charset:
+                kwargs["charset"] = charset
+            rf = rarfile.RarFile(archive, **kwargs)  # type: ignore
+            if password:
+                rf.setpassword(password)
+            # 触发一次列表以验证编码是否可读
+            _ = rf.infolist()
+            return rf
+        except PasswordRequiredError:
+            if rf is not None:
+                try:
+                    rf.close()
+                except Exception:
+                    pass
+            raise
+        except Exception as exc:
+            last_exc = exc
+            if rf is not None:
+                try:
+                    rf.close()
+                except Exception:
+                    pass
+            continue
+    if last_exc is not None:
+        _raise_password_error(last_exc)
+        raise ArchiveError(f"读取 rar 失败：{last_exc}") from last_exc
+    raise ArchiveError("读取 rar 失败。")
+
+
+def _list_rar(archive: Path, password: Optional[str]) -> List[ArchiveMember]:
     members: List[ArchiveMember] = []
     try:
-        with rarfile.RarFile(archive) as rf:  # type: ignore
+        with _open_rar(archive, password) as rf:
             archive_needs_pw = bool(getattr(rf, "needs_password", lambda: False)())
             if archive_needs_pw and not password:
                 raise PasswordRequiredError("压缩包已加密，请输入密码。")
-            if password:
-                rf.setpassword(password)
             infos = rf.infolist()
             if archive_needs_pw and not infos:
                 raise PasswordRequiredError("压缩包已加密，请输入正确密码。")
             for info in infos:
-                name = info.filename
+                name = fix_archive_filename(info.filename)
                 is_dir = info.is_dir() if hasattr(info, "is_dir") else name.endswith("/")
                 needs_pw = archive_needs_pw
                 if hasattr(info, "needs_password"):
@@ -559,6 +678,8 @@ def _list_rar(archive: Path, password: Optional[str]) -> List[ArchiveMember]:
                     )
                 )
     except PasswordRequiredError:
+        raise
+    except ArchiveError:
         raise
     except Exception as exc:
         _raise_password_error(exc)
@@ -641,14 +762,12 @@ def _extract_zip(
     progress: Optional[ProgressCallback],
     password: Optional[str],
 ):
-    pwd = _pwd_bytes(password)
-
-    def _extract_with(zf) -> None:
-        if pwd:
-            zf.setpassword(pwd)
-        members = zf.infolist()
+    zf, members = _open_best_zip(archive, password)
+    try:
         total = len(members) or 1
         for i, member in enumerate(members, start=1):
+            # 修正中文文件名后再解压，避免落盘乱码。
+            member.filename = fix_archive_filename(member.filename).replace("\\", "/")
             _safe_join(dest, member.filename)
             try:
                 zf.extract(member, dest)
@@ -657,20 +776,8 @@ def _extract_zip(
                 raise
             if progress:
                 progress(i, total, member.filename)
-
-    try:
-        if HAS_PYZIPPER:
-            with pyzipper.AESZipFile(archive) as zf:  # type: ignore[attr-defined]
-                _extract_with(zf)
-        else:
-            with zipfile.ZipFile(archive) as zf:
-                _extract_with(zf)
-    except PasswordRequiredError:
-        raise
-    except Exception as exc:
-        _raise_password_error(exc)
-        # 无 pyzipper 时，AES zip 可能被误判；再试一次标准库无助于 AES。
-        raise
+    finally:
+        zf.close()
 
 
 def _extract_tar(archive: Path, dest: Path, progress: Optional[ProgressCallback]):
@@ -748,14 +855,11 @@ def _extract_rar(
     progress: Optional[ProgressCallback],
     password: Optional[str],
 ):
-    _ensure_rar_ready()
     try:
-        with rarfile.RarFile(archive) as rf:  # type: ignore
+        with _open_rar(archive, password) as rf:
             archive_needs_pw = bool(getattr(rf, "needs_password", lambda: False)())
             if archive_needs_pw and not password:
                 raise PasswordRequiredError("压缩包已加密，请输入密码。")
-            if password:
-                rf.setpassword(password)
             members = rf.infolist()
             if password is None and any(
                 hasattr(m, "needs_password") and m.needs_password() for m in members
@@ -763,16 +867,34 @@ def _extract_rar(
                 raise PasswordRequiredError("压缩包已加密，请输入密码。")
             if archive_needs_pw and not members:
                 raise PasswordRequiredError("压缩包已加密，请输入正确密码。")
+            # 预检路径穿越，并把显示名修正为可读中文（extractall 仍用内部名）。
             for member in members:
-                _safe_join(dest, member.filename)
+                safe_name = fix_archive_filename(member.filename).replace("\\", "/")
+                _safe_join(dest, safe_name)
             total = len(members) or 1
             if progress:
                 progress(0, total, archive.name)
             # 头加密 RAR5 下逐文件 extract 可能 CRC 失败；extractall 更可靠。
             rf.extractall(dest)
+            # 若落盘文件名乱码，尝试重命名为修正后的中文名。
+            for member in members:
+                raw = member.filename
+                fixed = fix_archive_filename(raw).replace("\\", "/")
+                if raw == fixed:
+                    continue
+                src = dest / raw
+                dst = dest / fixed
+                if src.exists() and not dst.exists():
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    try:
+                        src.rename(dst)
+                    except OSError:
+                        pass
             if progress:
                 progress(total, total, archive.name)
     except PasswordRequiredError:
+        raise
+    except ArchiveError:
         raise
     except Exception as exc:
         _raise_password_error(exc)
