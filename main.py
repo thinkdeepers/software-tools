@@ -4,6 +4,8 @@
 直接运行以打开图形界面，或使用命令行参数：
     python main.py --compress <文件...>
     python main.py --extract <压缩包>
+    python main.py --open <压缩包>      # 预览
+    python main.py <压缩包>             # 同上
     python main.py --install / --uninstall
 """
 

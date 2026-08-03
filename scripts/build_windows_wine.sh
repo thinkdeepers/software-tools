@@ -24,6 +24,9 @@ fi
 # 分配 PTY，规避 Wine 下 Python 的 stdio 重定向问题。
 pty_run() { script -qefc "$1" /dev/null; }
 
+echo "[build] 下载 UnRAR ..."
+bash "$ROOT/scripts/fetch_vendor_tools.sh"
+
 echo "[build] 用 PyInstaller 打包 exe ..."
 rm -rf build dist
 pty_run "xvfb-run -a wine '$PYEXE' build_windows.py"

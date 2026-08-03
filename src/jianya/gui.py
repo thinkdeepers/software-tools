@@ -1,4 +1,4 @@
-"""极简图形界面：只有"压缩"和"解压"两个大按钮。"""
+"""极简图形界面：压缩 / 解压，以及双击压缩包时的预览窗口。"""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import queue
 import sys
 import threading
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 from . import __version__
 from . import core
@@ -42,36 +42,51 @@ def _enable_high_dpi() -> None:
         pass
 
 
-def launch() -> int:
+def launch(open_archives: Optional[Sequence[str]] = None) -> int:
     _enable_high_dpi()
     try:
         import tkinter as tk
-        from tkinter import filedialog, messagebox, ttk
+        from tkinter import filedialog, messagebox, simpledialog, ttk
     except Exception as exc:  # pragma: no cover - 缺少 tkinter 时
         print(f"无法启动图形界面（缺少 tkinter）：{exc}", file=sys.stderr)
         print("你也可以使用命令行：jianya --compress <文件> 或 jianya --extract <压缩包>")
         return 1
 
-    app = _App(tk, filedialog, messagebox, ttk)
-    app.run()
+    app = _App(tk, filedialog, messagebox, simpledialog, ttk)
+    archives = [a for a in (open_archives or []) if a]
+    if archives:
+        # 双击压缩包：直接进入预览，不显示主按钮页。
+        for archive in archives:
+            app.open_preview(archive)
+        # 若预览窗口都未能打开，再回退到主界面。
+        if not app._preview_windows:
+            app.run()
+        else:
+            app.run(show_main=False)
+    else:
+        app.run()
     return 0
 
 
 class _App:
     """封装 tkinter 主窗口，避免在模块顶层导入 tkinter。"""
 
-    def __init__(self, tk, filedialog, messagebox, ttk):
+    def __init__(self, tk, filedialog, messagebox, simpledialog, ttk):
         self.tk = tk
         self.filedialog = filedialog
         self.messagebox = messagebox
+        self.simpledialog = simpledialog
         self.ttk = ttk
 
         self._events: "queue.Queue[tuple]" = queue.Queue()
         self._busy = False
+        self._preview_windows: List["_PreviewWindow"] = []
+        self._main_built = False
 
         root = tk.Tk()
         self.root = root
         root.title(f"简压 {__version__} — 简洁 · 免费 · 无广告")
+        root.withdraw()
 
         # 按屏幕真实 DPI 缩放窗口尺寸（96 dpi 为 100%）。声明 DPI 感知后，
         # 文字/图标由系统清晰绘制，窗口尺寸也随缩放等比放大以容纳内容。
@@ -82,15 +97,11 @@ class _App:
         if scale < 1.0:
             scale = 1.0
         self._scale = scale
-        base_w, base_h = 480, 500
-        win_w, win_h = int(base_w * scale), int(base_h * scale)
-        root.geometry(f"{win_w}x{win_h}")
-        # 固定最小尺寸，保证底部按钮与说明文字不会因窗口缩小被遮挡。
-        root.minsize(win_w, win_h)
+        base_w, base_h = 480, 520
+        self._win_w, self._win_h = int(base_w * scale), int(base_h * scale)
         root.configure(bg="white")
 
         self._set_window_icon()
-        self._build_ui()
         root.after(80, self._drain_events)
 
     def _set_window_icon(self) -> None:
@@ -116,6 +127,9 @@ class _App:
     # 界面
     # ------------------------------------------------------------------
     def _build_ui(self) -> None:
+        if self._main_built:
+            return
+        self._main_built = True
         tk, ttk = self.tk, self.ttk
 
         WHITE = "#ffffff"
@@ -132,8 +146,13 @@ class _App:
             style.configure("Big.TButton", font=("Microsoft YaHei", 16, "bold"), padding=18)
             style.configure("Link.TButton", font=("Microsoft YaHei", 9), padding=6)
             style.configure("Footer.TLabel", background=WHITE, foreground="#9aa0a6")
+            style.configure("Preview.Treeview", font=("Microsoft YaHei", 9), rowheight=int(24 * self._scale))
         except Exception:
             pass
+
+        self.root.geometry(f"{self._win_w}x{self._win_h}")
+        # 固定最小尺寸，保证底部按钮与说明文字不会因窗口缩小被遮挡。
+        self.root.minsize(self._win_w, self._win_h)
 
         container = ttk.Frame(self.root, padding=24, style="White.TFrame")
         container.pack(fill="both", expand=True)
@@ -146,7 +165,7 @@ class _App:
             font=("Microsoft YaHei", 22, "bold"),
         ).pack(pady=(0, 4))
         ttk.Label(
-            header, text="压缩统一为 ZIP · 解压支持常见格式",
+            header, text="压缩统一为 ZIP · 解压支持常见格式 · 可加密",
             style="Sub.TLabel", font=("Microsoft YaHei", 10),
         ).pack(pady=(0, 18))
 
@@ -202,16 +221,65 @@ class _App:
         self.progress.pack(fill="x", pady=(22, 6))
 
         self.status = ttk.Label(
-            middle, text="选择文件开始压缩，或选择压缩包进行解压",
+            middle, text="选择文件开始压缩，或选择压缩包预览/解压",
             style="Status.TLabel", font=("Microsoft YaHei", 9),
         )
         self.status.pack(fill="x")
+
+    # ------------------------------------------------------------------
+    # 密码 / 预览
+    # ------------------------------------------------------------------
+    def ask_password(self, title: str = "输入密码", prompt: str = "请输入密码：") -> Optional[str]:
+        """弹出密码输入框；取消返回 None，空字符串表示用户确认不使用密码。"""
+        parent = self.root
+        result = self.simpledialog.askstring(title, prompt, show="*", parent=parent)
+        return result
+
+    def open_preview(self, archive: str, password: Optional[str] = None) -> None:
+        archive_path = Path(archive)
+        if not archive_path.is_file():
+            self.messagebox.showerror("简压", f"文件不存在：{archive_path}")
+            return
+        if not core.is_archive(archive_path):
+            self.messagebox.showerror("简压", f"不支持的压缩格式：{archive_path.name}")
+            return
+
+        pwd = password
+        try:
+            members = core.list_archive(archive_path, password=pwd)
+        except core.PasswordRequiredError:
+            pwd = self.ask_password("加密压缩包", f"{archive_path.name} 已加密，请输入密码：")
+            if pwd is None:
+                return
+            try:
+                members = core.list_archive(archive_path, password=pwd)
+            except core.PasswordRequiredError:
+                self.messagebox.showerror("简压", "密码不正确，或压缩包已加密。")
+                return
+            except core.ArchiveError as exc:
+                self.messagebox.showerror("简压", str(exc))
+                return
+        except core.ArchiveError as exc:
+            self.messagebox.showerror("简压", str(exc))
+            return
+
+        # 内容加密但列表可读：若检测到加密条目且尚未提供密码，提前询问。
+        if pwd is None and any(m.encrypted for m in members):
+            pwd = self.ask_password("加密压缩包", f"{archive_path.name} 含加密文件，解压前请输入密码：")
+            if pwd is None:
+                # 仍允许预览列表，解压时再问。
+                pwd = None
+
+        preview = _PreviewWindow(self, archive_path, members, pwd)
+        self._preview_windows.append(preview)
 
     # ------------------------------------------------------------------
     # 事件处理
     # ------------------------------------------------------------------
     def _set_busy(self, busy: bool) -> None:
         self._busy = busy
+        if not self._main_built:
+            return
         state = "disabled" if busy else "normal"
         self.btn_compress.configure(state=state)
         self.btn_extract.configure(state=state)
@@ -238,13 +306,23 @@ class _App:
         if not output:
             return
 
-        self._start_task(self._do_compress, paths, output)
+        password = None
+        if self.messagebox.askyesno("简压", "是否使用密码加密此压缩包？"):
+            password = self.ask_password("设置密码", "请输入压缩密码：")
+            if password is None:
+                return
+            password = password.strip()
+            if not password:
+                self.messagebox.showerror("简压", "密码不能为空。")
+                return
+
+        self._start_task(self._do_compress, paths, output, password)
 
     def _on_extract(self) -> None:
         if self._busy:
             return
         archive = self.filedialog.askopenfilename(
-            title="选择要解压的压缩包",
+            title="选择要预览 / 解压的压缩包",
             filetypes=[
                 ("压缩包", "*.zip *.tar *.gz *.tgz *.bz2 *.xz *.7z *.rar"),
                 ("所有文件", "*.*"),
@@ -252,32 +330,65 @@ class _App:
         )
         if not archive:
             return
-        output = self.filedialog.askdirectory(title="选择解压到的目录（取消则解压到同名目录）")
-        self._start_task(self._do_extract, archive, output or None)
+        self.open_preview(archive)
 
     def _start_task(self, target, *args) -> None:
         self._set_busy(True)
-        self.progress.configure(value=0)
-        self.status.configure(text="处理中…")
+        if self._main_built:
+            self.progress.configure(value=0)
+            self.status.configure(text="处理中…")
         thread = threading.Thread(target=target, args=args, daemon=True)
         thread.start()
 
     def _progress(self, done: int, total: int, name: str) -> None:
         self._events.put(("progress", done, total, name))
 
-    def _do_compress(self, paths: List[str], output: str) -> None:
+    def _do_compress(self, paths: List[str], output: str, password: Optional[str]) -> None:
         try:
-            result = core.compress_to_zip(paths, output=output, progress=self._progress)
-            self._events.put(("done", "压缩完成", str(result)))
+            result = core.compress_to_zip(
+                paths, output=output, progress=self._progress, password=password
+            )
+            tip = "（已加密）" if password else ""
+            self._events.put(("done", f"压缩完成{tip}", str(result)))
         except Exception as exc:
             self._events.put(("error", str(exc)))
 
-    def _do_extract(self, archive: str, output: Optional[str]) -> None:
+    def _do_extract(
+        self,
+        archive: str,
+        output: Optional[str],
+        password: Optional[str],
+    ) -> None:
         try:
-            result = core.extract_archive(archive, output_dir=output, progress=self._progress)
+            result = core.extract_archive(
+                archive,
+                output_dir=output,
+                progress=self._progress,
+                password=password,
+            )
             self._events.put(("done", "解压完成", str(result)))
+        except core.PasswordRequiredError as exc:
+            self._events.put(("need_password", archive, output, str(exc)))
         except Exception as exc:
             self._events.put(("error", str(exc)))
+
+    def extract_archive_interactive(
+        self,
+        archive: str,
+        output: Optional[str] = None,
+        password: Optional[str] = None,
+    ) -> None:
+        """供预览窗口调用：选择目录后解压。"""
+        if self._busy:
+            return
+        if output is None:
+            chosen = self.filedialog.askdirectory(
+                title="选择解压到的目录（取消则解压到同名目录）"
+            )
+            # 取消目录对话框 → 使用默认同名目录；若连默认也不想，用户可关预览。
+            # 这里：点取消表示使用默认目录（与旧行为一致：取消则解压到同名目录）。
+            output = chosen or None
+        self._start_task(self._do_extract, archive, output, password)
 
     def _on_install_menu(self) -> None:
         self._manage_menu(install=True)
@@ -295,7 +406,7 @@ class _App:
                     "简压",
                     "已设为默认打开程序。\n"
                     "· zip/7z/rar 等压缩包将显示简压图标\n"
-                    "· 双击压缩包即可用简压解压\n"
+                    "· 双击压缩包可预览内容并解压\n"
                     "· 右键文件可压缩，右键压缩包可解压",
                 )
             else:
@@ -315,22 +426,179 @@ class _App:
                 if kind == "progress":
                     _, done, total, name = event
                     pct = int(done / total * 100) if total else 100
-                    self.progress.configure(value=pct)
-                    self.status.configure(text=f"[{pct}%] {name}")
+                    if self._main_built:
+                        self.progress.configure(value=pct)
+                        self.status.configure(text=f"[{pct}%] {name}")
                 elif kind == "done":
                     _, title, path = event
-                    self.progress.configure(value=100)
-                    self.status.configure(text=f"{title}：{path}")
+                    if self._main_built:
+                        self.progress.configure(value=100)
+                        self.status.configure(text=f"{title}：{path}")
                     self._set_busy(False)
                     self.messagebox.showinfo("简压", f"{title}\n{path}")
+                elif kind == "need_password":
+                    _, archive, output, msg = event
+                    self._set_busy(False)
+                    pwd = self.ask_password("需要密码", f"{Path(archive).name}\n{msg}")
+                    if pwd is None:
+                        if self._main_built:
+                            self.status.configure(text="已取消解压")
+                        continue
+                    self._start_task(self._do_extract, archive, output, pwd)
                 elif kind == "error":
                     _, msg = event
                     self._set_busy(False)
-                    self.status.configure(text="操作失败")
+                    if self._main_built:
+                        self.status.configure(text="操作失败")
                     self.messagebox.showerror("简压", msg)
         except queue.Empty:
             pass
         self.root.after(80, self._drain_events)
 
-    def run(self) -> None:
+    def run(self, show_main: bool = True) -> None:
+        if show_main:
+            self._build_ui()
+            self.root.deiconify()
+        else:
+            # 仅预览模式：保留隐藏的 root 作为 Tk 主循环载体。
+            self.root.protocol("WM_DELETE_WINDOW", self._on_root_close)
         self.root.mainloop()
+
+    def _on_root_close(self) -> None:
+        # 预览模式：所有预览关掉后退出。
+        if self._preview_windows:
+            return
+        self.root.destroy()
+
+    def _preview_closed(self, preview: "_PreviewWindow") -> None:
+        if preview in self._preview_windows:
+            self._preview_windows.remove(preview)
+        if not self._main_built and not self._preview_windows:
+            self.root.quit()
+            self.root.destroy()
+
+
+class _PreviewWindow:
+    """压缩包预览窗口：列出内容，并可一键解压。"""
+
+    def __init__(
+        self,
+        app: _App,
+        archive: Path,
+        members: List[core.ArchiveMember],
+        password: Optional[str],
+    ):
+        self.app = app
+        self.archive = archive
+        self.members = members
+        self.password = password
+        tk, ttk = app.tk, app.ttk
+
+        win = tk.Toplevel(app.root)
+        self.win = win
+        win.title(f"预览 — {archive.name}")
+        scale = app._scale
+        w, h = int(560 * scale), int(420 * scale)
+        win.geometry(f"{w}x{h}")
+        win.minsize(int(420 * scale), int(300 * scale))
+        win.configure(bg="white")
+
+        try:
+            win.iconbitmap(default=resource_path("app.ico") or "")
+        except Exception:
+            pass
+
+        frame = ttk.Frame(win, padding=12, style="White.TFrame")
+        frame.pack(fill="both", expand=True)
+
+        ttk.Label(
+            frame,
+            text=archive.name,
+            style="Title.TLabel",
+            font=("Microsoft YaHei", 12, "bold"),
+        ).pack(anchor="w")
+        info = f"{len(members)} 个项目"
+        if any(m.encrypted for m in members) or password:
+            info += " · 已加密"
+        ttk.Label(frame, text=info, style="Sub.TLabel", font=("Microsoft YaHei", 9)).pack(
+            anchor="w", pady=(2, 8)
+        )
+
+        tree_frame = ttk.Frame(frame, style="White.TFrame")
+        tree_frame.pack(fill="both", expand=True)
+
+        columns = ("size", "compressed", "flag")
+        tree = ttk.Treeview(
+            tree_frame,
+            columns=columns,
+            show="tree headings",
+            style="Preview.Treeview",
+        )
+        tree.heading("#0", text="名称")
+        tree.heading("size", text="大小")
+        tree.heading("compressed", text="压缩后")
+        tree.heading("flag", text="")
+        tree.column("#0", width=int(280 * scale), stretch=True)
+        tree.column("size", width=int(90 * scale), anchor="e")
+        tree.column("compressed", width=int(90 * scale), anchor="e")
+        tree.column("flag", width=int(60 * scale), anchor="center")
+
+        scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=scroll.set)
+        tree.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+
+        for member in members:
+            flag = "加密" if member.encrypted else ("目录" if member.is_dir else "")
+            tree.insert(
+                "",
+                "end",
+                text=member.name,
+                values=(
+                    "" if member.is_dir else _format_size(member.size),
+                    "" if member.is_dir else _format_size(member.compressed_size),
+                    flag,
+                ),
+            )
+
+        buttons = ttk.Frame(frame, style="White.TFrame")
+        buttons.pack(fill="x", pady=(10, 0))
+        ttk.Button(buttons, text="解压到…", command=self._extract_to).pack(side="right")
+        ttk.Button(buttons, text="解压到同名目录", command=self._extract_here).pack(
+            side="right", padx=(0, 8)
+        )
+        ttk.Button(buttons, text="关闭", command=win.destroy).pack(side="left")
+
+        win.protocol("WM_DELETE_WINDOW", self._close)
+        win.focus_force()
+
+    def _close(self) -> None:
+        self.win.destroy()
+        self.app._preview_closed(self)
+
+    def _extract_here(self) -> None:
+        self.app.extract_archive_interactive(
+            str(self.archive),
+            output=None,
+            password=self.password,
+        )
+
+    def _extract_to(self) -> None:
+        chosen = self.app.filedialog.askdirectory(title="选择解压到的目录")
+        if not chosen:
+            return
+        self.app.extract_archive_interactive(
+            str(self.archive),
+            output=chosen,
+            password=self.password,
+        )
+
+
+def _format_size(size: int) -> str:
+    if size < 1024:
+        return f"{size} B"
+    if size < 1024 * 1024:
+        return f"{size / 1024:.1f} KB"
+    if size < 1024 * 1024 * 1024:
+        return f"{size / (1024 * 1024):.1f} MB"
+    return f"{size / (1024 * 1024 * 1024):.2f} GB"

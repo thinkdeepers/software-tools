@@ -2,6 +2,8 @@
 
 用法：
     jianya                      # 打开极简图形界面
+    jianya ARCHIVE              # 打开压缩包预览（双击关联调用）
+    jianya --open ARCHIVE       # 同上
     jianya --compress FILE...   # 直接把文件/目录压缩为 zip（右键菜单调用）
     jianya --extract ARCHIVE    # 直接解压压缩包（右键菜单调用）
     jianya --install            # 注册文件关联与右键菜单（默认用简压打开压缩包）
@@ -11,6 +13,7 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import sys
 from pathlib import Path
 from typing import List, Optional
@@ -36,6 +39,10 @@ def _build_parser() -> argparse.ArgumentParser:
         help="解压指定压缩包",
     )
     group.add_argument(
+        "--open", metavar="ARCHIVE",
+        help="打开压缩包预览界面",
+    )
+    group.add_argument(
         "--install", action="store_true",
         help="注册文件关联与右键菜单（压缩包显示简压图标并默认由简压打开）",
     )
@@ -45,8 +52,18 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "archives",
+        nargs="*",
+        metavar="ARCHIVE",
+        help="双击打开时传入的压缩包路径（进入预览）",
+    )
+    parser.add_argument(
         "-o", "--output", metavar="PATH",
         help="指定输出路径（压缩时为 zip 文件，解压时为目标目录）",
+    )
+    parser.add_argument(
+        "-p", "--password", metavar="PASSWORD",
+        help="压缩/解压时使用的密码",
     )
     parser.add_argument(
         "--gui", action="store_true", help="强制打开图形界面",
@@ -94,24 +111,66 @@ def _notify(title: str, message: str, error: bool = False) -> None:
         pass
 
 
-def _run_compress(paths: List[str], output: Optional[str]) -> int:
+def _prompt_password(prompt: str = "请输入密码：") -> Optional[str]:
+    if _has_console():
+        try:
+            return getpass.getpass(prompt)
+        except Exception:
+            return None
     try:
-        result = core.compress_to_zip(paths, output=output, progress=_console_progress)
+        import tkinter as tk
+        from tkinter import simpledialog
+
+        root = tk.Tk()
+        root.withdraw()
+        value = simpledialog.askstring("简压", prompt, show="*", parent=root)
+        root.destroy()
+        return value
+    except Exception:
+        return None
+
+
+def _run_compress(paths: List[str], output: Optional[str], password: Optional[str]) -> int:
+    try:
+        result = core.compress_to_zip(
+            paths, output=output, progress=_console_progress, password=password
+        )
     except core.ArchiveError as exc:
         _notify("简压 - 压缩失败", f"错误：{exc}", error=True)
         return 1
-    _notify("简压", f"已压缩到：{result}")
+    tip = "（已加密）" if password else ""
+    _notify("简压", f"已压缩到：{result}{tip}")
     return 0
 
 
-def _run_extract(archive: str, output: Optional[str]) -> int:
-    try:
-        result = core.extract_archive(archive, output_dir=output, progress=_console_progress)
-    except core.ArchiveError as exc:
-        _notify("简压 - 解压失败", f"错误：{exc}", error=True)
-        return 1
-    _notify("简压", f"已解压到：{result}")
-    return 0
+def _run_extract(archive: str, output: Optional[str], password: Optional[str]) -> int:
+    pwd = password
+    for _attempt in range(3):
+        try:
+            result = core.extract_archive(
+                archive,
+                output_dir=output,
+                progress=_console_progress,
+                password=pwd,
+            )
+            _notify("简压", f"已解压到：{result}")
+            return 0
+        except core.PasswordRequiredError as exc:
+            pwd = _prompt_password(f"{Path(archive).name}：{exc}\n请输入密码：")
+            if pwd is None:
+                _notify("简压 - 解压失败", "已取消（需要密码）。", error=True)
+                return 1
+        except core.ArchiveError as exc:
+            _notify("简压 - 解压失败", f"错误：{exc}", error=True)
+            return 1
+    _notify("简压 - 解压失败", "密码不正确。", error=True)
+    return 1
+
+
+def _run_open(archives: List[str]) -> int:
+    from . import gui
+
+    return gui.launch(open_archives=archives)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -127,7 +186,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 if not args.quiet:
                     _notify(
                         "简压",
-                        "已设为默认打开程序：压缩包将显示简压图标，双击即可解压。",
+                        "已设为默认打开程序：压缩包将显示简压图标，双击即可预览并解压。",
                     )
             else:
                 context_menu.uninstall()
@@ -140,10 +199,33 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 1
 
     if args.compress:
-        return _run_compress(args.compress, args.output)
+        return _run_compress(args.compress, args.output, args.password)
 
     if args.extract:
-        return _run_extract(args.extract, args.output)
+        return _run_extract(args.extract, args.output, args.password)
+
+    open_targets: List[str] = []
+    if args.open:
+        open_targets.append(args.open)
+    for item in args.archives or []:
+        if item not in open_targets:
+            open_targets.append(item)
+
+    # 位置参数若是压缩包则进入预览；否则提示。
+    if open_targets:
+        archives = [p for p in open_targets if core.is_archive(p) and Path(p).is_file()]
+        missing = [p for p in open_targets if not Path(p).is_file()]
+        unsupported = [
+            p for p in open_targets if Path(p).is_file() and not core.is_archive(p)
+        ]
+        if missing and not archives:
+            _notify("简压", f"文件不存在：{missing[0]}", error=True)
+            return 1
+        if unsupported and not archives:
+            _notify("简压", f"不支持的压缩格式：{Path(unsupported[0]).name}", error=True)
+            return 1
+        if archives:
+            return _run_open(archives)
 
     # 默认打开图形界面
     from . import gui

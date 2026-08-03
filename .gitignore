@@ -10,3 +10,8 @@ venv/
 build/
 dist/
 *.spec
+
+# 下载的第三方二进制（由 scripts/fetch_vendor_tools.sh / build_windows.py 获取）
+vendor/UnRAR.exe
+vendor/*.exe
+vendor/.*.partial

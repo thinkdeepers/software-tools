@@ -1,9 +1,11 @@
 """压缩 / 解压核心逻辑。
 
 设计目标：
-- 压缩：统一输出为最常用的 ZIP 格式（不依赖任何第三方库）。
-- 解压：尽量支持常见格式（zip / tar / tar.gz / tgz / tar.bz2 / tar.xz /
+- 压缩：统一输出为最常用的 ZIP 格式；可选 AES 加密（需 pyzipper）。
+- 解压：支持常见格式（zip / tar / tar.gz / tgz / tar.bz2 / tar.xz /
   gz / bz2 / xz），并在安装了可选依赖时额外支持 7z / rar。
+- 预览：可列出压缩包内文件，供界面双击打开时浏览。
+- 密码：支持加密压缩，以及解压加密压缩包时传入密码。
 
 所有耗时操作都支持一个 ``progress`` 回调，方便界面显示进度。
 回调签名为 ``progress(done: int, total: int, name: str)``。
@@ -18,10 +20,11 @@ import os
 import sys
 import tarfile
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, Optional, Sequence
+from typing import Callable, Iterable, List, Optional, Sequence
 
-# 可选依赖：安装后自动启用对应格式的解压能力。
+# 可选依赖：安装后自动启用对应格式的解压 / 加密能力。
 try:  # 7z 支持
     import py7zr  # type: ignore
 
@@ -29,12 +32,19 @@ try:  # 7z 支持
 except Exception:  # pragma: no cover - 取决于运行环境
     HAS_7Z = False
 
-try:  # rar 支持（需系统安装 unrar / bsdtar）
+try:  # rar 支持（需系统或捆绑的 unrar / 7z）
     import rarfile  # type: ignore
 
     HAS_RAR = True
 except Exception:  # pragma: no cover - 取决于运行环境
     HAS_RAR = False
+
+try:  # AES 加密 ZIP
+    import pyzipper  # type: ignore
+
+    HAS_PYZIPPER = True
+except Exception:  # pragma: no cover - 取决于运行环境
+    HAS_PYZIPPER = False
 
 
 ProgressCallback = Callable[[int, int, str], None]
@@ -42,6 +52,21 @@ ProgressCallback = Callable[[int, int, str], None]
 
 class ArchiveError(Exception):
     """压缩 / 解压过程中出现的可读错误。"""
+
+
+class PasswordRequiredError(ArchiveError):
+    """压缩包已加密，需要密码（或密码不正确）。"""
+
+
+@dataclass(frozen=True)
+class ArchiveMember:
+    """压缩包内的一个条目，供预览界面使用。"""
+
+    name: str
+    size: int = 0
+    compressed_size: int = 0
+    is_dir: bool = False
+    encrypted: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -66,6 +91,8 @@ SUPPORTED_EXTRACT_SUFFIXES = (
     _ZIP_SUFFIXES + _TAR_SUFFIXES + _PLAIN_SUFFIXES + _OPTIONAL_SUFFIXES
 )
 
+_RAR_TOOL_CONFIGURED = False
+
 
 def _lower_name(path: os.PathLike | str) -> str:
     return os.path.basename(str(path)).lower()
@@ -75,6 +102,116 @@ def is_archive(path: os.PathLike | str) -> bool:
     """根据扩展名判断是否为可解压的压缩包。"""
     name = _lower_name(path)
     return any(name.endswith(suffix) for suffix in SUPPORTED_EXTRACT_SUFFIXES)
+
+
+def _vendor_candidates() -> List[Path]:
+    """查找随程序分发的第三方工具目录。"""
+    candidates: List[Path] = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(Path(meipass))
+        candidates.append(Path(meipass) / "vendor")
+    here = Path(__file__).resolve().parent
+    project_root = here.parent.parent
+    candidates.append(project_root / "vendor")
+    candidates.append(project_root / "assets")
+    if getattr(sys, "frozen", False):
+        candidates.append(Path(sys.executable).resolve().parent)
+        candidates.append(Path(sys.executable).resolve().parent / "vendor")
+    return candidates
+
+
+def _is_executable_tool(path: Path) -> bool:
+    """判断路径是否为当前平台可执行的辅助工具。"""
+    if not path.is_file():
+        return False
+    name = path.name.lower()
+    if os.name == "nt":
+        return name.endswith(".exe") or os.access(path, os.X_OK)
+    # POSIX：不要选中 Windows PE（如捆绑的 UnRAR.exe）。
+    if name.endswith(".exe"):
+        return False
+    return os.access(path, os.X_OK)
+
+
+def _find_helper_tool(*names: str) -> Optional[str]:
+    """在捆绑目录与 PATH 中查找当前平台可用的辅助解压工具。"""
+    from shutil import which
+
+    # Windows 安装版：优先使用捆绑的 UnRAR.exe。
+    # 其它平台：优先系统 PATH 中的原生工具，再回退到 vendor。
+    search_order: List[Path] = []
+    if os.name == "nt":
+        for directory in _vendor_candidates():
+            for name in names:
+                search_order.append(directory / name)
+        for name in names:
+            found = which(name)
+            if found:
+                search_order.append(Path(found))
+    else:
+        for name in names:
+            found = which(name)
+            if found:
+                search_order.append(Path(found))
+        for directory in _vendor_candidates():
+            for name in names:
+                search_order.append(directory / name)
+
+    seen = set()
+    for candidate in search_order:
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        if _is_executable_tool(candidate):
+            return str(candidate)
+    return None
+
+
+def _configure_rar_tool() -> None:
+    """配置 rarfile 使用捆绑或系统中的 UnRAR / 7z。"""
+    global _RAR_TOOL_CONFIGURED
+    if _RAR_TOOL_CONFIGURED or not HAS_RAR:
+        return
+    _RAR_TOOL_CONFIGURED = True
+
+    if os.name == "nt":
+        unrar_names = ("UnRAR.exe", "unrar.exe", "unrarw64.exe", "unrarw32.exe", "unrar")
+        seven_names = ("7z.exe", "7za.exe", "7zz", "7z")
+    else:
+        unrar_names = ("unrar", "UnRAR")
+        seven_names = ("7z", "7zz", "7za")
+
+    unrar = _find_helper_tool(*unrar_names)
+    if unrar:
+        rarfile.UNRAR_TOOL = unrar  # type: ignore[attr-defined]
+
+    seven = _find_helper_tool(*seven_names)
+    if seven:
+        rarfile.SEVENZIP_TOOL = seven  # type: ignore[attr-defined]
+
+    try:
+        rarfile.tool_setup(force=True)  # type: ignore[attr-defined]
+    except Exception:
+        # 工具可能仍不可用；真正解压时再给出明确错误。
+        pass
+
+
+def _ensure_rar_ready() -> None:
+    if not HAS_RAR:
+        raise ArchiveError(
+            "解压 rar 需要安装 rarfile（pip install rarfile），"
+            "并提供 UnRAR 工具（安装版已捆绑）。"
+        )
+    _configure_rar_tool()
+    try:
+        rarfile.tool_setup()  # type: ignore[attr-defined]
+    except Exception as exc:  # pragma: no cover - 取决于运行环境
+        raise ArchiveError(
+            "未找到可用的 UnRAR / 7z 工具，无法解压 rar。"
+            "请重新安装简压，或将 UnRAR 加入系统 PATH。"
+        ) from exc
 
 
 def _unique_path(path: Path) -> Path:
@@ -88,7 +225,7 @@ def _unique_path(path: Path) -> Path:
     for compound in (".tar.gz", ".tar.bz2", ".tar.xz"):
         if name_lower.endswith(compound):
             stem = path.name[: -len(compound)]
-            suffix = path.name[-len(compound):]
+            suffix = path.name[-len(compound) :]
             break
     index = 1
     while True:
@@ -137,9 +274,55 @@ def default_zip_output(paths: Sequence[Path]) -> Path:
         base = paths[0].resolve()
         if base.is_dir():
             return base.parent / f"{base.name}.zip"
-        return base.with_suffix(base.suffix + ".zip") if base.suffix == "" else base.with_name(base.stem + ".zip")
+        return (
+            base.with_suffix(base.suffix + ".zip")
+            if base.suffix == ""
+            else base.with_name(base.stem + ".zip")
+        )
     parent = paths[0].resolve().parent
     return parent / "打包.zip"
+
+
+def _pwd_bytes(password: Optional[str]) -> Optional[bytes]:
+    if password is None:
+        return None
+    if isinstance(password, bytes):
+        return password
+    return password.encode("utf-8")
+
+
+def _is_password_message(message: str) -> bool:
+    text = message.lower()
+    keywords = (
+        "password",
+        "passwd",
+        "encrypted",
+        "encrypt",
+        "密码",
+        "加密",
+        "bad password",
+        "wrong password",
+        "required password",
+    )
+    return any(k in text for k in keywords)
+
+
+def _raise_password_error(exc: BaseException) -> None:
+    """若异常明显与密码相关，则转换为 PasswordRequiredError。"""
+    msg = str(exc) or exc.__class__.__name__
+    if _is_password_message(msg):
+        raise PasswordRequiredError("压缩包已加密，请输入正确密码。") from exc
+
+    if HAS_RAR:
+        for name in ("PasswordRequired", "RarWrongPassword"):
+            cls = getattr(rarfile, name, None)
+            if cls is not None and isinstance(exc, cls):
+                raise PasswordRequiredError("压缩包已加密，请输入正确密码。") from exc
+
+    if HAS_7Z:
+        cls = getattr(py7zr, "PasswordRequired", None)
+        if cls is not None and isinstance(exc, cls):
+            raise PasswordRequiredError("压缩包已加密，请输入正确密码。") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -151,6 +334,7 @@ def compress_to_zip(
     output: Optional[os.PathLike | str] = None,
     progress: Optional[ProgressCallback] = None,
     compresslevel: int = 6,
+    password: Optional[str] = None,
 ) -> Path:
     """将若干文件 / 目录压缩为一个 ZIP。
 
@@ -158,6 +342,7 @@ def compress_to_zip(
     :param output: 输出 zip 路径；缺省时自动推断。
     :param progress: 进度回调 ``(done, total, name)``。
     :param compresslevel: 压缩级别 0-9。
+    :param password: 若提供，则使用 AES-256 加密（需要 pyzipper）。
     :returns: 实际写出的 zip 路径。
     """
     paths = [Path(p) for p in inputs]
@@ -175,20 +360,48 @@ def compress_to_zip(
 
     total = _count_files(paths) or 1
     done = 0
+    pwd = (password or "").strip() or None
 
     try:
-        with zipfile.ZipFile(
-            out, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=compresslevel
-        ) as zf:
-            for full, arc in _iter_files(paths):
-                if full is None:
-                    # 空目录
-                    zf.writestr(arc, "")
-                    continue
-                zf.write(full, arc)
-                done += 1
-                if progress:
-                    progress(done, total, arc)
+        if pwd:
+            if not HAS_PYZIPPER:
+                raise ArchiveError("加密压缩需要安装 pyzipper（pip install pyzipper）。")
+            with pyzipper.AESZipFile(  # type: ignore[attr-defined]
+                out,
+                "w",
+                compression=pyzipper.ZIP_DEFLATED,  # type: ignore[attr-defined]
+                encryption=pyzipper.WZ_AES,  # type: ignore[attr-defined]
+                compresslevel=compresslevel,
+            ) as zf:
+                zf.setpassword(_pwd_bytes(pwd))
+                for full, arc in _iter_files(paths):
+                    if full is None:
+                        zf.writestr(arc, "")
+                        continue
+                    zf.write(full, arc)
+                    done += 1
+                    if progress:
+                        progress(done, total, arc)
+        else:
+            with zipfile.ZipFile(
+                out, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=compresslevel
+            ) as zf:
+                for full, arc in _iter_files(paths):
+                    if full is None:
+                        # 空目录
+                        zf.writestr(arc, "")
+                        continue
+                    zf.write(full, arc)
+                    done += 1
+                    if progress:
+                        progress(done, total, arc)
+    except ArchiveError:
+        if out.exists():
+            try:
+                out.unlink()
+            except OSError:
+                pass
+        raise
     except Exception as exc:  # 出错时清理半成品
         if out.exists():
             try:
@@ -198,6 +411,201 @@ def compress_to_zip(
         raise ArchiveError(f"压缩失败：{exc}") from exc
 
     return out
+
+
+# ---------------------------------------------------------------------------
+# 列表 / 预览
+# ---------------------------------------------------------------------------
+
+def _list_zip(archive: Path, password: Optional[str]) -> List[ArchiveMember]:
+    members: List[ArchiveMember] = []
+    pwd = _pwd_bytes(password)
+
+    def _collect(zf) -> None:
+        for info in zf.infolist():
+            name = info.filename
+            is_dir = name.endswith("/")
+            encrypted = bool(info.flag_bits & 0x1)
+            members.append(
+                ArchiveMember(
+                    name=name,
+                    size=0 if is_dir else int(info.file_size),
+                    compressed_size=0 if is_dir else int(info.compress_size),
+                    is_dir=is_dir,
+                    encrypted=encrypted,
+                )
+            )
+
+    try:
+        if HAS_PYZIPPER:
+            with pyzipper.AESZipFile(archive) as zf:  # type: ignore[attr-defined]
+                if pwd:
+                    zf.setpassword(pwd)
+                _collect(zf)
+        else:
+            with zipfile.ZipFile(archive) as zf:
+                if pwd:
+                    zf.setpassword(pwd)
+                _collect(zf)
+    except Exception as exc:
+        _raise_password_error(exc)
+        raise
+    return members
+
+
+def _list_tar(archive: Path) -> List[ArchiveMember]:
+    members: List[ArchiveMember] = []
+    with tarfile.open(archive) as tf:
+        for info in tf.getmembers():
+            members.append(
+                ArchiveMember(
+                    name=info.name + ("/" if info.isdir() and not info.name.endswith("/") else ""),
+                    size=0 if info.isdir() else int(info.size),
+                    compressed_size=0 if info.isdir() else int(info.size),
+                    is_dir=info.isdir(),
+                    encrypted=False,
+                )
+            )
+    return members
+
+
+def _list_plain(archive: Path) -> List[ArchiveMember]:
+    lower = archive.name.lower()
+    if lower.endswith(".gz"):
+        strip = ".gz"
+    elif lower.endswith(".bz2"):
+        strip = ".bz2"
+    else:
+        strip = ".xz"
+    out_name = archive.name[: -len(strip)] or archive.stem
+    return [
+        ArchiveMember(
+            name=out_name,
+            size=archive.stat().st_size,
+            compressed_size=archive.stat().st_size,
+            is_dir=False,
+            encrypted=False,
+        )
+    ]
+
+
+def _list_7z(archive: Path, password: Optional[str]) -> List[ArchiveMember]:
+    if not HAS_7Z:
+        raise ArchiveError("解压 7z 需要安装 py7zr（pip install py7zr）。")
+    members: List[ArchiveMember] = []
+    try:
+        with py7zr.SevenZipFile(archive, mode="r", password=password) as zf:  # type: ignore
+            if password is None and hasattr(zf, "needs_password") and zf.needs_password():
+                raise PasswordRequiredError("压缩包已加密，请输入密码。")
+            for info in zf.list():
+                name = getattr(info, "filename", None) or getattr(info, "file_name", "")
+                is_dir = bool(getattr(info, "is_directory", False))
+                if not is_dir and str(name).endswith("/"):
+                    is_dir = True
+                uncompressed = int(getattr(info, "uncompressed", 0) or 0)
+                compressed = int(getattr(info, "compressed", 0) or 0)
+                encrypted = bool(
+                    getattr(info, "encrypted", False)
+                    or (hasattr(zf, "needs_password") and zf.needs_password())
+                )
+                members.append(
+                    ArchiveMember(
+                        name=str(name),
+                        size=0 if is_dir else uncompressed,
+                        compressed_size=0 if is_dir else compressed,
+                        is_dir=is_dir,
+                        encrypted=encrypted,
+                    )
+                )
+    except PasswordRequiredError:
+        raise
+    except Exception as exc:
+        _raise_password_error(exc)
+        if _is_password_message(str(exc)):
+            raise PasswordRequiredError("压缩包已加密，请输入正确密码。") from exc
+        raise
+    return members
+
+
+def _list_rar(archive: Path, password: Optional[str]) -> List[ArchiveMember]:
+    _ensure_rar_ready()
+    members: List[ArchiveMember] = []
+    try:
+        with rarfile.RarFile(archive) as rf:  # type: ignore
+            archive_needs_pw = bool(getattr(rf, "needs_password", lambda: False)())
+            if archive_needs_pw and not password:
+                raise PasswordRequiredError("压缩包已加密，请输入密码。")
+            if password:
+                rf.setpassword(password)
+            infos = rf.infolist()
+            if archive_needs_pw and not infos:
+                raise PasswordRequiredError("压缩包已加密，请输入正确密码。")
+            for info in infos:
+                name = info.filename
+                is_dir = info.is_dir() if hasattr(info, "is_dir") else name.endswith("/")
+                needs_pw = archive_needs_pw
+                if hasattr(info, "needs_password"):
+                    try:
+                        needs_pw = needs_pw or bool(info.needs_password())
+                    except Exception:
+                        needs_pw = needs_pw or bool(getattr(info, "flag_bits", 0) & 0x4)
+                members.append(
+                    ArchiveMember(
+                        name=name,
+                        size=0 if is_dir else int(info.file_size),
+                        compressed_size=0 if is_dir else int(getattr(info, "compress_size", 0) or 0),
+                        is_dir=is_dir,
+                        encrypted=needs_pw,
+                    )
+                )
+    except PasswordRequiredError:
+        raise
+    except Exception as exc:
+        _raise_password_error(exc)
+        if _is_password_message(str(exc)):
+            raise PasswordRequiredError("压缩包已加密，请输入正确密码。") from exc
+        raise ArchiveError(f"读取 rar 失败：{exc}") from exc
+    return members
+
+
+def list_archive(
+    archive: os.PathLike | str,
+    password: Optional[str] = None,
+) -> List[ArchiveMember]:
+    """列出压缩包内的文件条目（用于预览）。"""
+    archive_path = Path(archive)
+    if not archive_path.is_file():
+        raise ArchiveError(f"文件不存在：{archive_path}")
+
+    lower = archive_path.name.lower()
+    try:
+        if lower.endswith(_ZIP_SUFFIXES):
+            return _list_zip(archive_path, password)
+        if lower.endswith(_TAR_SUFFIXES) or tarfile.is_tarfile(archive_path):
+            return _list_tar(archive_path)
+        if lower.endswith(".7z"):
+            return _list_7z(archive_path, password)
+        if lower.endswith(".rar"):
+            return _list_rar(archive_path, password)
+        if lower.endswith(_PLAIN_SUFFIXES):
+            return _list_plain(archive_path)
+        raise ArchiveError(f"不支持的压缩格式：{archive_path.name}")
+    except (ArchiveError, PasswordRequiredError):
+        raise
+    except Exception as exc:
+        _raise_password_error(exc)
+        raise ArchiveError(f"读取压缩包失败：{exc}") from exc
+
+
+def archive_is_encrypted(archive: os.PathLike | str) -> bool:
+    """尽力判断压缩包是否加密（不抛出密码错误时返回 False）。"""
+    try:
+        members = list_archive(archive)
+    except PasswordRequiredError:
+        return True
+    except ArchiveError:
+        return False
+    return any(m.encrypted for m in members)
 
 
 # ---------------------------------------------------------------------------
@@ -227,15 +635,42 @@ def _extract_dir_for(archive: Path, output_dir: Optional[os.PathLike | str]) -> 
     return archive.parent / stem
 
 
-def _extract_zip(archive: Path, dest: Path, progress: Optional[ProgressCallback]):
-    with zipfile.ZipFile(archive) as zf:
+def _extract_zip(
+    archive: Path,
+    dest: Path,
+    progress: Optional[ProgressCallback],
+    password: Optional[str],
+):
+    pwd = _pwd_bytes(password)
+
+    def _extract_with(zf) -> None:
+        if pwd:
+            zf.setpassword(pwd)
         members = zf.infolist()
         total = len(members) or 1
         for i, member in enumerate(members, start=1):
             _safe_join(dest, member.filename)
-            zf.extract(member, dest)
+            try:
+                zf.extract(member, dest)
+            except RuntimeError as exc:
+                _raise_password_error(exc)
+                raise
             if progress:
                 progress(i, total, member.filename)
+
+    try:
+        if HAS_PYZIPPER:
+            with pyzipper.AESZipFile(archive) as zf:  # type: ignore[attr-defined]
+                _extract_with(zf)
+        else:
+            with zipfile.ZipFile(archive) as zf:
+                _extract_with(zf)
+    except PasswordRequiredError:
+        raise
+    except Exception as exc:
+        _raise_password_error(exc)
+        # 无 pyzipper 时，AES zip 可能被误判；再试一次标准库无助于 AES。
+        raise
 
 
 def _extract_tar(archive: Path, dest: Path, progress: Optional[ProgressCallback]):
@@ -279,42 +714,85 @@ def _extract_plain(archive: Path, dest: Path, progress: Optional[ProgressCallbac
         progress(1, 1, out_name)
 
 
-def _extract_7z(archive: Path, dest: Path, progress: Optional[ProgressCallback]):
+def _extract_7z(
+    archive: Path,
+    dest: Path,
+    progress: Optional[ProgressCallback],
+    password: Optional[str],
+):
     if not HAS_7Z:
         raise ArchiveError("解压 7z 需要安装 py7zr（pip install py7zr）。")
-    with py7zr.SevenZipFile(archive, mode="r") as zf:  # type: ignore
-        names = zf.getnames()
-        total = len(names) or 1
-        if progress:
-            progress(0, total, archive.name)
-        zf.extractall(path=dest)
-        if progress:
-            progress(total, total, archive.name)
-
-
-def _extract_rar(archive: Path, dest: Path, progress: Optional[ProgressCallback]):
-    if not HAS_RAR:
-        raise ArchiveError("解压 rar 需要安装 rarfile 及系统 unrar 工具。")
-    with rarfile.RarFile(archive) as rf:  # type: ignore
-        members = rf.infolist()
-        total = len(members) or 1
-        for i, member in enumerate(members, start=1):
-            _safe_join(dest, member.filename)
-            rf.extract(member, dest)
+    try:
+        with py7zr.SevenZipFile(archive, mode="r", password=password) as zf:  # type: ignore
+            if password is None and hasattr(zf, "needs_password") and zf.needs_password():
+                raise PasswordRequiredError("压缩包已加密，请输入密码。")
+            names = zf.getnames()
+            total = len(names) or 1
             if progress:
-                progress(i, total, member.filename)
+                progress(0, total, archive.name)
+            zf.extractall(path=dest)
+            if progress:
+                progress(total, total, archive.name)
+    except PasswordRequiredError:
+        raise
+    except Exception as exc:
+        _raise_password_error(exc)
+        if _is_password_message(str(exc)):
+            raise PasswordRequiredError("压缩包已加密，请输入正确密码。") from exc
+        raise
+
+
+def _extract_rar(
+    archive: Path,
+    dest: Path,
+    progress: Optional[ProgressCallback],
+    password: Optional[str],
+):
+    _ensure_rar_ready()
+    try:
+        with rarfile.RarFile(archive) as rf:  # type: ignore
+            archive_needs_pw = bool(getattr(rf, "needs_password", lambda: False)())
+            if archive_needs_pw and not password:
+                raise PasswordRequiredError("压缩包已加密，请输入密码。")
+            if password:
+                rf.setpassword(password)
+            members = rf.infolist()
+            if password is None and any(
+                hasattr(m, "needs_password") and m.needs_password() for m in members
+            ):
+                raise PasswordRequiredError("压缩包已加密，请输入密码。")
+            if archive_needs_pw and not members:
+                raise PasswordRequiredError("压缩包已加密，请输入正确密码。")
+            for member in members:
+                _safe_join(dest, member.filename)
+            total = len(members) or 1
+            if progress:
+                progress(0, total, archive.name)
+            # 头加密 RAR5 下逐文件 extract 可能 CRC 失败；extractall 更可靠。
+            rf.extractall(dest)
+            if progress:
+                progress(total, total, archive.name)
+    except PasswordRequiredError:
+        raise
+    except Exception as exc:
+        _raise_password_error(exc)
+        if _is_password_message(str(exc)):
+            raise PasswordRequiredError("压缩包已加密，请输入正确密码。") from exc
+        raise ArchiveError(f"解压 rar 失败：{exc}") from exc
 
 
 def extract_archive(
     archive: os.PathLike | str,
     output_dir: Optional[os.PathLike | str] = None,
     progress: Optional[ProgressCallback] = None,
+    password: Optional[str] = None,
 ) -> Path:
     """将压缩包解压到目录。
 
     :param archive: 压缩包路径。
     :param output_dir: 输出目录；缺省时使用与压缩包同名的新目录。
     :param progress: 进度回调 ``(done, total, name)``。
+    :param password: 解压加密压缩包时的密码。
     :returns: 实际解压到的目录。
     """
     archive_path = Path(archive)
@@ -323,12 +801,13 @@ def extract_archive(
 
     dest = _extract_dir_for(archive_path, output_dir)
     lower = archive_path.name.lower()
+    pwd = (password or "").strip() or None
 
     try:
         if lower.endswith(_ZIP_SUFFIXES):
             dest = _unique_path(dest)
             dest.mkdir(parents=True, exist_ok=True)
-            _extract_zip(archive_path, dest, progress)
+            _extract_zip(archive_path, dest, progress, pwd)
         elif lower.endswith(_TAR_SUFFIXES) or tarfile.is_tarfile(archive_path):
             dest = _unique_path(dest)
             dest.mkdir(parents=True, exist_ok=True)
@@ -336,19 +815,28 @@ def extract_archive(
         elif lower.endswith(".7z"):
             dest = _unique_path(dest)
             dest.mkdir(parents=True, exist_ok=True)
-            _extract_7z(archive_path, dest, progress)
+            _extract_7z(archive_path, dest, progress, pwd)
         elif lower.endswith(".rar"):
             dest = _unique_path(dest)
             dest.mkdir(parents=True, exist_ok=True)
-            _extract_rar(archive_path, dest, progress)
+            _extract_rar(archive_path, dest, progress, pwd)
         elif lower.endswith(_PLAIN_SUFFIXES):
             dest.mkdir(parents=True, exist_ok=True)
             _extract_plain(archive_path, dest, progress)
         else:
             raise ArchiveError(f"不支持的压缩格式：{archive_path.name}")
-    except ArchiveError:
+    except (ArchiveError, PasswordRequiredError):
         raise
     except Exception as exc:
+        _raise_password_error(exc)
         raise ArchiveError(f"解压失败：{exc}") from exc
 
     return dest
+
+
+# 模块导入时尽量配置好 rar 工具，避免首次解压才探测。
+if HAS_RAR:
+    try:
+        _configure_rar_tool()
+    except Exception:  # pragma: no cover
+        pass

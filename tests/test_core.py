@@ -114,3 +114,129 @@ def test_zip_slip_protection(tmp_path):
         zf.writestr("../escape.txt", "bad")
     with pytest.raises(core.ArchiveError):
         core.extract_archive(malicious, output_dir=tmp_path / "out")
+
+
+def test_list_zip_preview(tmp_path):
+    src = tmp_path / "a.txt"
+    src.write_text("preview", encoding="utf-8")
+    archive = core.compress_to_zip([src], output=tmp_path / "p.zip")
+    members = core.list_archive(archive)
+    names = [m.name for m in members]
+    assert "a.txt" in names
+    assert members[0].size == len("preview".encode("utf-8"))
+
+
+@pytest.mark.skipif(not core.HAS_PYZIPPER, reason="需要 pyzipper")
+def test_encrypted_zip_roundtrip(tmp_path):
+    src = tmp_path / "secret.txt"
+    src.write_text("top-secret", encoding="utf-8")
+    archive = core.compress_to_zip(
+        [src], output=tmp_path / "enc.zip", password="s3cret"
+    )
+    assert core.archive_is_encrypted(archive)
+
+    with pytest.raises(core.PasswordRequiredError):
+        core.extract_archive(archive, output_dir=tmp_path / "bad")
+
+    dest = core.extract_archive(
+        archive, output_dir=tmp_path / "good", password="s3cret"
+    )
+    assert (dest / "secret.txt").read_text(encoding="utf-8") == "top-secret"
+
+    members = core.list_archive(archive, password="s3cret")
+    assert any(m.encrypted for m in members)
+
+
+@pytest.mark.skipif(not core.HAS_7Z, reason="需要 py7zr")
+def test_extract_7z(tmp_path):
+    import py7zr
+
+    src = tmp_path / "n.txt"
+    src.write_text("seven", encoding="utf-8")
+    archive = tmp_path / "n.7z"
+    with py7zr.SevenZipFile(archive, "w") as zf:
+        zf.write(src, "n.txt")
+
+    members = core.list_archive(archive)
+    assert any(m.name.endswith("n.txt") for m in members)
+    dest = core.extract_archive(archive, output_dir=tmp_path / "out7")
+    assert (dest / "n.txt").read_text(encoding="utf-8") == "seven"
+
+
+@pytest.mark.skipif(not core.HAS_7Z, reason="需要 py7zr")
+def test_encrypted_7z_needs_password(tmp_path):
+    import py7zr
+
+    src = tmp_path / "n.txt"
+    src.write_text("seven-secret", encoding="utf-8")
+    archive = tmp_path / "enc.7z"
+    with py7zr.SevenZipFile(archive, "w", password="pw7") as zf:
+        zf.write(src, "n.txt")
+
+    assert core.archive_is_encrypted(archive)
+    with pytest.raises(core.PasswordRequiredError):
+        core.extract_archive(archive, output_dir=tmp_path / "bad7")
+
+    dest = core.extract_archive(archive, output_dir=tmp_path / "ok7", password="pw7")
+    assert (dest / "n.txt").read_text(encoding="utf-8") == "seven-secret"
+
+
+@pytest.mark.skipif(not core.HAS_RAR, reason="需要 rarfile")
+def test_extract_rar_if_tool_available(tmp_path):
+    """若系统有 rar/unrar，则验证 rar 解压与预览。"""
+    import shutil
+    import subprocess
+
+    if not shutil.which("rar"):
+        pytest.skip("系统无 rar 命令，无法生成测试压缩包")
+
+    src = tmp_path / "r.txt"
+    src.write_text("rar-content", encoding="utf-8")
+    archive = tmp_path / "r.rar"
+    subprocess.run(
+        ["rar", "a", "-ep1", str(archive), str(src)],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    members = core.list_archive(archive)
+    assert any("r.txt" in m.name for m in members)
+    dest = core.extract_archive(archive, output_dir=tmp_path / "outrar")
+    extracted = list(Path(dest).rglob("r.txt"))
+    assert extracted
+    assert extracted[0].read_text(encoding="utf-8") == "rar-content"
+
+
+@pytest.mark.skipif(not core.HAS_RAR, reason="需要 rarfile")
+def test_encrypted_rar_needs_password(tmp_path):
+    import shutil
+    import subprocess
+
+    if not shutil.which("rar"):
+        pytest.skip("系统无 rar 命令，无法生成测试压缩包")
+
+    src = tmp_path / "r.txt"
+    src.write_text("rar-secret", encoding="utf-8")
+    archive = tmp_path / "enc.rar"
+    subprocess.run(
+        ["rar", "a", "-ep1", "-hpsecret", str(archive), str(src)],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    assert core.archive_is_encrypted(archive)
+    with pytest.raises(core.PasswordRequiredError):
+        core.list_archive(archive)
+    with pytest.raises(core.PasswordRequiredError):
+        core.extract_archive(archive, output_dir=tmp_path / "bad")
+
+    members = core.list_archive(archive, password="secret")
+    assert any("r.txt" in m.name for m in members)
+    dest = core.extract_archive(
+        archive, output_dir=tmp_path / "ok", password="secret"
+    )
+    extracted = list(Path(dest).rglob("r.txt"))
+    assert extracted
+    assert extracted[0].read_text(encoding="utf-8") == "rar-secret"

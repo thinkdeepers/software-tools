@@ -5,7 +5,7 @@
 
 安装后效果：
 - 常见压缩包（.zip/.7z/.rar/.tar/.gz/.tgz/.bz2/.xz…）图标变为简压图标；
-- 双击压缩包默认由简压打开并解压；
+- 双击压缩包默认由简压打开并预览内容；
 - 右键任意文件/文件夹可「压缩为 ZIP（简压）」；
 - 右键压缩包可「解压到此处（简压）」。
 """
@@ -38,15 +38,19 @@ def _require_windows():
         raise ContextMenuError("文件关联与右键菜单目前仅支持 Windows 系统。")
 
 
-def _launcher(action: str) -> str:
+def _launcher(action: str = "") -> str:
     """构造用于右键菜单 / 打开命令的启动命令，末尾带占位的 \"%1\"。
 
     - 打包成 exe 时直接调用自身。
     - 源码运行时使用 pythonw + 入口脚本。
+    - ``action`` 为空时表示双击打开（进入预览）。
     """
+    action = (action or "").strip()
+    prefix = f"{action} " if action else ""
+
     if getattr(sys, "frozen", False):
         exe = sys.executable
-        return f'"{exe}" {action} "%1"'
+        return f'"{exe}" {prefix}"%1"'
 
     # 源码运行：优先使用无控制台窗口的 pythonw。
     python = sys.executable
@@ -56,7 +60,7 @@ def _launcher(action: str) -> str:
 
     # 通过项目根目录的 main.py 启动，确保能找到 src 包。
     main_py = os.path.join(_project_root(), "main.py")
-    return f'"{python}" "{main_py}" {action} "%1"'
+    return f'"{python}" "{main_py}" {prefix}"%1"'
 
 
 def _project_root() -> str:
@@ -123,7 +127,7 @@ def _delete_verb(winreg, base_path: str, verb_key: str):
     _delete_key_tree(winreg, f"{base_path}\\{verb_key}")
 
 
-def _register_progid(winreg, extract_cmd: str) -> None:
+def _register_progid(winreg, open_cmd: str, extract_cmd: str) -> None:
     """注册 ProgID：决定压缩包的显示名称、图标与双击打开行为。"""
     classes = "Software\\Classes"
     progid_path = f"{classes}\\{_PROGID}"
@@ -135,11 +139,11 @@ def _register_progid(winreg, extract_cmd: str) -> None:
     if icon:
         _set_sz(winreg, f"{progid_path}\\DefaultIcon", None, icon)
 
-    # 双击 → 用简压解压
+    # 双击 → 用简压预览
     _set_sz(winreg, f"{progid_path}\\shell\\open", None, "用简压打开")
     if icon:
         _set_sz(winreg, f"{progid_path}\\shell\\open", "Icon", icon)
-    _set_sz(winreg, f"{progid_path}\\shell\\open\\command", None, extract_cmd)
+    _set_sz(winreg, f"{progid_path}\\shell\\open\\command", None, open_cmd)
 
     # ProgID 上再挂一个「解压到此处」动词
     _create_verb(
@@ -210,10 +214,11 @@ def install() -> None:
 
     compress_cmd = _launcher("--compress")
     extract_cmd = _launcher("--extract")
+    open_cmd = _launcher("--open")
     classes = "Software\\Classes"
 
-    # 1) ProgID：图标 + 双击打开
-    _register_progid(winreg, extract_cmd)
+    # 1) ProgID：图标 + 双击打开（预览）
+    _register_progid(winreg, open_cmd, extract_cmd)
 
     # 2) 扩展名关联
     for ext in _EXTRACT_EXTS:

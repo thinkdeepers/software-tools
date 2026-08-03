@@ -58,9 +58,9 @@ else
 fi
 
 # 2) 主机测试依赖
-log "安装/更新主机 Python 依赖：pytest, Pillow ..."
-pip3 install --user --upgrade pytest Pillow >/dev/null 2>&1 || \
-  pip3 install --break-system-packages --upgrade pytest Pillow >/dev/null 2>&1 || true
+log "安装/更新主机 Python 依赖：pytest, Pillow, py7zr, rarfile, pyzipper ..."
+pip3 install --user --upgrade pytest Pillow py7zr rarfile pyzipper >/dev/null 2>&1 || \
+  pip3 install --break-system-packages --upgrade pytest Pillow py7zr rarfile pyzipper >/dev/null 2>&1 || true
 
 # 3) 初始化 Wine 前缀
 if [ ! -d "$WINEPREFIX/drive_c/windows" ]; then
@@ -81,12 +81,12 @@ else
   log "Wine 内 Python 已安装，跳过。"
 fi
 
-# 5) 在 Wine 内安装 PyInstaller
-if ! pty_run "xvfb-run -a wine '$PYEXE' -c \"import PyInstaller\"" >/dev/null 2>&1; then
-  log "在 Wine 内安装 PyInstaller ..."
-  pty_run "xvfb-run -a wine '$PYEXE' -m pip install --upgrade pyinstaller"
+# 5) 在 Wine 内安装 PyInstaller 与解压/加密依赖
+if ! pty_run "xvfb-run -a wine '$PYEXE' -c \"import PyInstaller, py7zr, rarfile, pyzipper\"" >/dev/null 2>&1; then
+  log "在 Wine 内安装 PyInstaller / py7zr / rarfile / pyzipper ..."
+  pty_run "xvfb-run -a wine '$PYEXE' -m pip install --upgrade pyinstaller py7zr rarfile pyzipper"
 else
-  log "PyInstaller 已安装，跳过。"
+  log "Wine 内 Python 打包依赖已安装，跳过。"
 fi
 
 # 6) 在 Wine 内安装 Inno Setup 6

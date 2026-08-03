@@ -18,6 +18,15 @@ def test_progid_constant():
     assert context_menu._PROGID == "Jianya.Archive"
 
 
+def test_launcher_open_and_extract_commands():
+    open_cmd = context_menu._launcher("--open")
+    extract_cmd = context_menu._launcher("--extract")
+    assert "--open" in open_cmd
+    assert "--extract" in extract_cmd
+    assert open_cmd.rstrip().endswith('"%1"')
+    assert extract_cmd.rstrip().endswith('"%1"')
+
+
 def test_non_windows_install_raises(monkeypatch):
     monkeypatch.setattr(os, "name", "posix")
     try:

@@ -3,19 +3,21 @@
 免费、简洁、**无广告、无弹窗、无捆绑**的压缩 / 解压小工具。
 
 界面上只有两个按钮 —— **压缩** 和 **解压**。压缩统一输出为最常用的 **ZIP** 格式，
-解压支持常见的多种压缩格式；安装后还能在文件上**右键**直接压缩或解压。
+解压支持常见的多种压缩格式；安装后还能在文件上**右键**直接压缩或解压，
+**双击压缩包可预览内容**，并支持**密码加密压缩 / 解压加密包**。
 
 ---
 
 ## 特点
 
 - **极简界面**：只有"压缩"和"解压"两个大按钮，零学习成本。
-- **压缩为 ZIP**：统一输出最通用的 zip 格式，随处可解压。
-- **解压多格式**：`zip` / `tar` / `tar.gz` / `tgz` / `tar.bz2` / `tar.xz` / `gz` / `bz2` / `xz`，
-  安装可选依赖后还支持 `7z` / `rar`。
-- **默认打开 + 图标**：安装后 zip/7z/rar 等压缩包显示简压图标，双击即用简压解压。
+- **压缩为 ZIP**：统一输出最通用的 zip 格式；可选 AES-256 密码加密。
+- **解压多格式**：`zip` / `tar` / `tar.gz` / `tgz` / `tar.bz2` / `tar.xz` / `gz` / `bz2` / `xz` / `7z` / `rar`。
+- **预览**：双击压缩包打开内容列表，确认后再解压。
+- **密码**：加密压缩；解压加密 zip / 7z / rar 时自动提示输入密码。
+- **默认打开 + 图标**：安装后 zip/7z/rar 等压缩包显示简压图标，双击即用简压预览。
 - **右键菜单**：右键任意文件/文件夹即可"压缩为 ZIP"，右键压缩包即可"解压到此处"。
-- **纯净无依赖**：核心功能仅使用 Python 标准库，没有广告、没有后台更新。
+- **纯净**：没有广告、没有后台更新。
 - **安全**：解压时防止路径穿越（Zip Slip）攻击。
 
 ## 界面预览
@@ -23,7 +25,7 @@
 ```
 ┌─────────────────────────────────────┐
 │              简压                    │
-│   压缩统一为 ZIP · 解压支持常见格式  │
+│ 压缩统一为 ZIP · 解压支持常见格式 · 可加密 │
 │                                      │
 │    ┌──────────┐   ┌──────────┐      │
 │    │   压缩   │   │   解压   │      │
@@ -34,6 +36,21 @@
 │                                      │
 │   [设为默认打开] [取消默认打开]      │
 └─────────────────────────────────────┘
+```
+
+双击压缩包时进入预览窗口：
+
+```
+┌──────── 预览 — demo.zip ────────────┐
+│ demo.zip                             │
+│ 3 个项目                             │
+│ ┌──────────────────────────────────┐ │
+│ │ 名称          大小    压缩后      │ │
+│ │ readme.txt    1.2 KB  600 B       │ │
+│ │ photo.jpg     2.1 MB  2.0 MB      │ │
+│ └──────────────────────────────────┘ │
+│ [关闭]     [解压到同名目录] [解压到…] │
+└──────────────────────────────────────┘
 ```
 
 ## 下载 / 安装（安装版，非便携）
@@ -49,40 +66,48 @@
 
 > 安装程序内的主程序使用真实的 Windows Python + PyInstaller 打包，为标准的 Windows PE
 > 可执行文件；安装包由 Inno Setup 生成。若你不放心第三方二进制，也可以按下文自行打包。
+> 安装版已捆绑 UnRAR，可直接解压 rar。
 
 ## 使用方式
 
 ### 方式一：直接运行源码（需要 Python 3.8+）
 
 ```bash
-python main.py            # 打开图形界面
+pip install -r requirements.txt   # 7z / rar / 加密 ZIP 支持
+python main.py                    # 打开图形界面
 ```
 
 命令行用法（右键菜单底层调用的也是这些）：
 
 ```bash
 python main.py --compress <文件或目录...>   # 压缩为 zip
+python main.py --compress <路径...> -p 密码 # 加密压缩
 python main.py --extract  <压缩包>          # 解压
+python main.py --extract  <压缩包> -p 密码  # 解压加密包
+python main.py --open <压缩包>              # 打开预览
+python main.py <压缩包>                     # 同上（双击关联）
 python main.py --install                    # 设为默认打开 + 注册右键菜单
 python main.py --uninstall                  # 取消默认打开 + 移除右键菜单
 ```
+
+解压 rar 还需要系统提供 UnRAR（Linux: `sudo apt install unrar`；Windows 安装版已捆绑）。
 
 ### 方式二：自行制作安装程序（推荐给普通用户）
 
 在 Windows 上：
 
 ```bash
-pip install pyinstaller       # 1) 先打包主程序
-python build_windows.py       #    生成 dist\简压.exe（自带 assets/app.ico 图标）
+pip install pyinstaller py7zr rarfile pyzipper
+python build_windows.py       # 自动下载 UnRAR 并生成 dist\简压.exe
 
-# 2) 再用 Inno Setup 生成安装程序（需安装 Inno Setup 6）
+# 再用 Inno Setup 生成安装程序（需安装 Inno Setup 6）
 "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\jianya.iss
 ```
 
 生成的安装程序位于 `release\简压安装程序.exe`，分发给用户双击安装即可。
 
 > 提示：右键菜单调用主程序完成压缩/解压后，会弹出一个"完成"提示框告知输出位置；
-> 出错时会弹出错误提示。
+> 出错时会弹出错误提示。加密压缩包在缺少密码时会提示输入。
 
 ## 文件关联与右键菜单（Windows）
 
@@ -92,7 +117,7 @@ python build_windows.py       #    生成 dist\简压.exe（自带 assets/app.ic
 安装后：
 
 - **zip / 7z / rar / tar / gz…** 压缩包在资源管理器中显示**简压图标**
-- **双击**压缩包 → 默认用简压解压
+- **双击**压缩包 → 打开简压预览窗口
 - 右键**任意文件或文件夹** → **压缩为 ZIP（简压）**
 - 右键**压缩包** → **解压到此处（简压）**
 
@@ -101,19 +126,10 @@ python build_windows.py       #    生成 dist\简压.exe（自带 assets/app.ic
 > 若个别扩展名已被其它软件锁定为「默认应用」（Windows 10/11 的 UserChoice），
 > 可在 **设置 → 应用 → 默认应用** 中把对应格式改选为「简压」。
 
-## 可选：扩展解压格式
-
-核心无需任何第三方库。若想解压 `7z` / `rar`：
-
-```bash
-pip install py7zr      # 7z 支持
-pip install rarfile    # rar 支持（还需系统安装 unrar 或 bsdtar）
-```
-
 ## 开发与测试
 
 ```bash
-pip install pytest
+pip install -r requirements.txt pytest
 python -m pytest
 ```
 
@@ -136,11 +152,13 @@ bash scripts/build_windows_wine.sh # 生成 dist/简压.exe 与 release/简压�
 ```
 .
 ├── main.py                     # 入口
-├── build_windows.py            # PyInstaller 打包脚本
+├── build_windows.py            # PyInstaller 打包脚本（含 UnRAR 下载）
 ├── requirements.txt
 ├── assets/
 │   ├── make_icon.py            # 生成应用图标
 │   └── app.ico / app.png       # 应用图标
+├── vendor/
+│   └── UnRAR.exe               # Windows rar 解压工具（构建时下载）
 ├── installer/
 │   └── jianya.iss              # Inno Setup 安装程序脚本
 ├── release/
@@ -148,8 +166,8 @@ bash scripts/build_windows_wine.sh # 生成 dist/简压.exe 与 release/简压�
 ├── .github/workflows/
 │   └── build-windows.yml       # 自动打包 exe + 制作安装程序的 CI
 ├── src/jianya/
-│   ├── core.py                 # 压缩/解压核心逻辑
-│   ├── gui.py                  # 极简图形界面
+│   ├── core.py                 # 压缩/解压/预览/加密核心逻辑
+│   ├── gui.py                  # 极简图形界面 + 预览窗口
 │   ├── cli.py                  # 命令行解析
 │   └── context_menu.py         # Windows 文件关联 + 右键菜单注册
 └── tests/
@@ -158,4 +176,4 @@ bash scripts/build_windows_wine.sh # 生成 dist/简压.exe 与 release/简压�
 
 ## 许可
 
-免费使用。
+免费使用。UnRAR 工具版权归 Alexander Roshal 所有，按其许可随软件分发。
