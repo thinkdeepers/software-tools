@@ -34,6 +34,8 @@ const api = {
     ipcRenderer.invoke('settings:setOpenAtLogin', enabled),
   setAlwaysOnTop: (enabled: boolean): Promise<AppSettings> =>
     ipcRenderer.invoke('settings:setAlwaysOnTop', enabled),
+  setEdgeDock: (enabled: boolean): Promise<AppSettings> =>
+    ipcRenderer.invoke('settings:setEdgeDock', enabled),
   setTheme: (theme: ThemeId): Promise<AppSettings> =>
     ipcRenderer.invoke('settings:setTheme', theme),
   setPlanFilter: (planFilter: PlanFilterId): Promise<AppSettings> =>
@@ -70,6 +72,11 @@ const api = {
     const handler = (_: Electron.IpcRendererEvent, enabled: boolean) => cb(enabled)
     ipcRenderer.on('ui:always-on-top', handler)
     return () => ipcRenderer.removeListener('ui:always-on-top', handler)
+  },
+  onEdgeDock: (cb: (enabled: boolean) => void) => {
+    const handler = (_: Electron.IpcRendererEvent, enabled: boolean) => cb(enabled)
+    ipcRenderer.on('ui:edge-dock', handler)
+    return () => ipcRenderer.removeListener('ui:edge-dock', handler)
   },
   onShowCompleted: (cb: (enabled: boolean) => void) => {
     const handler = (_: Electron.IpcRendererEvent, enabled: boolean) => cb(enabled)

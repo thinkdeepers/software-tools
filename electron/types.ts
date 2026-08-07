@@ -62,6 +62,7 @@ export interface UpdateTaskInput {
 export interface AppSettings {
   openAtLogin: boolean
   alwaysOnTop: boolean
+  edgeDock: boolean
   theme: ThemeId
   planFilter: PlanFilterId
   showCompleted: boolean

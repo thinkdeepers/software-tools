@@ -22,6 +22,7 @@ interface Props {
   planFilter: PlanFilterId
   theme: ThemeId
   alwaysOnTop: boolean
+  edgeDock: boolean
   showCompleted: boolean
   fontSize: FontSizeId
   fontFamily: FontFamilyId
@@ -32,6 +33,7 @@ interface Props {
   onDeletePlan: () => void
   onTheme: (theme: ThemeId) => void
   onTogglePin: () => void
+  onToggleEdgeDock: () => void
   onShowCompleted: (show: boolean) => void
   onFontSize: (size: FontSizeId) => void
   onFontFamily: (family: FontFamilyId) => void
@@ -42,6 +44,7 @@ export function AppMenuBar({
   planFilter,
   theme,
   alwaysOnTop,
+  edgeDock,
   showCompleted,
   fontSize,
   fontFamily,
@@ -52,6 +55,7 @@ export function AppMenuBar({
   onDeletePlan,
   onTheme,
   onTogglePin,
+  onToggleEdgeDock,
   onShowCompleted,
   onFontSize,
   onFontFamily,
@@ -191,6 +195,17 @@ export function AppMenuBar({
                 >
                   <span className="check">{alwaysOnTop ? '✓' : ''}</span>
                   始终置顶
+                </button>
+                <button
+                  type="button"
+                  className="menu-option"
+                  onClick={() => {
+                    onToggleEdgeDock()
+                    setOpen(null)
+                  }}
+                >
+                  <span className="check">{edgeDock ? '✓' : ''}</span>
+                  侧边停靠
                 </button>
               </div>
             )}

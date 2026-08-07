@@ -72,6 +72,7 @@ export default function App() {
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [theme, setTheme] = useState<ThemeId>('white')
   const [alwaysOnTop, setAlwaysOnTop] = useState(false)
+  const [edgeDock, setEdgeDock] = useState(false)
   const [showCompleted, setShowCompleted] = useState(true)
   const [fontSize, setFontSize] = useState<FontSizeId>('medium')
   const [fontFamily, setFontFamily] = useState<FontFamilyId>('yahei')
@@ -209,6 +210,7 @@ export default function App() {
         const settings = await window.todothings.getSettings()
         if (!cancelled) {
           setAlwaysOnTop(settings.alwaysOnTop)
+          setEdgeDock(settings.edgeDock)
           setPlanFilter(settings.planFilter || ALL_PLANS_ID)
           setMaximized(await window.todothings.windowIsMaximized())
         }
@@ -238,6 +240,7 @@ export default function App() {
         applyTheme(next)
       }),
       window.todothings.onAlwaysOnTop((enabled) => setAlwaysOnTop(enabled)),
+      window.todothings.onEdgeDock((enabled) => setEdgeDock(enabled)),
       window.todothings.onShowCompleted((enabled) => setShowCompleted(enabled)),
       window.todothings.onFontSize((size) => {
         setFontSize(size)
@@ -322,6 +325,7 @@ export default function App() {
         planFilter={planFilter}
         theme={theme}
         alwaysOnTop={alwaysOnTop}
+        edgeDock={edgeDock}
         showCompleted={showCompleted}
         fontSize={fontSize}
         fontFamily={fontFamily}
@@ -335,6 +339,12 @@ export default function App() {
           const next = !alwaysOnTop
           setAlwaysOnTop(next)
           void window.todothings.setAlwaysOnTop(next)
+        }}
+        onToggleEdgeDock={() => {
+          const next = !edgeDock
+          setEdgeDock(next)
+          if (next) setAlwaysOnTop(true)
+          void window.todothings.setEdgeDock(next)
         }}
         onShowCompleted={(show) => void handleShowCompleted(show)}
         onFontSize={(size) => void handleFontSize(size)}

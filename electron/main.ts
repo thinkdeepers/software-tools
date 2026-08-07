@@ -26,6 +26,7 @@ import {
   updatePlan,
   updateTask,
 } from './db'
+import { EdgeDockManager } from './edgeDock'
 import type {
   CreatePlanInput,
   CreateTaskInput,
@@ -47,6 +48,11 @@ let planFilter: PlanFilterId = 'all'
 let showCompleted = true
 let fontSize: FontSizeId = 'medium'
 let fontFamily: FontFamilyId = 'yahei'
+
+const edgeDock = new EdgeDockManager((state) => {
+  mainWindow?.webContents.send('ui:edge-dock', state.enabled)
+  updateTrayMenu()
+})
 
 const THEME_BG: Record<ThemeId, string> = {
   white: '#f4f6f6',
@@ -83,7 +89,8 @@ function applyChromeTheme(next: ThemeId) {
 function currentSettings() {
   return {
     openAtLogin: app.getLoginItemSettings().openAtLogin,
-    alwaysOnTop,
+    alwaysOnTop: alwaysOnTop || edgeDock.isEnabled(),
+    edgeDock: edgeDock.isEnabled(),
     theme,
     planFilter,
     showCompleted,
@@ -93,10 +100,27 @@ function currentSettings() {
 }
 
 function setAlwaysOnTopState(enabled: boolean) {
+  // 侧边停靠依赖置顶；关闭置顶时同步关闭侧边停靠
+  if (!enabled && edgeDock.isEnabled()) {
+    edgeDock.setEnabled(false)
+  }
   alwaysOnTop = enabled
-  mainWindow?.setAlwaysOnTop(alwaysOnTop)
-  mainWindow?.webContents.send('ui:always-on-top', alwaysOnTop)
+  mainWindow?.setAlwaysOnTop(alwaysOnTop || edgeDock.isEnabled())
+  mainWindow?.webContents.send('ui:always-on-top', alwaysOnTop || edgeDock.isEnabled())
   updateTrayMenu()
+}
+
+function setEdgeDockState(enabled: boolean) {
+  if (enabled) {
+    alwaysOnTop = true
+    mainWindow?.setAlwaysOnTop(true)
+    mainWindow?.webContents.send('ui:always-on-top', true)
+  }
+  edgeDock.setEnabled(enabled)
+  if (!enabled) {
+    mainWindow?.setAlwaysOnTop(alwaysOnTop)
+    mainWindow?.webContents.send('ui:always-on-top', alwaysOnTop)
+  }
 }
 
 function createWindow() {
@@ -121,6 +145,7 @@ function createWindow() {
   })
 
   applyChromeTheme(theme)
+  edgeDock.attach(mainWindow)
 
   mainWindow.on('ready-to-show', () => {
     mainWindow?.show()
@@ -129,15 +154,22 @@ function createWindow() {
   mainWindow.on('close', (event) => {
     if (!isQuitting) {
       event.preventDefault()
+      edgeDock.ensureExpanded()
       mainWindow?.hide()
     }
   })
 
   mainWindow.on('maximize', () => {
+    edgeDock.ensureExpanded()
     mainWindow?.webContents.send('ui:window-state', { maximized: true })
   })
   mainWindow.on('unmaximize', () => {
     mainWindow?.webContents.send('ui:window-state', { maximized: false })
+  })
+
+  mainWindow.on('closed', () => {
+    edgeDock.detach()
+    mainWindow = null
   })
 
   if (isDev && process.env.VITE_DEV_SERVER_URL) {
@@ -152,6 +184,7 @@ function showMainWindow() {
     createWindow()
     return
   }
+  edgeDock.ensureExpanded()
   if (mainWindow.isMinimized()) mainWindow.restore()
   mainWindow.show()
   mainWindow.focus()
@@ -184,8 +217,14 @@ function updateTrayMenu() {
     {
       label: '始终置顶',
       type: 'checkbox',
-      checked: alwaysOnTop,
+      checked: alwaysOnTop || edgeDock.isEnabled(),
       click: (item) => setAlwaysOnTopState(item.checked),
+    },
+    {
+      label: '侧边停靠',
+      type: 'checkbox',
+      checked: edgeDock.isEnabled(),
+      click: (item) => setEdgeDockState(item.checked),
     },
     { type: 'separator' },
     {
@@ -276,6 +315,10 @@ function registerIpc() {
     setAlwaysOnTopState(enabled)
     return currentSettings()
   })
+  ipcMain.handle('settings:setEdgeDock', (_e, enabled: boolean) => {
+    setEdgeDockState(enabled)
+    return currentSettings()
+  })
   ipcMain.handle('settings:setTheme', (_e, next: ThemeId) => {
     applyChromeTheme(next)
     mainWindow?.webContents.send('ui:theme', next)
@@ -301,9 +344,13 @@ function registerIpc() {
     return currentSettings()
   })
 
-  ipcMain.handle('window:minimize', () => mainWindow?.minimize())
+  ipcMain.handle('window:minimize', () => {
+    edgeDock.ensureExpanded()
+    mainWindow?.minimize()
+  })
   ipcMain.handle('window:maximizeToggle', () => {
     if (!mainWindow) return false
+    edgeDock.ensureExpanded()
     if (mainWindow.isMaximized()) mainWindow.unmaximize()
     else mainWindow.maximize()
     return mainWindow.isMaximized()
@@ -331,6 +378,7 @@ app.whenReady().then(async () => {
 
 app.on('before-quit', () => {
   isQuitting = true
+  edgeDock.dispose()
   if (reminderTimer) clearInterval(reminderTimer)
   closeDb()
 })
