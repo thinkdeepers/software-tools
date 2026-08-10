@@ -19,9 +19,14 @@ from autostart import set_autostart
 from break_timer import BreakOverlay, BreakTimer
 from config import AppConfig, load_config, save_config
 from filter_manager import FilterManager
-from settings_window import SettingsWindow
+from settings_window import MainWindow
 from tray import TrayManager, _make_tray_icon
-from win_utils import IS_WINDOWS, ensure_single_instance, enable_dpi_awareness, hide_from_taskbar
+from win_utils import (
+    IS_WINDOWS,
+    activate_existing_instance,
+    ensure_single_instance,
+    enable_dpi_awareness,
+)
 
 
 class EyeCareApp:
@@ -30,7 +35,7 @@ class EyeCareApp:
         self._filter = FilterManager()
         self._break_timer = BreakTimer()
         self._break_overlay: BreakOverlay | None = None
-        self._settings: SettingsWindow | None = None
+        self._main_window: MainWindow | None = None
 
         self._schedule_timer = QTimer()
         self._schedule_timer.setInterval(30_000)
@@ -43,7 +48,7 @@ class EyeCareApp:
 
         self._tray = TrayManager(self._config)
         self._tray.toggle_requested.connect(self._toggle_filter)
-        self._tray.settings_requested.connect(self._show_settings)
+        self._tray.main_window_requested.connect(self._show_main_window)
         self._tray.quit_requested.connect(self._quit)
         self._tray.preset_requested.connect(self._apply_preset)
 
@@ -59,8 +64,10 @@ class EyeCareApp:
         self._refresh_timer.start()
         self._check_schedule()
 
-        if self._config.enabled:
-            self._tray.notify("护眼卫士", "已启动并常驻托盘，右键图标可设置或退出")
+        self._tray.notify(
+            "护眼卫士",
+            "程序已常驻系统托盘，双击图标打开主界面",
+        )
 
     def _apply_config(self, config: AppConfig) -> None:
         self._config = config
@@ -82,8 +89,8 @@ class EyeCareApp:
         else:
             self._break_timer.stop()
 
-        if self._settings:
-            self._settings.update_config(config)
+        if self._main_window:
+            self._main_window.update_config(config)
 
     def _in_schedule(self) -> bool:
         now = datetime.now().time()
@@ -118,15 +125,12 @@ class EyeCareApp:
             self._apply_config(self._config)
             self._tray.notify("护眼卫士", f"已切换到「{name}」模式")
 
-    def _show_settings(self) -> None:
-        if self._settings is None:
-            self._settings = SettingsWindow(self._config)
-            self._settings.config_changed.connect(self._apply_config)
-            if IS_WINDOWS:
-                hide_from_taskbar(int(self._settings.winId()))
-        self._settings.show()
-        self._settings.raise_()
-        self._settings.activateWindow()
+    def _show_main_window(self) -> None:
+        if self._main_window is None:
+            self._main_window = MainWindow(self._config)
+            self._main_window.config_changed.connect(self._apply_config)
+            self._main_window.minimized_to_tray.connect(self._tray.notify_minimized)
+        self._main_window.show_main()
 
     def _on_break_start(self, break_seconds: int) -> None:
         self._tray.notify("护眼卫士", "该休息一下了！放松双眼，远眺窗外。")
@@ -154,6 +158,7 @@ def main() -> int:
     if IS_WINDOWS:
         enable_dpi_awareness()
         if not ensure_single_instance():
+            activate_existing_instance()
             return 0
 
     QApplication.setHighDpiScaleFactorRoundingPolicy(

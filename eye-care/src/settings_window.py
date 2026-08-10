@@ -1,8 +1,8 @@
-"""设置面板"""
+"""主界面窗口"""
 
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QTime
 from PyQt6.QtGui import QCloseEvent
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -19,9 +19,8 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PyQt6.QtCore import QTime
 
-from config import AppConfig, Preset, save_config
+from config import AppConfig, save_config
 
 
 class SliderRow(QWidget):
@@ -56,14 +55,20 @@ class SliderRow(QWidget):
     self._slider.setValue(val)
 
 
-class SettingsWindow(QWidget):
+class MainWindow(QWidget):
   config_changed = pyqtSignal(object)
+  minimized_to_tray = pyqtSignal()
 
   def __init__(self, config: AppConfig, parent=None):
     super().__init__(parent)
     self._config = config
-    self.setWindowTitle("护眼卫士 - 设置")
-    self.setMinimumSize(480, 460)
+    self.setWindowTitle("护眼卫士")
+    self.setWindowFlags(
+      Qt.WindowType.Window
+      | Qt.WindowType.WindowCloseButtonHint
+      | Qt.WindowType.WindowMinimizeButtonHint
+    )
+    self.setMinimumSize(480, 480)
     self.setStyleSheet("""
       QWidget { font-size: 13px; }
       QGroupBox { font-weight: bold; margin-top: 8px; padding-top: 16px; }
@@ -71,6 +76,12 @@ class SettingsWindow(QWidget):
     """)
 
     root = QVBoxLayout(self)
+
+    header = QLabel("护眼卫士")
+    header.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    header.setStyleSheet("font-size: 20px; font-weight: bold; color: #2d6a4f; padding: 4px 0;")
+    root.addWidget(header)
+
     tabs = QTabWidget()
 
   # --- 护眼 tab ---
@@ -178,10 +189,10 @@ class SettingsWindow(QWidget):
     btn_row.addStretch()
     apply_btn = QPushButton("应用")
     apply_btn.clicked.connect(self._apply)
-    close_btn = QPushButton("关闭")
-    close_btn.clicked.connect(self.hide)
+    tray_btn = QPushButton("最小化到托盘")
+    tray_btn.clicked.connect(self.minimize_to_tray)
     btn_row.addWidget(apply_btn)
-    btn_row.addWidget(close_btn)
+    btn_row.addWidget(tray_btn)
     root.addLayout(btn_row)
 
     footer = QLabel(
@@ -244,10 +255,27 @@ class SettingsWindow(QWidget):
     self._config = cfg
     self.config_changed.emit(cfg)
 
+  def show_main(self) -> None:
+    """显示并激活主界面"""
+    if self.isMinimized():
+      self.showNormal()
+    self.show()
+    self.raise_()
+    self.activateWindow()
+
+  def minimize_to_tray(self) -> None:
+    """隐藏主界面，程序继续常驻系统托盘"""
+    self.hide()
+    self.minimized_to_tray.emit()
+
   def update_config(self, config: AppConfig) -> None:
     self._config = config
 
   def closeEvent(self, event: QCloseEvent) -> None:
-    """关闭设置窗口时仅隐藏，不退出程序"""
+    """点击关闭按钮时最小化到托盘，不退出程序"""
     event.ignore()
-    self.hide()
+    self.minimize_to_tray()
+
+
+# 兼容旧名称
+SettingsWindow = MainWindow

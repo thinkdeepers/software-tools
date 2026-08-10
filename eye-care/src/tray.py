@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PyQt6.QtCore import QObject, pyqtSignal
+from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QIcon, QPixmap, QPainter, QColor, QFont
 from PyQt6.QtWidgets import QMenu, QSystemTrayIcon
 
@@ -33,7 +33,7 @@ def _make_tray_icon() -> QIcon:
 
 class TrayManager(QObject):
     toggle_requested = pyqtSignal()
-    settings_requested = pyqtSignal()
+    main_window_requested = pyqtSignal()
     quit_requested = pyqtSignal()
     preset_requested = pyqtSignal(str)
 
@@ -41,7 +41,7 @@ class TrayManager(QObject):
         super().__init__(parent)
         self._config = config
         self._tray = QSystemTrayIcon(_make_tray_icon(), parent)
-        self._tray.setToolTip("护眼卫士")
+        self._tray.setToolTip("护眼卫士 - 双击打开主界面")
 
         self._toggle_action = QAction("关闭护眼", self)
         self._toggle_action.triggered.connect(self.toggle_requested.emit)
@@ -58,20 +58,37 @@ class TrayManager(QObject):
             preset_menu.addAction(action)
 
         menu.addSeparator()
-        menu.addAction("设置...", self.settings_requested.emit)
+        menu.addAction("打开主界面", self.main_window_requested.emit)
         menu.addSeparator()
         menu.addAction("退出程序", self.quit_requested.emit)
 
         self._tray.setContextMenu(menu)
-        # 左键单击仅显示状态提示，不提供退出入口；退出只能通过右键菜单
         self._tray.activated.connect(self._on_activated)
+
+        self._click_timer = QTimer(self)
+        self._click_timer.setSingleShot(True)
+        self._click_timer.setInterval(350)
+        self._click_timer.timeout.connect(self._reset_click_state)
+        self._click_count = 0
+
+    def _reset_click_state(self) -> None:
+        self._click_count = 0
+
+    def _open_main_window(self) -> None:
+        self._click_timer.stop()
+        self._click_count = 0
+        self.main_window_requested.emit()
 
     def _on_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
-            self.settings_requested.emit()
+            self._open_main_window()
         elif reason == QSystemTrayIcon.ActivationReason.Trigger:
-            status = "已开启" if self._config.enabled else "已关闭"
-            self.notify("护眼卫士", f"护眼滤镜{status}，右键托盘图标可设置或退出")
+            # Windows 托盘有时不触发 DoubleClick，用两次单击模拟双击
+            self._click_count += 1
+            if self._click_count >= 2:
+                self._open_main_window()
+            else:
+                self._click_timer.start()
 
     def show(self) -> None:
         if not QSystemTrayIcon.isSystemTrayAvailable():
@@ -82,9 +99,16 @@ class TrayManager(QObject):
         self._config = config
         status = "已开启" if config.enabled else "已关闭"
         self._toggle_action.setText(f"{'关闭' if config.enabled else '开启'}护眼")
-        self._tray.setToolTip(f"护眼卫士 - {status}")
+        self._tray.setToolTip(f"护眼卫士 - {status} | 双击打开主界面")
 
     def notify(self, title: str, message: str, duration_ms: int = 5000) -> None:
         self._tray.showMessage(
             title, message, QSystemTrayIcon.MessageIcon.Information, duration_ms
+        )
+
+    def notify_minimized(self) -> None:
+        self.notify(
+            "护眼卫士",
+            "已最小化到系统托盘，双击图标可再次打开主界面",
+            3000,
         )

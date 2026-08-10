@@ -25,7 +25,9 @@ if IS_WINDOWS:
     SWP_SHOWWINDOW = 0x0040
 
     MUTEX_NAME = "Global\\EyeCareGuardian_Mutex_v1"
+    MAIN_WINDOW_TITLE = "护眼卫士"
     ERROR_ALREADY_EXISTS = 183
+    SW_RESTORE = 9
 
 
 def enable_dpi_awareness() -> None:
@@ -65,6 +67,18 @@ def ensure_single_instance() -> bool:
         if handle:
             _kernel32.CloseHandle(handle)
         return False
+    return True
+
+
+def activate_existing_instance() -> bool:
+    """若已有实例在运行，激活其主界面窗口"""
+    if not IS_WINDOWS:
+        return False
+    hwnd = _user32.FindWindowW(None, MAIN_WINDOW_TITLE)
+    if not hwnd:
+        return False
+    _user32.ShowWindow(hwnd, SW_RESTORE)
+    _user32.SetForegroundWindow(hwnd)
     return True
 
 
