@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - cursor/eye-care-app-6f9e
+      - eye-care
     paths:
       - 'eye-care/**'
 
@@ -27,6 +27,11 @@ jobs:
       - name: Build EXE
         working-directory: eye-care
         run: pyinstaller --noconfirm --clean eye-care.spec
+
+      - name: Copy to windows-install folder
+        run: |
+          mkdir -p eye-care/windows-install
+          cp eye-care/dist/护眼卫士.exe eye-care/windows-install/护眼卫士.exe
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

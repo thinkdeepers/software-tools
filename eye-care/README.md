@@ -30,14 +30,17 @@ chmod +x run.sh
 ./run.sh
 ```
 
-### Windows（EXE）
+## Windows（EXE）
 
-1. 下载 `护眼卫士.exe`（见下方构建说明或 GitHub Actions 产物）
-2. 双击运行，程序常驻系统托盘（右下角隐藏图标区域）
-3. **右键**托盘图标 → 设置 / 切换模式 / **退出程序**
-4. 左键单击仅显示状态提示，双击打开设置
+安装包位于 **`eye-care/windows-install/`** 文件夹：
 
-> 程序无任务栏图标，关闭设置窗口不会退出，只能通过托盘右键「退出程序」。
+```
+eye-care/windows-install/
+├── 护眼卫士.exe
+└── 使用说明.txt
+```
+
+下载后双击 `护眼卫士.exe` 即可运行。
 
 ### 自行打包 Windows EXE
 
