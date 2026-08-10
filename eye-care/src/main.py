@@ -63,11 +63,8 @@ class EyeCareApp:
         self._schedule_timer.start()
         self._refresh_timer.start()
         self._check_schedule()
-
-        self._tray.notify(
-            "护眼卫士",
-            "程序已常驻系统托盘，双击图标打开主界面",
-        )
+        # 首次启动直接显示主界面；关闭后自动隐藏至托盘
+        QTimer.singleShot(0, self._show_main_window)
 
     def _apply_config(self, config: AppConfig) -> None:
         self._config = config
