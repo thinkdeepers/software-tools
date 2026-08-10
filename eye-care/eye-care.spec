@@ -17,6 +17,8 @@ a = Analysis(
         "PyQt6.QtCore",
         "PyQt6.QtGui",
         "PyQt6.QtWidgets",
+        "gamma_filter",
+        "filter_manager",
     ],
     hookspath=[],
     hooksconfig={},

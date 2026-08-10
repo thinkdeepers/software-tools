@@ -18,8 +18,42 @@ if IS_WINDOWS:
     _kernel32 = ctypes.windll.kernel32
     _user32 = ctypes.windll.user32
 
+    HWND_TOPMOST = -1
+    SWP_NOMOVE = 0x0002
+    SWP_NOSIZE = 0x0001
+    SWP_NOACTIVATE = 0x0010
+    SWP_SHOWWINDOW = 0x0040
+
     MUTEX_NAME = "Global\\EyeCareGuardian_Mutex_v1"
     ERROR_ALREADY_EXISTS = 183
+
+
+def enable_dpi_awareness() -> None:
+    """启用每显示器 DPI 感知，确保多屏与遮罩回退时几何正确"""
+    if not IS_WINDOWS:
+        return
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        try:
+            _user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+
+def set_topmost(hwnd: int) -> None:
+    """将窗口置于最顶层，覆盖系统弹出层（遮罩回退模式）"""
+    if not IS_WINDOWS or not hwnd:
+        return
+    _user32.SetWindowPos(
+        hwnd,
+        HWND_TOPMOST,
+        0,
+        0,
+        0,
+        0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+    )
 
 
 def ensure_single_instance() -> bool:

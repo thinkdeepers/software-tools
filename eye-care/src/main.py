@@ -7,7 +7,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
 # 确保 src 目录在路径中
@@ -18,16 +18,16 @@ if str(SRC_DIR) not in sys.path:
 from autostart import set_autostart
 from break_timer import BreakOverlay, BreakTimer
 from config import AppConfig, load_config, save_config
-from overlay import OverlayManager
+from filter_manager import FilterManager
 from settings_window import SettingsWindow
 from tray import TrayManager, _make_tray_icon
-from win_utils import IS_WINDOWS, ensure_single_instance, hide_from_taskbar
+from win_utils import IS_WINDOWS, ensure_single_instance, enable_dpi_awareness, hide_from_taskbar
 
 
 class EyeCareApp:
     def __init__(self):
         self._config = load_config()
-        self._overlay = OverlayManager()
+        self._filter = FilterManager()
         self._break_timer = BreakTimer()
         self._break_overlay: BreakOverlay | None = None
         self._settings: SettingsWindow | None = None
@@ -35,6 +35,11 @@ class EyeCareApp:
         self._schedule_timer = QTimer()
         self._schedule_timer.setInterval(30_000)
         self._schedule_timer.timeout.connect(self._check_schedule)
+
+        # Windows：定期重应用伽马，防止被游戏/系统重置；遮罩回退时保持置顶
+        self._refresh_timer = QTimer()
+        self._refresh_timer.setInterval(2_000)
+        self._refresh_timer.timeout.connect(self._filter.refresh)
 
         self._tray = TrayManager(self._config)
         self._tray.toggle_requested.connect(self._toggle_filter)
@@ -48,9 +53,10 @@ class EyeCareApp:
         self._apply_config(self._config)
 
     def start(self) -> None:
-        self._overlay.rebuild()
+        self._filter.rebuild()
         self._tray.show()
         self._schedule_timer.start()
+        self._refresh_timer.start()
         self._check_schedule()
 
         if self._config.enabled:
@@ -65,7 +71,7 @@ class EyeCareApp:
         if config.schedule_enabled:
             effective_enabled = effective_enabled and self._in_schedule()
 
-        self._overlay.apply(effective_enabled, config.temperature, config.brightness)
+        self._filter.apply(effective_enabled, config.temperature, config.brightness)
         self._tray.update_state(config)
 
         self._break_timer.configure(
@@ -94,7 +100,7 @@ class EyeCareApp:
         if not self._config.schedule_enabled:
             return
         effective = self._config.enabled and self._in_schedule()
-        self._overlay.apply(
+        self._filter.apply(
             effective, self._config.temperature, self._config.brightness
         )
 
@@ -137,16 +143,22 @@ class EyeCareApp:
         self._tray.notify("护眼卫士", "休息结束，继续工作吧！")
 
     def _quit(self) -> None:
-        self._overlay.apply(False, 0, 100)
+        self._filter.shutdown()
         QApplication.quit()
 
     def on_screen_changed(self) -> None:
-        self._overlay.refresh_screens()
+        self._filter.refresh_screens()
 
 
 def main() -> int:
-    if IS_WINDOWS and not ensure_single_instance():
-        return 0
+    if IS_WINDOWS:
+        enable_dpi_awareness()
+        if not ensure_single_instance():
+            return 0
+
+    QApplication.setHighDpiScaleFactorRoundingPolicy(
+        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+    )
 
     app = QApplication(sys.argv)
     app.setApplicationName("护眼卫士")
@@ -160,6 +172,8 @@ def main() -> int:
     eye_care = EyeCareApp()
     eye_care.start()
 
+    app.screenAdded.connect(lambda _: eye_care.on_screen_changed())
+    app.screenRemoved.connect(lambda _: eye_care.on_screen_changed())
     app.primaryScreenChanged.connect(eye_care.on_screen_changed)
 
     return app.exec()
