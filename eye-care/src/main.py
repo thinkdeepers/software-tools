@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""护眼卫士 - 全局护眼软件（类似 CareUEyes）"""
+"""护眼卫士 - 全局护眼软件"""
 
 from __future__ import annotations
 

@@ -2,7 +2,7 @@
 
 ## 护眼卫士 (eye-care)
 
-Linux 全局护眼软件，参考 CareUEyes 实现滤蓝光、亮度调节、休息提醒。
+Linux 全局护眼软件，提供滤蓝光、亮度调节、休息提醒等功能。
 
 ```bash
 cd eye-care && ./run.sh
