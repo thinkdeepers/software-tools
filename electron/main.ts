@@ -114,11 +114,13 @@ function setEdgeDockState(enabled: boolean) {
   if (enabled) {
     alwaysOnTop = true
     mainWindow?.setAlwaysOnTop(true)
+    mainWindow?.setSkipTaskbar(true)
     mainWindow?.webContents.send('ui:always-on-top', true)
   }
   edgeDock.setEnabled(enabled)
   if (!enabled) {
     mainWindow?.setAlwaysOnTop(alwaysOnTop)
+    mainWindow?.setSkipTaskbar(false)
     mainWindow?.webContents.send('ui:always-on-top', alwaysOnTop)
   }
 }
