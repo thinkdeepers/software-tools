@@ -63,7 +63,7 @@ class SettingsWindow(QWidget):
     super().__init__(parent)
     self._config = config
     self.setWindowTitle("护眼卫士 - 设置")
-    self.setMinimumSize(480, 420)
+    self.setMinimumSize(480, 460)
     self.setStyleSheet("""
       QWidget { font-size: 13px; }
       QGroupBox { font-weight: bold; margin-top: 8px; padding-top: 16px; }
@@ -183,6 +183,17 @@ class SettingsWindow(QWidget):
     btn_row.addWidget(apply_btn)
     btn_row.addWidget(close_btn)
     root.addLayout(btn_row)
+
+    footer = QLabel(
+      "本软件由AI自动生成\n"
+      "致力于造福全人类，共建简单、和平、美好的生态————洞穴理论工作室 出品"
+    )
+    footer.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    footer.setWordWrap(True)
+    footer.setStyleSheet(
+      "color: #888; font-size: 11px; padding: 8px 12px 4px 12px; line-height: 1.4;"
+    )
+    root.addWidget(footer)
 
     for w in [self._break_enabled, self._work_spin, self._break_spin,
               self._break_fullscreen, self._schedule_enabled,
