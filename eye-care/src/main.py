@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from PyQt6.QtCore import QTimer
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
 # 确保 src 目录在路径中
 SRC_DIR = Path(__file__).resolve().parent
@@ -20,7 +20,8 @@ from break_timer import BreakOverlay, BreakTimer
 from config import AppConfig, load_config, save_config
 from overlay import OverlayManager
 from settings_window import SettingsWindow
-from tray import TrayManager
+from tray import TrayManager, _make_tray_icon
+from win_utils import IS_WINDOWS, ensure_single_instance, hide_from_taskbar
 
 
 class EyeCareApp:
@@ -53,7 +54,7 @@ class EyeCareApp:
         self._check_schedule()
 
         if self._config.enabled:
-            self._tray.notify("护眼卫士", "护眼滤镜已启动，双击托盘图标打开设置")
+            self._tray.notify("护眼卫士", "已启动并常驻托盘，右键图标可设置或退出")
 
     def _apply_config(self, config: AppConfig) -> None:
         self._config = config
@@ -115,6 +116,8 @@ class EyeCareApp:
         if self._settings is None:
             self._settings = SettingsWindow(self._config)
             self._settings.config_changed.connect(self._apply_config)
+            if IS_WINDOWS:
+                hide_from_taskbar(int(self._settings.winId()))
         self._settings.show()
         self._settings.raise_()
         self._settings.activateWindow()
@@ -142,9 +145,17 @@ class EyeCareApp:
 
 
 def main() -> int:
+    if IS_WINDOWS and not ensure_single_instance():
+        return 0
+
     app = QApplication(sys.argv)
     app.setApplicationName("护眼卫士")
     app.setQuitOnLastWindowClosed(False)
+    app.setWindowIcon(_make_tray_icon())
+
+    if not QSystemTrayIcon.isSystemTrayAvailable():
+        QMessageBox.critical(None, "护眼卫士", "系统托盘不可用，程序无法运行。")
+        return 1
 
     eye_care = EyeCareApp()
     eye_care.start()

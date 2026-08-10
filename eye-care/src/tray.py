@@ -52,22 +52,30 @@ class TrayManager(QObject):
         preset_menu = menu.addMenu("快速切换模式")
         for preset in config.presets:
             action = QAction(preset.name, self)
-            action.triggered.connect(lambda checked, n=preset.name: self.preset_requested.emit(n))
+            action.triggered.connect(
+                lambda checked, n=preset.name: self.preset_requested.emit(n)
+            )
             preset_menu.addAction(action)
 
         menu.addSeparator()
         menu.addAction("设置...", self.settings_requested.emit)
         menu.addSeparator()
-        menu.addAction("退出", self.quit_requested.emit)
+        menu.addAction("退出程序", self.quit_requested.emit)
 
         self._tray.setContextMenu(menu)
+        # 左键单击仅显示状态提示，不提供退出入口；退出只能通过右键菜单
         self._tray.activated.connect(self._on_activated)
 
     def _on_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
             self.settings_requested.emit()
+        elif reason == QSystemTrayIcon.ActivationReason.Trigger:
+            status = "已开启" if self._config.enabled else "已关闭"
+            self.notify("护眼卫士", f"护眼滤镜{status}，右键托盘图标可设置或退出")
 
     def show(self) -> None:
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            raise RuntimeError("系统托盘不可用，无法运行")
         self._tray.show()
 
     def update_state(self, config: AppConfig) -> None:
@@ -77,4 +85,6 @@ class TrayManager(QObject):
         self._tray.setToolTip(f"护眼卫士 - {status}")
 
     def notify(self, title: str, message: str, duration_ms: int = 5000) -> None:
-        self._tray.showMessage(title, message, QSystemTrayIcon.MessageIcon.Information, duration_ms)
+        self._tray.showMessage(
+            title, message, QSystemTrayIcon.MessageIcon.Information, duration_ms
+        )

@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-CONFIG_DIR = Path.home() / ".config" / "eye-care"
+if sys.platform == "win32":
+    CONFIG_DIR = Path(os.environ.get("APPDATA", Path.home())) / "EyeCare"
+else:
+    CONFIG_DIR = Path.home() / ".config" / "eye-care"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
 

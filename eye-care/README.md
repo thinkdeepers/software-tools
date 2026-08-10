@@ -17,11 +17,12 @@
 
 ## 系统要求
 
-- Linux（X11 或 Wayland）
-- Python 3.10+
-- PyQt6
+- **Linux**：X11 或 Wayland，Python 3.10+，PyQt6
+- **Windows 10/11**：无需安装 Python，直接运行 EXE
 
 ## 快速开始
+
+### Linux
 
 ```bash
 cd eye-care
@@ -29,7 +30,27 @@ chmod +x run.sh
 ./run.sh
 ```
 
-首次运行会自动安装 Python 依赖。启动后会在系统托盘显示图标，双击打开设置面板。
+### Windows（EXE）
+
+1. 下载 `护眼卫士.exe`（见下方构建说明或 GitHub Actions 产物）
+2. 双击运行，程序常驻系统托盘（右下角隐藏图标区域）
+3. **右键**托盘图标 → 设置 / 切换模式 / **退出程序**
+4. 左键单击仅显示状态提示，双击打开设置
+
+> 程序无任务栏图标，关闭设置窗口不会退出，只能通过托盘右键「退出程序」。
+
+### 自行打包 Windows EXE
+
+在 Windows 电脑上：
+
+```bat
+cd eye-care
+build-windows.bat
+```
+
+输出：`dist\护眼卫士.exe`
+
+或通过 GitHub Actions 自动构建：仓库 → Actions → Build Windows EXE → Run workflow
 
 ### 安装到系统（可选）
 

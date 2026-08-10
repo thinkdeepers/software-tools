@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import sys
+
 from PyQt6.QtCore import Qt, QRect
 from PyQt6.QtGui import QColor, QPainter
 from PyQt6.QtWidgets import QApplication, QWidget
+
+from win_utils import IS_WINDOWS, set_click_through
 
 
 def temperature_to_warm_color(temperature: int) -> QColor:
@@ -60,6 +64,8 @@ class OverlayWindow(QWidget):
         if enabled:
             self.show()
             self.raise_()
+            if IS_WINDOWS:
+                set_click_through(int(self.winId()))
         else:
             self.hide()
 

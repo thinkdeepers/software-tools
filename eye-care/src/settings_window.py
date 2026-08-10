@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QCloseEvent
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -234,3 +235,8 @@ class SettingsWindow(QWidget):
 
   def update_config(self, config: AppConfig) -> None:
     self._config = config
+
+  def closeEvent(self, event: QCloseEvent) -> None:
+    """关闭设置窗口时仅隐藏，不退出程序"""
+    event.ignore()
+    self.hide()
