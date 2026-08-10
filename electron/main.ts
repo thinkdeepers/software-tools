@@ -62,18 +62,49 @@ const THEME_BG: Record<ThemeId, string> = {
 
 const isDev = !app.isPackaged
 
+// Windows 任务栏使用正确的应用身份与图标（与快捷方式/安装包一致）
+if (process.platform === 'win32') {
+  app.setAppUserModelId('com.todothings.app')
+}
+
 function createTrayIcon(): NativeImage {
+  // 托盘与任务栏统一使用应用图标
   const candidates = [
+    path.join(__dirname, '../build/icon.png'),
+    path.join(process.resourcesPath, 'build/icon.png'),
+    path.join(__dirname, '../build/icon.ico'),
+    path.join(process.resourcesPath, 'build/icon.ico'),
     path.join(__dirname, '../build/tray.png'),
     path.join(process.resourcesPath, 'build/tray.png'),
-    path.join(__dirname, '../build/icon.png'),
   ]
   for (const file of candidates) {
     if (fs.existsSync(file)) {
-      return nativeImage.createFromPath(file)
+      const img = nativeImage.createFromPath(file)
+      if (!img.isEmpty()) {
+        return img.resize({ width: 16, height: 16 })
+      }
     }
   }
   return nativeImage.createEmpty()
+}
+
+function resolveAppIconPath(): string | undefined {
+  const candidates = [
+    path.join(__dirname, '../build/icon.ico'),
+    path.join(process.resourcesPath, 'build/icon.ico'),
+    path.join(__dirname, '../build/icon.png'),
+    path.join(process.resourcesPath, 'build/icon.png'),
+  ]
+  for (const file of candidates) {
+    if (fs.existsSync(file)) return file
+  }
+  return undefined
+}
+
+function getAppIconImage(): NativeImage {
+  const iconPath = resolveAppIconPath()
+  if (!iconPath) return nativeImage.createEmpty()
+  return nativeImage.createFromPath(iconPath)
 }
 
 function getPreloadPath() {
@@ -128,6 +159,9 @@ function setEdgeDockState(enabled: boolean) {
 function createWindow() {
   Menu.setApplicationMenu(null)
 
+  const appIconPath = resolveAppIconPath()
+  const appIcon = getAppIconImage()
+
   mainWindow = new BrowserWindow({
     width: 560,
     height: 520,
@@ -137,6 +171,7 @@ function createWindow() {
     frame: false,
     backgroundColor: THEME_BG[theme],
     title: 'TodoThings',
+    icon: appIconPath,
     alwaysOnTop,
     webPreferences: {
       preload: getPreloadPath(),
@@ -145,6 +180,10 @@ function createWindow() {
       sandbox: false,
     },
   })
+
+  if (!appIcon.isEmpty()) {
+    mainWindow.setIcon(appIcon)
+  }
 
   applyChromeTheme(theme)
   edgeDock.attach(mainWindow)
