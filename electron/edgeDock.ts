@@ -1,13 +1,20 @@
-import { screen, type BrowserWindow, type Rectangle } from 'electron'
+import {
+  BrowserWindow,
+  screen,
+  type Rectangle,
+} from 'electron'
 
 export type DockEdge = 'left' | 'right' | 'top' | 'bottom'
 
-const DOCK_VISIBLE_PX = 8
+/** 边缘只显示一条白线；感应区域略放大便于鼠标移入 */
+const DOCK_LINE_PX = 3
+const HOVER_SLACK_PX = 8
 const COLLAPSE_DELAY_MS = 900
 const HOVER_POLL_MS = 80
-const HOVER_SLACK_PX = 4
+const COLLAPSE_AFTER_MOVE_MS = 1200
 const MIN_WIDTH = 280
 const MIN_HEIGHT = 240
+const STRIP_COLOR = '#ffffff'
 
 function pointInRect(x: number, y: number, rect: Rectangle, slack = 0): boolean {
   return (
@@ -42,20 +49,20 @@ function clampExpandedBounds(bounds: Rectangle, workArea: Rectangle): Rectangle 
   return { x, y, width, height }
 }
 
-function collapsedBounds(edge: DockEdge, expanded: Rectangle, workArea: Rectangle): Rectangle {
+function stripBounds(edge: DockEdge, expanded: Rectangle, workArea: Rectangle): Rectangle {
   switch (edge) {
     case 'left':
       return {
         x: workArea.x,
         y: expanded.y,
-        width: DOCK_VISIBLE_PX,
+        width: DOCK_LINE_PX,
         height: expanded.height,
       }
     case 'right':
       return {
-        x: workArea.x + workArea.width - DOCK_VISIBLE_PX,
+        x: workArea.x + workArea.width - DOCK_LINE_PX,
         y: expanded.y,
-        width: DOCK_VISIBLE_PX,
+        width: DOCK_LINE_PX,
         height: expanded.height,
       }
     case 'top':
@@ -63,16 +70,39 @@ function collapsedBounds(edge: DockEdge, expanded: Rectangle, workArea: Rectangl
         x: expanded.x,
         y: workArea.y,
         width: expanded.width,
-        height: DOCK_VISIBLE_PX,
+        height: DOCK_LINE_PX,
       }
     case 'bottom':
       return {
         x: expanded.x,
-        y: workArea.y + workArea.height - DOCK_VISIBLE_PX,
+        y: workArea.y + workArea.height - DOCK_LINE_PX,
         width: expanded.width,
-        height: DOCK_VISIBLE_PX,
+        height: DOCK_LINE_PX,
       }
   }
+}
+
+function snapExpandedToEdge(
+  base: Rectangle,
+  edge: DockEdge,
+  workArea: Rectangle,
+): Rectangle {
+  let next = clampExpandedBounds(base, workArea)
+  switch (edge) {
+    case 'left':
+      next = { ...next, x: workArea.x }
+      break
+    case 'right':
+      next = { ...next, x: workArea.x + workArea.width - next.width }
+      break
+    case 'top':
+      next = { ...next, y: workArea.y }
+      break
+    case 'bottom':
+      next = { ...next, y: workArea.y + workArea.height - next.height }
+      break
+  }
+  return next
 }
 
 export type EdgeDockChangePayload = {
@@ -83,6 +113,7 @@ export type EdgeDockChangePayload = {
 
 export class EdgeDockManager {
   private win: BrowserWindow | null = null
+  private strip: BrowserWindow | null = null
   private enabled = false
   private collapsed = false
   private edge: DockEdge | null = null
@@ -143,6 +174,7 @@ export class EdgeDockManager {
     }
     this.clearCollapseTimer()
     this.stopPolling()
+    this.destroyStrip()
     this.win = null
   }
 
@@ -167,6 +199,7 @@ export class EdgeDockManager {
       this.clearCollapseTimer()
       this.stopPolling()
       if (this.collapsed) this.expandImmediate()
+      this.destroyStrip()
       this.collapsed = false
       this.edge = null
       this.savedBounds = null
@@ -194,6 +227,23 @@ export class EdgeDockManager {
     if (this.collapsed) this.expandImmediate()
   }
 
+  /**
+   * Force collapse to a pure white edge line.
+   * Used when closing the window while edge-dock is enabled.
+   */
+  collapseNow() {
+    if (!this.enabled) return
+    this.clearCollapseTimer()
+    const win = this.win
+    if (!win || win.isDestroyed()) return
+    if (win.isMaximized()) win.unmaximize()
+    if (win.isMinimized()) win.restore()
+    if (!this.collapsed) {
+      this.savedBounds = win.getBounds()
+    }
+    this.collapseImmediate()
+  }
+
   private emit() {
     this.onChange(this.getState())
   }
@@ -214,6 +264,64 @@ export class EdgeDockManager {
     if (this.pollTimer) {
       clearInterval(this.pollTimer)
       this.pollTimer = null
+    }
+  }
+
+  private ensureStrip(): BrowserWindow {
+    if (this.strip && !this.strip.isDestroyed()) return this.strip
+
+    this.strip = new BrowserWindow({
+      width: DOCK_LINE_PX,
+      height: 120,
+      frame: false,
+      transparent: false,
+      backgroundColor: STRIP_COLOR,
+      alwaysOnTop: true,
+      skipTaskbar: true,
+      resizable: false,
+      movable: false,
+      minimizable: false,
+      maximizable: false,
+      closable: false,
+      focusable: false,
+      hasShadow: false,
+      thickFrame: false,
+      show: false,
+      webPreferences: {
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+      },
+    })
+
+    this.strip.setMenu(null)
+    this.strip.setAlwaysOnTop(true, 'screen-saver')
+    void this.strip.loadURL(
+      `data:text/html,${encodeURIComponent(
+        '<!doctype html><html><head><meta charset="utf-8"></head>' +
+          `<body style="margin:0;background:${STRIP_COLOR};overflow:hidden"></body></html>`,
+      )}`,
+    )
+
+    this.strip.on('closed', () => {
+      this.strip = null
+    })
+
+    return this.strip
+  }
+
+  private destroyStrip() {
+    const strip = this.strip
+    this.strip = null
+    if (strip && !strip.isDestroyed()) {
+      strip.destroy()
+    }
+  }
+
+  private hideStrip() {
+    const strip = this.strip
+    if (strip && !strip.isDestroyed() && strip.isVisible()) {
+      strip.hide()
     }
   }
 
@@ -248,7 +356,7 @@ export class EdgeDockManager {
     if (!win || win.isDestroyed() || this.collapsed) return
     if (win.isMaximized()) win.unmaximize()
 
-    const bounds = win.getBounds()
+    const bounds = this.savedBounds ?? win.getBounds()
     const display = screen.getDisplayMatching(bounds)
     const workArea = display.workArea
     const edge = detectDockEdge(bounds, workArea)
@@ -257,8 +365,15 @@ export class EdgeDockManager {
     this.savedBounds = expanded
     this.edge = edge
     this.animating = true
-    win.setMinimumSize(DOCK_VISIBLE_PX, DOCK_VISIBLE_PX)
-    win.setBounds(collapsedBounds(edge, expanded, workArea), false)
+
+    const strip = this.ensureStrip()
+    strip.setBounds(stripBounds(edge, expanded, workArea), false)
+    strip.setAlwaysOnTop(true, 'screen-saver')
+    strip.showInactive()
+
+    // Hide the full UI so the edge only shows the white line, not cropped chrome/tasks.
+    if (win.isVisible()) win.hide()
+
     this.collapsed = true
     this.animating = false
     this.emit()
@@ -268,38 +383,19 @@ export class EdgeDockManager {
     const win = this.win
     if (!win || win.isDestroyed() || !this.collapsed) return
 
-    const fallback = win.getBounds()
-    const display = screen.getDisplayMatching(this.savedBounds ?? fallback)
+    const fallback = this.savedBounds ?? { x: 100, y: 100, width: 560, height: 520 }
+    const display = screen.getDisplayMatching(fallback)
     const workArea = display.workArea
-    const edge = this.edge ?? detectDockEdge(this.savedBounds ?? fallback, workArea)
-    const base = this.savedBounds ?? {
-      x: fallback.x,
-      y: fallback.y,
-      width: Math.max(fallback.width, MIN_WIDTH),
-      height: Math.max(fallback.height, MIN_HEIGHT),
-    }
-
-    // Keep docked flush to the edge when expanding.
-    let next = clampExpandedBounds(base, workArea)
-    switch (edge) {
-      case 'left':
-        next = { ...next, x: workArea.x }
-        break
-      case 'right':
-        next = { ...next, x: workArea.x + workArea.width - next.width }
-        break
-      case 'top':
-        next = { ...next, y: workArea.y }
-        break
-      case 'bottom':
-        next = { ...next, y: workArea.y + workArea.height - next.height }
-        break
-    }
+    const edge = this.edge ?? detectDockEdge(fallback, workArea)
+    const next = snapExpandedToEdge(fallback, edge, workArea)
 
     this.animating = true
+    this.hideStrip()
     win.setMinimumSize(MIN_WIDTH, MIN_HEIGHT)
     win.setBounds(next, false)
+    win.setAlwaysOnTop(true)
     if (!win.isVisible()) win.show()
+    win.focus()
     this.savedBounds = next
     this.collapsed = false
     this.animating = false
@@ -310,18 +406,21 @@ export class EdgeDockManager {
     if (!this.enabled || this.dragging || this.animating) return
     const win = this.win
     if (!win || win.isDestroyed()) return
-    if (win.isMaximized() || win.isMinimized() || !win.isVisible()) return
 
     const cursor = screen.getCursorScreenPoint()
-    const bounds = win.getBounds()
 
     if (this.collapsed) {
-      if (pointInRect(cursor.x, cursor.y, bounds, HOVER_SLACK_PX)) {
+      const strip = this.strip
+      if (!strip || strip.isDestroyed()) return
+      if (pointInRect(cursor.x, cursor.y, strip.getBounds(), HOVER_SLACK_PX)) {
         this.expandImmediate()
       }
       return
     }
 
+    if (win.isMaximized() || win.isMinimized() || !win.isVisible()) return
+
+    const bounds = win.getBounds()
     if (pointInRect(cursor.x, cursor.y, bounds, HOVER_SLACK_PX)) {
       this.clearCollapseTimer()
       return
@@ -365,7 +464,7 @@ export class EdgeDockManager {
   }
 
   private readonly handleBlur = () => {
-    if (!this.enabled) return
+    if (!this.enabled || this.collapsed) return
     this.scheduleCollapse(400)
   }
 
@@ -384,5 +483,3 @@ export class EdgeDockManager {
     this.scheduleCollapse()
   }
 }
-
-const COLLAPSE_AFTER_MOVE_MS = 1200

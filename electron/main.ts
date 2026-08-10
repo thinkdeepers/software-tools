@@ -154,8 +154,12 @@ function createWindow() {
   mainWindow.on('close', (event) => {
     if (!isQuitting) {
       event.preventDefault()
-      edgeDock.ensureExpanded()
-      mainWindow?.hide()
+      if (edgeDock.isEnabled()) {
+        // 开启侧边停靠时：关闭主界面 → 缩到边缘白线，应用继续留在托盘
+        edgeDock.collapseNow()
+      } else {
+        mainWindow?.hide()
+      }
     }
   })
 
