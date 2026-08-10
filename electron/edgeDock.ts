@@ -48,6 +48,19 @@ function detectDockEdge(bounds: Rectangle, workArea: Rectangle): DockEdge {
   const distRight = Math.abs(workArea.x + workArea.width - (bounds.x + bounds.width))
   const distTop = Math.abs(bounds.y - workArea.y)
   const distBottom = Math.abs(workArea.y + workArea.height - (bounds.y + bounds.height))
+
+  // 优先认作“已贴边”的方向，便于主动拖到底部/左侧停靠
+  const SNAP = 96
+  const touching: { edge: DockEdge; dist: number }[] = []
+  if (distLeft <= SNAP) touching.push({ edge: 'left', dist: distLeft })
+  if (distRight <= SNAP) touching.push({ edge: 'right', dist: distRight })
+  if (distTop <= SNAP) touching.push({ edge: 'top', dist: distTop })
+  if (distBottom <= SNAP) touching.push({ edge: 'bottom', dist: distBottom })
+  if (touching.length > 0) {
+    touching.sort((a, b) => a.dist - b.dist)
+    return touching[0]!.edge
+  }
+
   const min = Math.min(distLeft, distRight, distTop, distBottom)
   if (min === distLeft) return 'left'
   if (min === distRight) return 'right'
@@ -405,28 +418,59 @@ export class EdgeDockManager {
   }
 
   private placeStrip(edge: DockEdge, expanded: Rectangle, workArea: Rectangle) {
+    // 横/竖切换时销毁重建，避免系统最小尺寸把窄条粘成宽条
+    this.destroyStrip()
     const strip = this.ensureStrip()
     const desired = stripWindowBounds(edge, expanded, workArea)
 
     strip.setMinimumSize(1, 1)
     strip.setBounds(desired, false)
-    // 再次强制尺寸，降低系统最小尺寸改写后的偏移风险
     strip.setSize(desired.width, desired.height)
 
     let actual = strip.getBounds()
     // 若系统仍放大了窗口，重新夹紧到当前屏内，避免右/底边溢到邻屏
-    actual = clampStripIntoWorkArea(actual, workArea)
     if (edge === 'right') {
-      actual.x = workArea.x + workArea.width - actual.width
+      actual = {
+        ...actual,
+        x: workArea.x + workArea.width - actual.width,
+        y: desired.y,
+        height: desired.height,
+      }
     } else if (edge === 'left') {
-      actual.x = workArea.x
+      actual = {
+        ...actual,
+        x: workArea.x,
+        y: desired.y,
+        width: Math.min(actual.width, STRIP_HIT_PX),
+        height: desired.height,
+      }
     } else if (edge === 'top') {
-      actual.y = workArea.y
+      actual = {
+        ...actual,
+        x: desired.x,
+        y: workArea.y,
+        width: desired.width,
+        height: Math.min(actual.height, STRIP_HIT_PX),
+      }
     } else {
-      actual.y = workArea.y + workArea.height - actual.height
+      actual = {
+        ...actual,
+        x: desired.x,
+        y: workArea.y + workArea.height - actual.height,
+        width: desired.width,
+        height: Math.min(actual.height, STRIP_HIT_PX),
+      }
     }
     actual = clampStripIntoWorkArea(actual, workArea)
+    // 再次贴边，保证整窗仍在本屏
+    if (edge === 'right') actual.x = workArea.x + workArea.width - actual.width
+    if (edge === 'left') actual.x = workArea.x
+    if (edge === 'top') actual.y = workArea.y
+    if (edge === 'bottom') actual.y = workArea.y + workArea.height - actual.height
+    actual = clampStripIntoWorkArea(actual, workArea)
+
     strip.setBounds(actual, false)
+    strip.setSize(actual.width, actual.height)
 
     const shape = stripShape(edge, actual)
     try {
