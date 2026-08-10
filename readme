@@ -1,1 +1,11 @@
 软件合集
+
+## 护眼卫士 (eye-care)
+
+Linux 全局护眼软件，参考 CareUEyes 实现滤蓝光、亮度调节、休息提醒。
+
+```bash
+cd eye-care && ./run.sh
+```
+
+详见 [eye-care/README.md](eye-care/README.md)
