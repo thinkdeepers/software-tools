@@ -25,17 +25,16 @@
 ### Linux
 
 ```bash
-cd eye-care
 chmod +x run.sh
 ./run.sh
 ```
 
 ## Windows（EXE）
 
-安装包位于 **`eye-care/release/`** 文件夹：
+安装包位于 **`release/`** 文件夹：
 
 ```
-eye-care/release/
+release/
 └── 护眼卫士.exe
 ```
 
@@ -46,7 +45,6 @@ eye-care/release/
 在 Windows 电脑上：
 
 ```bat
-cd eye-care
 build-windows.bat
 ```
 
@@ -88,11 +86,13 @@ chmod +x install.sh
 ## 项目结构
 
 ```
-eye-care/
+.
 ├── run.sh              # 启动脚本
 ├── install.sh          # 安装脚本
 ├── requirements.txt    # Python 依赖
 ├── eye-care.desktop    # 桌面快捷方式
+├── release/            # Windows 发布包
+│   └── 护眼卫士.exe
 └── src/
     ├── main.py         # 主程序入口
     ├── overlay.py      # 全局护眼遮罩
