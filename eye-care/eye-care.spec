@@ -8,6 +8,8 @@ block_cipher = None
 root = Path(SPECPATH)
 src = root / "src"
 icon_file = root / "assets" / "icon.ico"
+if not icon_file.exists():
+    raise FileNotFoundError(f"缺少应用图标: {icon_file}，请先运行 python scripts/generate_icon.py")
 
 a = Analysis(
     [str(src / "main.py")],
@@ -44,7 +46,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,
@@ -53,6 +55,6 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=str(icon_file) if icon_file.exists() else None,
+    icon=str(icon_file),
     uac_admin=False,
 )

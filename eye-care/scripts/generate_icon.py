@@ -3,11 +3,11 @@
 
 from __future__ import annotations
 
+import os
+import struct
 import sys
 from pathlib import Path
 
-# 无显示器环境下使用 offscreen 平台
-import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -19,19 +19,27 @@ from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from icon import ICON_ICO_PATH, render_app_pixmap  # noqa: E402
 
+ICO_SIZES = [16, 24, 32, 48, 64, 128, 256]
+
+
+def _qimage_to_pil(img: QImage):
+    from PIL import Image
+
+    img = img.convertToFormat(QImage.Format.Format_RGBA8888)
+    ptr = img.bits()
+    ptr.setsize(img.sizeInBytes())
+    return Image.frombytes("RGBA", (img.width(), img.height()), bytes(ptr))
+
+
+def _count_ico_images(path: Path) -> int:
+    with open(path, "rb") as f:
+        return struct.unpack("<HHH", f.read(6))[2]
+
 
 def main() -> None:
-    app = QApplication(sys.argv)
+    QApplication(sys.argv)
     ICON_ICO_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-    sizes = [16, 24, 32, 48, 64, 128, 256]
-    images = []
-    for size in sizes:
-        pix = render_app_pixmap(size)
-        img = pix.toImage().convertToFormat(QImage.Format.Format_RGBA8888)
-        images.append(img)
-
-    # 使用 Pillow 合并为多尺寸 ICO
     try:
         from PIL import Image
     except ImportError:
@@ -39,24 +47,16 @@ def main() -> None:
         subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "pillow"])
         from PIL import Image
 
-    pil_images = []
-    for img, size in zip(images, sizes):
-        ptr = img.bits()
-        ptr.setsize(img.sizeInBytes())
-        data = bytes(ptr)
-        pil_images.append(Image.frombytes("RGBA", (size, size), data))
+    # 从 256px 主图生成包含全部标准尺寸的 ICO
+    master = _qimage_to_pil(render_app_pixmap(256).toImage()).convert("RGBA")
+    master.save(ICON_ICO_PATH, format="ICO", sizes=[(s, s) for s in ICO_SIZES])
 
-    pil_images[0].save(
-        ICON_ICO_PATH,
-        format="ICO",
-        sizes=[(s, s) for s in sizes],
-        append_images=pil_images[1:],
-    )
+    count = _count_ico_images(ICON_ICO_PATH)
+    if count < len(ICO_SIZES):
+        raise RuntimeError(f"ICO 生成失败，仅包含 {count} 个尺寸")
 
-    png_path = ICON_ICO_PATH.parent / "icon.png"
-    pil_images[-1].save(png_path, format="PNG")
-    print(f"Generated: {ICON_ICO_PATH}")
-    print(f"Generated: {png_path}")
+    master.save(ICON_ICO_PATH.parent / "icon.png", format="PNG")
+    print(f"Generated: {ICON_ICO_PATH} ({count} sizes)")
 
 
 if __name__ == "__main__":
