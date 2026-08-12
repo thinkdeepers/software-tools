@@ -103,6 +103,56 @@ def test_extract_member_nested_path(tmp_path):
     assert out.read_text(encoding="utf-8") == "nested"
 
 
+def test_nested_archive_inside_zip(tmp_path):
+    """外层 zip 内含压缩包时，可单独解出并用 is_archive 识别。"""
+    inner_file = tmp_path / "hello.txt"
+    inner_file.write_text("hello-inner", encoding="utf-8")
+    inner_zip = core.compress_to_zip([inner_file], output=tmp_path / "inner.zip")
+    outer_zip = core.compress_to_zip([inner_zip], output=tmp_path / "outer.zip")
+
+    extracted = core.extract_member(
+        outer_zip, "inner.zip", output_dir=tmp_path / "nest"
+    )
+    assert extracted.is_file()
+    assert core.is_archive(extracted)
+    members = core.list_archive(extracted)
+    assert any(m.name.endswith("hello.txt") for m in members)
+    assert (
+        core.extract_member(
+            extracted, "hello.txt", output_dir=tmp_path / "nest2"
+        ).read_text(encoding="utf-8")
+        == "hello-inner"
+    )
+
+
+def test_cleanup_temp_dirs(tmp_path):
+    from jianya.gui import cleanup_temp_dirs
+
+    d1 = tmp_path / "jianya-open-a"
+    d2 = tmp_path / "jianya-open-b"
+    d1.mkdir()
+    d2.mkdir()
+    (d1 / "f.txt").write_text("x", encoding="utf-8")
+    dirs = [d1, d2]
+    cleanup_temp_dirs(dirs)
+    assert not d1.exists() and not d2.exists()
+    assert dirs == []
+
+
+def test_member_flag_marks_nested_archive():
+    from jianya.gui import _member_flag
+
+    nested = core.ArchiveMember(name="pack/inner.zip", size=10, compressed_size=8)
+    assert "压缩包" in _member_flag(nested)
+    enc = core.ArchiveMember(
+        name="secret.zip", size=10, compressed_size=8, encrypted=True
+    )
+    assert "加密" in _member_flag(enc)
+    assert "压缩包" in _member_flag(enc)
+    plain = core.ArchiveMember(name="a.txt", size=1, compressed_size=1)
+    assert _member_flag(plain) == ""
+
+
 def test_output_extension_forced_to_zip(tmp_path):
     f = tmp_path / "x.txt"
     f.write_text("x", encoding="utf-8")

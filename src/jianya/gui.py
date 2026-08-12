@@ -2,20 +2,36 @@
 
 from __future__ import annotations
 
+import atexit
 import os
 import queue
+import shutil
 import subprocess
 import sys
 import tempfile
 import threading
 from pathlib import Path
-from typing import List, Optional, Sequence
+from typing import List, Optional, Sequence, Set
 
 from . import __version__
 from . import core
 from .dialogs import ProgressDialog, show_alert
 from .dpi import configure_tk_scaling, enable_high_dpi
 from .resources import resource_path
+
+
+def _rmtree_quiet(path: Path) -> None:
+    try:
+        shutil.rmtree(path, ignore_errors=True)
+    except Exception:
+        pass
+
+
+def cleanup_temp_dirs(dirs: List[Path]) -> None:
+    """删除并清空临时目录列表（关闭预览 / 退出时调用）。"""
+    for path in list(dirs):
+        _rmtree_quiet(path)
+    dirs.clear()
 
 
 def launch(open_archives: Optional[Sequence[str]] = None) -> int:
@@ -56,11 +72,16 @@ class _App:
         self._preview_windows: List["_PreviewWindow"] = []
         self._main_built = False
         self._progress_dialog: Optional[ProgressDialog] = None
+        # 双击打开产生的临时目录；关闭预览 / 退出时清理
+        self._temp_dirs: List[Path] = []
+        self._temp_dir_set: Set[Path] = set()
 
         root = tk.Tk()
         self.root = root
         root.title(f"简压 {__version__} — 简洁 · 免费 · 无广告")
         root.withdraw()
+        root.protocol("WM_DELETE_WINDOW", self._on_app_exit)
+        atexit.register(self._cleanup_all_temps)
 
         self._scale = configure_tk_scaling(root)
         if self._scale < 1.0:
@@ -219,19 +240,26 @@ class _App:
     # 密码 / 预览
     # ------------------------------------------------------------------
     def ask_password(
-        self, title: str = "输入密码", prompt: str = "请输入密码："
+        self,
+        title: str = "输入密码",
+        prompt: str = "请输入密码：",
+        parent=None,
     ) -> Optional[str]:
-        parent = self.root
-        return self.simpledialog.askstring(title, prompt, show="*", parent=parent)
+        dlg_parent = parent or self.root
+        return self.simpledialog.askstring(
+            title, prompt, show="*", parent=dlg_parent
+        )
 
-    def open_preview(self, archive: str, password: Optional[str] = None) -> None:
+    def open_preview(
+        self, archive: str, password: Optional[str] = None
+    ) -> Optional["_PreviewWindow"]:
         archive_path = Path(archive)
         if not archive_path.is_file():
             self._error(f"文件不存在：{archive_path}")
-            return
+            return None
         if not core.is_archive(archive_path):
             self._error(f"不支持的压缩格式：{archive_path.name}")
-            return
+            return None
 
         pwd = password
         try:
@@ -241,26 +269,53 @@ class _App:
                 "加密压缩包", f"{archive_path.name} 已加密，请输入密码："
             )
             if pwd is None:
-                return
+                return None
             try:
                 members = core.list_archive(archive_path, password=pwd)
             except core.PasswordRequiredError:
                 self._error("密码不正确，或压缩包已加密。")
-                return
+                return None
             except core.ArchiveError as exc:
                 self._error(str(exc))
-                return
+                return None
         except core.ArchiveError as exc:
             self._error(str(exc))
-            return
+            return None
 
         if pwd is None and any(m.encrypted for m in members):
             pwd = self.ask_password(
-                "加密压缩包", f"{archive_path.name} 含加密文件，解压前请输入密码："
+                "加密压缩包", f"{archive_path.name} 含加密文件，请输入密码："
             )
 
         preview = _PreviewWindow(self, archive_path, members, pwd)
         self._preview_windows.append(preview)
+        return preview
+
+    def register_temp_dir(self, path: Path, owner: Optional["_PreviewWindow"] = None) -> None:
+        """登记临时目录，供关闭预览 / 退出时清理。"""
+        resolved = path
+        if resolved in self._temp_dir_set:
+            if owner is not None:
+                owner.own_temp_dir(resolved, register_app=False)
+            return
+        self._temp_dir_set.add(resolved)
+        self._temp_dirs.append(resolved)
+        if owner is not None:
+            owner.own_temp_dir(resolved, register_app=False)
+
+    def unregister_temp_dir(self, path: Path) -> None:
+        if path in self._temp_dir_set:
+            self._temp_dir_set.discard(path)
+        try:
+            self._temp_dirs.remove(path)
+        except ValueError:
+            pass
+
+    def _cleanup_all_temps(self) -> None:
+        cleanup_temp_dirs(self._temp_dirs)
+        self._temp_dir_set.clear()
+        for preview in list(self._preview_windows):
+            preview._temp_dirs.clear()
 
     # ------------------------------------------------------------------
     # 事件处理
@@ -426,30 +481,97 @@ class _App:
         archive: Path,
         member_name: str,
         password: Optional[str] = None,
+        *,
+        encrypted: bool = False,
+        owner_preview: Optional["_PreviewWindow"] = None,
     ) -> None:
-        """双击预览列表中的文件：解压到临时目录并用系统默认程序打开。"""
+        """双击预览列表中的文件：解压到临时目录后打开。
+
+        - 普通文件：用系统默认程序打开
+        - 嵌套压缩包：再开一层预览窗口
+        - 加密文件：先提示输入密码
+        """
         if self._busy:
             return
-        try:
-            tmp = Path(tempfile.mkdtemp(prefix="jianya-open-"))
-            out = core.extract_member(
-                archive, member_name, output_dir=tmp, password=password
+
+        parent_win = owner_preview.win if owner_preview is not None else None
+        pwd = (password or "").strip() or None
+        if encrypted and not pwd:
+            pwd = self.ask_password(
+                "加密文件",
+                f"{Path(member_name).name} 已加密，请输入密码：",
+                parent=parent_win,
             )
-            self._reveal_path(out)
-        except core.PasswordRequiredError as exc:
-            pwd = self.ask_password("加密压缩包", f"{exc}\n请输入密码：")
             if pwd is None:
                 return
+            if owner_preview is not None and not owner_preview.password:
+                owner_preview.password = pwd
+
+        tmp = Path(tempfile.mkdtemp(prefix="jianya-open-"))
+        try:
+            out = self._extract_member_with_password_prompt(
+                archive,
+                member_name,
+                tmp,
+                pwd,
+                parent_win=parent_win,
+                owner_preview=owner_preview,
+            )
+            if out is None:
+                _rmtree_quiet(tmp)
+                return
+        except Exception as exc:
+            _rmtree_quiet(tmp)
+            self._error(str(exc))
+            return
+
+        # 嵌套压缩包：再开一层预览，临时目录归属新预览窗
+        if out.is_file() and core.is_archive(out):
+            nested = self.open_preview(str(out))
+            if nested is None:
+                _rmtree_quiet(tmp)
+                return
+            self.register_temp_dir(tmp, owner=nested)
+            if owner_preview is not None:
+                owner_preview.status.configure(
+                    text=f"已打开嵌套压缩包：{out.name}"
+                )
+            return
+
+        # 普通文件：临时目录归属当前预览（或应用级）
+        self.register_temp_dir(tmp, owner=owner_preview)
+        self._reveal_path(out)
+        if owner_preview is not None:
+            owner_preview.status.configure(text=f"已打开：{Path(member_name).name}")
+
+    def _extract_member_with_password_prompt(
+        self,
+        archive: Path,
+        member_name: str,
+        tmp: Path,
+        password: Optional[str],
+        *,
+        parent_win=None,
+        owner_preview: Optional["_PreviewWindow"] = None,
+    ) -> Optional[Path]:
+        pwd = password
+        for _attempt in range(3):
             try:
-                tmp = Path(tempfile.mkdtemp(prefix="jianya-open-"))
-                out = core.extract_member(
+                return core.extract_member(
                     archive, member_name, output_dir=tmp, password=pwd
                 )
-                self._reveal_path(out)
-            except Exception as err:
-                self._error(str(err))
-        except Exception as exc:
-            self._error(str(exc))
+            except core.PasswordRequiredError as exc:
+                pwd = self.ask_password(
+                    "加密压缩包",
+                    f"{Path(member_name).name}\n{exc}\n请输入密码：",
+                    parent=parent_win,
+                )
+                if pwd is None:
+                    return None
+                if owner_preview is not None:
+                    owner_preview.password = pwd
+        self._error("密码不正确，无法打开该文件。")
+        return None
 
     def _reveal_path(self, path: Path) -> None:
         """用系统默认程序打开文件。"""
@@ -560,15 +682,25 @@ class _App:
             self.root.protocol("WM_DELETE_WINDOW", self._on_root_close)
         self.root.mainloop()
 
+    def _on_app_exit(self) -> None:
+        self._cleanup_all_temps()
+        try:
+            self.root.destroy()
+        except Exception:
+            pass
+
     def _on_root_close(self) -> None:
         if self._preview_windows:
             return
+        self._cleanup_all_temps()
         self.root.destroy()
 
     def _preview_closed(self, preview: "_PreviewWindow") -> None:
+        preview.cleanup_temps()
         if preview in self._preview_windows:
             self._preview_windows.remove(preview)
         if not self._main_built and not self._preview_windows:
+            self._cleanup_all_temps()
             self.root.quit()
             self.root.destroy()
 
@@ -587,6 +719,7 @@ class _PreviewWindow:
         self.archive = archive
         self.members = members
         self.password = password
+        self._temp_dirs: List[Path] = []
         tk, ttk = app.tk, app.ttk
         scale = app._scale
 
@@ -638,7 +771,7 @@ class _PreviewWindow:
         tree.column("#0", width=int(280 * scale), stretch=True)
         tree.column("size", width=int(90 * scale), anchor="e")
         tree.column("compressed", width=int(90 * scale), anchor="e")
-        tree.column("flag", width=int(60 * scale), anchor="center")
+        tree.column("flag", width=int(80 * scale), anchor="center")
 
         scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=tree.yview)
         tree.configure(yscrollcommand=scroll.set)
@@ -646,7 +779,7 @@ class _PreviewWindow:
         scroll.pack(side="right", fill="y")
 
         for member in members:
-            flag = "加密" if member.encrypted else ("目录" if member.is_dir else "")
+            flag = _member_flag(member)
             tree.insert(
                 "",
                 "end",
@@ -668,7 +801,7 @@ class _PreviewWindow:
         self.progress.pack(fill="x")
         self.status = ttk.Label(
             prog,
-            text="双击文件可打开 · 选择下方按钮开始解压",
+            text="双击文件可打开 · 双击压缩包可再预览 · 选择下方按钮解压",
             style="Status.TLabel",
             font=("Microsoft YaHei UI", 9),
         )
@@ -687,6 +820,18 @@ class _PreviewWindow:
         win.protocol("WM_DELETE_WINDOW", self._close)
         win.focus_force()
 
+    def own_temp_dir(self, path: Path, register_app: bool = True) -> None:
+        if path not in self._temp_dirs:
+            self._temp_dirs.append(path)
+        if register_app:
+            self.app.register_temp_dir(path, owner=None)
+
+    def cleanup_temps(self) -> None:
+        for path in list(self._temp_dirs):
+            _rmtree_quiet(path)
+            self.app.unregister_temp_dir(path)
+        self._temp_dirs.clear()
+
     def set_busy(self, busy: bool) -> None:
         state = "disabled" if busy else "normal"
         try:
@@ -703,6 +848,7 @@ class _PreviewWindow:
             pass
 
     def _close(self) -> None:
+        self.cleanup_temps()
         self.win.destroy()
         self.app._preview_closed(self)
 
@@ -721,8 +867,18 @@ class _PreviewWindow:
         if member.is_dir:
             self.status.configure(text="请双击文件以打开（目录请先解压）")
             return
-        self.status.configure(text=f"正在打开 {member.name}…")
-        self.app.open_archive_member(self.archive, member.name, self.password)
+        base = Path(member.name).name
+        if core.is_archive(base):
+            self.status.configure(text=f"正在打开嵌套压缩包 {base}…")
+        else:
+            self.status.configure(text=f"正在打开 {base}…")
+        self.app.open_archive_member(
+            self.archive,
+            member.name,
+            self.password,
+            encrypted=member.encrypted,
+            owner_preview=self,
+        )
 
     def _extract_here(self) -> None:
         # 解压到压缩包所在的当前文件夹
@@ -743,6 +899,17 @@ class _PreviewWindow:
             password=self.password,
             ask_dir=True,
         )
+
+
+def _member_flag(member: core.ArchiveMember) -> str:
+    if member.is_dir:
+        return "目录"
+    parts: List[str] = []
+    if member.encrypted:
+        parts.append("加密")
+    if core.is_archive(Path(member.name).name):
+        parts.append("压缩包")
+    return " · ".join(parts)
 
 
 def _format_size(size: int) -> str:
