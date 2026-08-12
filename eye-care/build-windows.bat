@@ -34,6 +34,7 @@ if errorlevel 1 (
 
 echo [3/3] 完成!
 echo.
-echo 输出文件: dist\护眼卫士.exe
+echo 输出文件: dist\eyecare.exe
+echo 发布目录: release\eyecare.exe
 echo.
 pause

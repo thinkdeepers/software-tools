@@ -166,6 +166,7 @@ def main() -> int:
 
     app = QApplication(sys.argv)
     app.setApplicationName("护眼卫士")
+    app.setApplicationDisplayName("护眼卫士")
     app.setQuitOnLastWindowClosed(False)
     app.setWindowIcon(get_app_icon())
     app.setStyleSheet(build_stylesheet())

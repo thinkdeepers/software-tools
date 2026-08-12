@@ -2,8 +2,8 @@
 #
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(2, 0, 0, 0),
-    prodvers=(2, 0, 0, 0),
+    filevers=(2, 1, 0, 0),
+    prodvers=(2, 1, 0, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -15,20 +15,20 @@ VSVersionInfo(
     StringFileInfo(
       [
         StringTable(
-          "040904B0",
+          "080404B0",
           [
             StringStruct("CompanyName", "Cave Theory Studio"),
-            StringStruct("FileDescription", "EyeCare Guardian"),
-            StringStruct("FileVersion", "2.0.0"),
-            StringStruct("InternalName", "EyeCare"),
+            StringStruct("FileDescription", "\u62a4\u773c\u536b\u58eb"),
+            StringStruct("FileVersion", "2.1.0"),
+            StringStruct("InternalName", "eyecare"),
             StringStruct("LegalCopyright", "Copyright (C) 2026 Cave Theory Studio"),
-            StringStruct("OriginalFilename", "EyeCare.exe"),
-            StringStruct("ProductName", "EyeCare Guardian"),
-            StringStruct("ProductVersion", "2.0.0"),
+            StringStruct("OriginalFilename", "eyecare.exe"),
+            StringStruct("ProductName", "\u62a4\u773c\u536b\u58eb"),
+            StringStruct("ProductVersion", "2.1.0"),
           ]
         )
       ]
     ),
-    VarFileInfo([VarStruct("Translation", [1033, 1200])])
+    VarFileInfo([VarStruct("Translation", [2052, 1200])])
   ]
 )

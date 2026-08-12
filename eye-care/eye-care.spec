@@ -46,7 +46,7 @@ a = Analysis(
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
-# 使用 ASCII 文件名打包，Windows 资源管理器对图标嵌入兼容性更好
+# 使用 ASCII 文件名打包，应用显示名仍为「护眼卫士」
 exe = EXE(
     pyz,
     a.scripts,
@@ -54,7 +54,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name="EyeCare",
+    name="eyecare",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
