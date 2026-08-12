@@ -243,7 +243,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 if not args.quiet:
                     _notify(
                         "简压",
-                        "已设为默认打开程序：压缩包将显示简压图标，双击即可预览并解压。",
+                        "已设为默认打开程序：压缩包将显示简压图标；"
+                        "双击可直接解压；右击压缩包可选择打开。",
                     )
             else:
                 context_menu.uninstall()

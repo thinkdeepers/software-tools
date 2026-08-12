@@ -74,9 +74,11 @@ class ProgressDialog:
         win = self.win
         win.title(title)
         win.configure(bg="#ffffff")
+        # 进度页与完成页共用同一尺寸，切换时不改大小，避免放大黑边
         self._w = int(480 * self.scale)
-        self._h = int(200 * self.scale)
+        self._h = int(280 * self.scale)
         win.minsize(self._w, self._h)
+        win.maxsize(self._w, self._h)
         win.resizable(False, False)
 
         try:
@@ -285,32 +287,39 @@ class ProgressDialog:
             elif "压缩" in title or "已压缩" in message:
                 badge = "已压缩"
 
+        win = self.win
+        tk = self.tk
+
+        # 切换前固定尺寸并暂停绘制，减少闪烁与黑边
+        try:
+            geo = win.geometry()
+            pos = ""
+            if "+" in geo:
+                pos = "+" + geo.split("+", 1)[1]
+            win.geometry(f"{self._w}x{self._h}{pos}")
+            win.minsize(self._w, self._h)
+            win.maxsize(self._w, self._h)
+        except Exception:
+            pass
+
+        try:
+            win.update_idletasks()
+        except Exception:
+            pass
+
         for child in list(self._body.winfo_children()):
             try:
                 child.destroy()
             except Exception:
                 pass
 
-        win = self.win
-        tk = self.tk
         win.title(title)
-        new_h = max(self._h, int(260 * self.scale))
-        try:
-            geo = win.geometry()
-            # 保持当前位置，只加高
-            if "+" in geo:
-                _size, rest = geo.split("+", 1)
-                win.geometry(f"{self._w}x{new_h}+{rest}")
-            else:
-                win.geometry(f"{self._w}x{new_h}")
-        except Exception:
-            win.geometry(f"{self._w}x{new_h}")
 
         try:
             tk.Label(
                 self._body,
                 text=badge,
-                font=pick_ui_font(win, 18, True),
+                font=pick_ui_font(win, 16, True),
                 fg=accent,
                 bg="#ffffff",
                 anchor="w",
@@ -323,18 +332,20 @@ class ProgressDialog:
                 fg="#111827",
                 bg="#ffffff",
                 anchor="w",
-            ).pack(fill="x", pady=(12, 0))
+            ).pack(fill="x", pady=(8, 0))
 
-            tk.Label(
+            # 路径可能较长：限制换行宽度，避免撑破固定窗口
+            msg_label = tk.Label(
                 self._body,
                 text=message,
                 font=pick_ui_font(win, 10, False),
                 fg="#374151",
                 bg="#ffffff",
-                anchor="w",
+                anchor="nw",
                 justify="left",
                 wraplength=int(400 * self.scale),
-            ).pack(fill="x", pady=(8, 20))
+            )
+            msg_label.pack(fill="both", expand=True, pady=(6, 12))
 
             btn = tk.Button(
                 self._body,
@@ -346,7 +357,7 @@ class ProgressDialog:
                 activebackground=accent,
                 relief="flat",
                 padx=int(22 * self.scale),
-                pady=int(8 * self.scale),
+                pady=int(6 * self.scale),
                 cursor="hand2",
                 command=self.close,
             )
@@ -356,15 +367,11 @@ class ProgressDialog:
 
             try:
                 win.attributes("-topmost", True)
-                win.deiconify()
-                win.lift()
-                win.focus_force()
                 btn.focus_set()
             except Exception:
                 pass
             try:
                 win.update_idletasks()
-                win.update()
             except Exception:
                 pass
         except Exception:
