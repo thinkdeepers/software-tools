@@ -37,7 +37,7 @@ def _count_ico_images(path: Path) -> int:
 
 
 def main() -> None:
-    QApplication(sys.argv)
+    app = QApplication(sys.argv)
     ICON_ICO_PATH.parent.mkdir(parents=True, exist_ok=True)
 
     try:

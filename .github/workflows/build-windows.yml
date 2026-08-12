@@ -22,10 +22,16 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -r eye-care/requirements.txt pyinstaller pillow
+          pip install -r eye-care/requirements.txt pyinstaller
 
-      - name: Generate app icon
-        run: python eye-care/scripts/generate_icon.py
+      - name: Verify app icon
+        shell: pwsh
+        run: |
+          if (-not (Test-Path eye-care/assets/icon.ico)) { throw "icon.ico missing" }
+          $bytes = [IO.File]::ReadAllBytes("eye-care/assets/icon.ico")
+          $count = [BitConverter]::ToUInt16($bytes, 4)
+          if ($count -lt 7) { throw "icon.ico must contain at least 7 sizes, got $count" }
+          Write-Host "icon.ico OK ($count sizes)"
 
       - name: Build EXE
         working-directory: eye-care
