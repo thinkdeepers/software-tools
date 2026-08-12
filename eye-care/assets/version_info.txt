@@ -22,7 +22,7 @@ VSVersionInfo(
             StringStruct("FileVersion", "2.1.0"),
             StringStruct("InternalName", "eyecare"),
             StringStruct("LegalCopyright", "Copyright (C) 2026 Cave Theory Studio"),
-            StringStruct("OriginalFilename", "eyecare.exe"),
+            StringStruct("OriginalFilename", "\u62a4\u773c\u536b\u58eb.exe"),
             StringStruct("ProductName", "\u62a4\u773c\u536b\u58eb"),
             StringStruct("ProductVersion", "2.1.0"),
           ]

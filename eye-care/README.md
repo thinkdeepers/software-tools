@@ -36,10 +36,10 @@ chmod +x run.sh
 
 ```
 eye-care/release/
-└── eyecare.exe
+└── 护眼卫士.exe
 ```
 
-下载后双击 `eyecare.exe` 即可运行（应用显示名称为「护眼卫士」）。
+下载后双击 `护眼卫士.exe` 即可运行。
 
 ### 自行打包 Windows EXE
 
@@ -50,7 +50,7 @@ cd eye-care
 build-windows.bat
 ```
 
-输出：`dist\eyecare.exe`
+输出：`dist\eyecare.exe`（发布时复制为 `release\护眼卫士.exe`）
 
 或通过 GitHub Actions 自动构建：仓库 → Actions → Build Windows EXE → Run workflow
 
