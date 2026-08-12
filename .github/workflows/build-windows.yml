@@ -6,7 +6,12 @@ on:
     branches:
       - eye-care
     paths:
-      - 'eye-care/**'
+      - 'src/**'
+      - 'assets/**'
+      - 'eye-care.spec'
+      - 'requirements.txt'
+      - 'scripts/**'
+      - '.github/workflows/build-windows.yml'
 
 jobs:
   build-windows:
@@ -22,23 +27,22 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -r eye-care/requirements.txt pyinstaller pillow
+          pip install -r requirements.txt pyinstaller pillow
 
       - name: Verify app icon
         shell: pwsh
         run: |
-          if (-not (Test-Path eye-care/assets/icon.ico)) { throw "icon.ico missing" }
-          $bytes = [IO.File]::ReadAllBytes("eye-care/assets/icon.ico")
+          if (-not (Test-Path assets/icon.ico)) { throw "icon.ico missing" }
+          $bytes = [IO.File]::ReadAllBytes("assets/icon.ico")
           $count = [BitConverter]::ToUInt16($bytes, 4)
           if ($count -lt 7) { throw "icon.ico must contain at least 7 sizes, got $count" }
           $offset = [BitConverter]::ToUInt32($bytes, 18)
           $biSize = [BitConverter]::ToUInt32($bytes, [int]$offset)
           if ($biSize -ne 40) { throw "icon.ico must use BMP/DIB frames, biSize=$biSize" }
           Write-Host "icon.ico OK ($count BMP sizes)"
-          if (-not (Test-Path eye-care/assets/checkbox_on.png)) { throw "checkbox icons missing" }
+          if (-not (Test-Path assets/checkbox_on.png)) { throw "checkbox icons missing" }
 
       - name: Build EXE
-        working-directory: eye-care
         shell: pwsh
         run: |
           pyinstaller --noconfirm --clean eye-care.spec
@@ -49,19 +53,19 @@ jobs:
       - name: Copy to release folder
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path eye-care/release | Out-Null
-          Get-ChildItem eye-care/release -Force | Remove-Item -Recurse -Force
-          Copy-Item -Force eye-care/dist/eyecare.exe "eye-care/release/护眼卫士.exe"
+          New-Item -ItemType Directory -Force -Path release | Out-Null
+          Get-ChildItem release -Force | Remove-Item -Recurse -Force
+          Copy-Item -Force dist/eyecare.exe "release/护眼卫士.exe"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: eyecare-Windows
-          path: eye-care/release/护眼卫士.exe
+          path: release/护眼卫士.exe
           retention-days: 30
 
       - name: Create Release asset (on tag)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: eye-care/release/护眼卫士.exe
+          files: release/护眼卫士.exe
