@@ -281,86 +281,95 @@ class ProgressDialog:
             elif "压缩" in title or "已压缩" in message:
                 badge = "已压缩"
 
-        for child in self._body.winfo_children():
+        for child in list(self._body.winfo_children()):
             try:
                 child.destroy()
             except Exception:
                 pass
 
         win = self.win
+        tk = self.tk
         win.title(title)
-        new_h = max(self._h, int(240 * self.scale))
+        new_h = max(self._h, int(260 * self.scale))
         try:
             geo = win.geometry()
             # 保持当前位置，只加高
             if "+" in geo:
-                size, rest = geo.split("+", 1)
+                _size, rest = geo.split("+", 1)
                 win.geometry(f"{self._w}x{new_h}+{rest}")
             else:
                 win.geometry(f"{self._w}x{new_h}")
         except Exception:
             win.geometry(f"{self._w}x{new_h}")
 
-        tk.Label(
-            self._body,
-            text=badge,
-            font=pick_ui_font(win, 18, True),
-            fg=accent,
-            bg="#ffffff",
-            anchor="w",
-        ).pack(fill="x")
-
-        tk.Label(
-            self._body,
-            text=title,
-            font=pick_ui_font(win, 11, True),
-            fg="#111827",
-            bg="#ffffff",
-            anchor="w",
-        ).pack(fill="x", pady=(12, 0))
-
-        tk.Label(
-            self._body,
-            text=message,
-            font=pick_ui_font(win, 10, False),
-            fg="#374151",
-            bg="#ffffff",
-            anchor="w",
-            justify="left",
-            wraplength=int(400 * self.scale),
-        ).pack(fill="x", pady=(8, 20))
-
-        btn = tk.Button(
-            self._body,
-            text="确定",
-            font=pick_ui_font(win, 11, True),
-            fg="#ffffff",
-            bg=accent,
-            activeforeground="#ffffff",
-            activebackground=accent,
-            relief="flat",
-            padx=int(22 * self.scale),
-            pady=int(8 * self.scale),
-            cursor="hand2",
-            command=self.close,
-        )
-        btn.pack(anchor="e")
-        win.bind("<Return>", lambda _e: self.close())
-        win.bind("<Escape>", lambda _e: self.close())
-
         try:
-            win.attributes("-topmost", True)
-            win.deiconify()
-            win.lift()
-            win.focus_force()
-            btn.focus_set()
+            tk.Label(
+                self._body,
+                text=badge,
+                font=pick_ui_font(win, 18, True),
+                fg=accent,
+                bg="#ffffff",
+                anchor="w",
+            ).pack(fill="x")
+
+            tk.Label(
+                self._body,
+                text=title,
+                font=pick_ui_font(win, 11, True),
+                fg="#111827",
+                bg="#ffffff",
+                anchor="w",
+            ).pack(fill="x", pady=(12, 0))
+
+            tk.Label(
+                self._body,
+                text=message,
+                font=pick_ui_font(win, 10, False),
+                fg="#374151",
+                bg="#ffffff",
+                anchor="w",
+                justify="left",
+                wraplength=int(400 * self.scale),
+            ).pack(fill="x", pady=(8, 20))
+
+            btn = tk.Button(
+                self._body,
+                text="确定",
+                font=pick_ui_font(win, 11, True),
+                fg="#ffffff",
+                bg=accent,
+                activeforeground="#ffffff",
+                activebackground=accent,
+                relief="flat",
+                padx=int(22 * self.scale),
+                pady=int(8 * self.scale),
+                cursor="hand2",
+                command=self.close,
+            )
+            btn.pack(anchor="e")
+            win.bind("<Return>", lambda _e: self.close())
+            win.bind("<Escape>", lambda _e: self.close())
+
+            try:
+                win.attributes("-topmost", True)
+                win.deiconify()
+                win.lift()
+                win.focus_force()
+                btn.focus_set()
+            except Exception:
+                pass
+            try:
+                win.update_idletasks()
+                win.update()
+            except Exception:
+                pass
         except Exception:
-            pass
-        try:
-            win.update_idletasks()
-            win.update()
-        except Exception:
-            pass
+            # 结果页绘制失败时回退到系统/备用提示，避免留下空白白框
+            try:
+                self.close()
+            except Exception:
+                pass
+            show_alert(title, message, error=is_error)
 
     def close(self) -> None:
         if self._closed:
