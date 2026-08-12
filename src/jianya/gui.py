@@ -188,6 +188,7 @@ class _App:
         buttons.columnconfigure(0, weight=1)
         buttons.columnconfigure(1, weight=1)
 
+        # 主按钮圆角略收敛，减少视觉失真
         btn_h = int(56 * scale)
         self.btn_compress = ui.make_rounded_button(
             buttons,
@@ -197,7 +198,7 @@ class _App:
             variant="primary",
             font_size=16,
             height=btn_h,
-            radius=int(12 * scale),
+            radius=int(8 * scale),
             min_width=int(160 * scale),
             expand_width=True,
         )
@@ -211,7 +212,7 @@ class _App:
             variant="primary",
             font_size=16,
             height=btn_h,
-            radius=int(12 * scale),
+            radius=int(8 * scale),
             min_width=int(160 * scale),
             expand_width=True,
         )
@@ -243,13 +244,20 @@ class _App:
 
         foot_note = tk.Frame(bottom, bg=ui.BG)
         foot_note.pack(side="bottom", fill="x", pady=(int(14 * scale), 0))
-        tk.Label(
-            foot_note,
-            text="免费 · 无广告 · 无弹窗 · 无捆绑",
-            font=pick_ui_font(root, 8, False),
-            fg="#9ca3af",
-            bg=ui.BG,
-        ).pack()
+        for text in (
+            "本软件由 Opus 4.8 模型自动生成",
+            "致力于造福全人类，共建简单、和平、美好的生态",
+            "—— 洞穴理论工作室 出品",
+        ):
+            tk.Label(
+                foot_note,
+                text=text,
+                font=pick_ui_font(root, 8, False),
+                fg="#9ca3af",
+                bg=ui.BG,
+                anchor="center",
+                justify="center",
+            ).pack(fill="x")
 
         assoc = tk.Frame(bottom, bg=ui.BG)
         assoc.pack(side="bottom", fill="x")
@@ -265,7 +273,7 @@ class _App:
             variant="outline",
             font_size=10,
             height=outline_h,
-            radius=int(10 * scale),
+            radius=int(8 * scale),
             min_width=int(140 * scale),
             expand_width=True,
         )
@@ -279,7 +287,7 @@ class _App:
             variant="outline",
             font_size=10,
             height=outline_h,
-            radius=int(10 * scale),
+            radius=int(8 * scale),
             min_width=int(140 * scale),
             expand_width=True,
         )

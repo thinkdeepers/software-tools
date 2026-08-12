@@ -1,7 +1,7 @@
 """DPI 感知的进度窗口与提示对话框。
 
 进度使用 Canvas 自绘（不依赖易在打包环境下失效的 ttk.Progressbar）。
-完成后在同一窗口内显示结果，避免再开第二个 Tk 导致文字发虚。
+完成后保留同一进度界面（进度条 100%），将按钮改为「确定」关闭，避免切页跳变。
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ class ProgressDialog:
 
     - Canvas 自绘进度条 + 不确定动画
     - 收到真实进度后切换为确定进度
-    - 完成后在同一窗口显示清晰结果，点「确定」再关闭
+    - 完成后保留进度界面到 100%，点「确定」关闭（不切结果页）
     """
 
     def __init__(
@@ -162,17 +162,16 @@ class ProgressDialog:
         bar_row.columnconfigure(0, weight=1)
 
         bar_h = max(12, int(14 * scale))
+        # 画布底色用白底，圆角轨道自绘，避免灰底露出直角
         self.bar_canvas = tk.Canvas(
             bar_row,
             height=bar_h,
-            bg=ui.TRACK,
+            bg=ui.BG,
             highlightthickness=0,
             bd=0,
         )
         self.bar_canvas.grid(row=0, column=0, sticky="ew")
-        self._bar_rect = self.bar_canvas.create_rectangle(
-            0, 0, 0, bar_h, fill=ui.PRIMARY, width=0
-        )
+        self._bar_rect = None
 
         self.pct_label = tk.Label(
             bar_row,
@@ -326,149 +325,68 @@ class ProgressDialog:
                         pass
                 elif kind == "done":
                     _, title, message, is_error = event
-                    self._finished = True
-                    self._set_determinate(100)
-                    self.status_label.configure(
-                        text=("操作失败" if is_error else "处理完成")
-                    )
                     self._result_title = title
                     self._result_message = message
                     self._result_error = is_error
+                    self._set_determinate(100)
                     try:
                         self.win.update_idletasks()
                         self.win.update()
                     except Exception:
                         pass
                     elapsed_ms = int((time.monotonic() - self._shown_at) * 1000)
-                    delay = max(220, _MIN_PROGRESS_MS - elapsed_ms)
-                    self.win.after(delay, self._show_result_inplace)
+                    delay = max(120, _MIN_PROGRESS_MS - elapsed_ms)
+                    self.win.after(delay, self._enter_done_state)
         except queue.Empty:
             pass
         if not self._closed and not self._showing_result:
             self.win.after(30, self._drain)
 
-    def _show_result_inplace(self) -> None:
-        """在同一窗口切换为结果页，避免第二个 Tk 发虚。"""
+    def _enter_done_state(self) -> None:
+        """完成：保留进度界面，进度条停在 100%，按钮改为「确定」。"""
         if self._closed or self._showing_result:
             return
-        self._showing_result = True
+        self._finished = True
+        self._showing_result = True  # 停止动画循环
+        self._set_determinate(100)
 
-        title = self._result_title or "简压"
-        message = self._result_message or ""
         is_error = self._result_error
-        accent = ui.DANGER if is_error else ui.PRIMARY
-        badge = "出错" if is_error else "已完成"
-        if not is_error:
-            if "解压" in title or "已解压" in message or "已解压" in title:
-                badge = "已解压"
-            elif "压缩" in title or "已压缩" in message:
-                badge = "已压缩"
+        message = (self._result_message or "").strip()
+        if is_error:
+            # 失败时在状态行给出简短提示，不切换布局
+            first = message.splitlines()[0] if message else "操作失败"
+            if len(first) > 42:
+                first = first[:41] + "…"
+            self.status_label.configure(text=first or "操作失败")
+            try:
+                self.status_label.configure(fg=ui.DANGER)
+            except Exception:
+                pass
+        else:
+            # 成功：保持简洁，不跳「已解压」结果页
+            self.status_label.configure(text="处理完成，可点击确定关闭")
+            try:
+                self.status_label.configure(fg=ui.TEXT)
+            except Exception:
+                pass
 
-        win = self.win
-        tk = self.tk
-
-        # 切换前固定尺寸并暂停绘制，减少闪烁与黑边
         try:
-            geo = win.geometry()
-            pos = ""
-            if "+" in geo:
-                pos = "+" + geo.split("+", 1)[1]
-            win.geometry(f"{self._w}x{self._h}{pos}")
-            win.minsize(self._w, self._h)
-            win.maxsize(self._w, self._h)
+            self._cancel_btn.set_text("确定")
+            self._cancel_btn.set_command(self.close)
         except Exception:
             pass
 
         try:
-            win.update_idletasks()
+            self.win.bind("<Return>", lambda _e: self.close())
+            self.win.bind("<Escape>", lambda _e: self.close())
+            self.win.attributes("-topmost", True)
+            self.win.update_idletasks()
         except Exception:
             pass
 
-        for child in list(self._body.winfo_children()):
-            try:
-                child.destroy()
-            except Exception:
-                pass
-
-        win.title(title)
-
-        try:
-            top = tk.Frame(self._body, bg=ui.BG)
-            top.pack(fill="x")
-
-            icon_size = int(48 * self.scale)
-            icon_widget, self._result_icon = ui.make_zip_icon(top, tk, size=icon_size)
-            icon_widget.pack(side="left", padx=(0, int(12 * self.scale)), anchor="n")
-
-            texts = tk.Frame(top, bg=ui.BG)
-            texts.pack(side="left", fill="both", expand=True)
-
-            tk.Label(
-                texts,
-                text=badge,
-                font=pick_ui_font(win, 16, True),
-                fg=accent,
-                bg=ui.BG,
-                anchor="w",
-            ).pack(fill="x")
-
-            tk.Label(
-                texts,
-                text=title,
-                font=pick_ui_font(win, 11, True),
-                fg=ui.TEXT,
-                bg=ui.BG,
-                anchor="w",
-            ).pack(fill="x", pady=(int(4 * self.scale), 0))
-
-            # 路径可能较长：限制换行宽度，避免撑破固定窗口
-            msg_label = tk.Label(
-                self._body,
-                text=message,
-                font=pick_ui_font(win, 10, False),
-                fg=ui.TEXT_SUB,
-                bg=ui.BG,
-                anchor="nw",
-                justify="left",
-                wraplength=int(400 * self.scale),
-            )
-            msg_label.pack(fill="both", expand=True, pady=(int(10 * self.scale), int(12 * self.scale)))
-
-            tk.Frame(self._body, bg=ui.BORDER, height=1).pack(fill="x")
-            footer = tk.Frame(self._body, bg=ui.BG)
-            footer.pack(fill="x", pady=(int(12 * self.scale), 0))
-
-            btn = ui.make_rounded_button(
-                footer,
-                tk,
-                "确定",
-                self.close,
-                variant="primary",
-                font_size=11,
-                height=int(36 * self.scale),
-                radius=int(8 * self.scale),
-                min_width=int(96 * self.scale),
-            )
-            btn.pack(side="right")
-            win.bind("<Return>", lambda _e: self.close())
-            win.bind("<Escape>", lambda _e: self.close())
-
-            try:
-                win.attributes("-topmost", True)
-                btn.focus_set()
-            except Exception:
-                pass
-            try:
-                win.update_idletasks()
-            except Exception:
-                pass
-        except Exception:
-            # 结果页绘制失败时回退到系统/备用提示，避免留下空白白框
-            try:
-                self.close()
-            except Exception:
-                pass
-            show_alert(title, message, error=is_error)
+    def _show_result_inplace(self) -> None:
+        """兼容旧调用：改为进入完成态，不再销毁重建界面。"""
+        self._enter_done_state()
 
     def close(self) -> None:
         if self._closed:

@@ -1,12 +1,13 @@
 """简压 UI 主题：与 README 截图一致的配色与控件。
 
-tkinter 原生按钮难以做出实心圆角，这里用 Canvas 自绘主按钮 / 描边按钮，
-以及圆角进度条，保证 Windows 打包后观感接近设计稿。
+tkinter 原生按钮难以做出实心圆角，这里用 Canvas 多边形逼近圆角，
+避免矩形+椭圆叠加造成的锯齿与接缝失真。
 """
 
 from __future__ import annotations
 
-from typing import Any, Callable, Optional, Tuple
+import math
+from typing import Any, Callable, List, Optional, Tuple
 
 from .dpi import pick_ui_font
 from .resources import resource_path
@@ -67,6 +68,31 @@ def load_app_photo(tk_mod: Any, master: Any, max_side: int = 72) -> Optional[Any
         return img
 
 
+def _rounded_rect_points(
+    x1: float, y1: float, x2: float, y2: float, radius: float, segments: int = 10
+) -> List[float]:
+    """生成圆角矩形多边形顶点（顺时针，扁平 [x,y,...]）。"""
+    if x2 <= x1 or y2 <= y1:
+        return [x1, y1, x2, y1, x2, y2, x1, y2]
+    r = max(0.0, min(float(radius), (x2 - x1) / 2.0, (y2 - y1) / 2.0))
+    if r < 0.5:
+        return [x1, y1, x2, y1, x2, y2, x1, y2]
+    segs = max(4, int(segments))
+    corners = (
+        (x2 - r, y1 + r, -90, 0),  # 右上
+        (x2 - r, y2 - r, 0, 90),  # 右下
+        (x1 + r, y2 - r, 90, 180),  # 左下
+        (x1 + r, y1 + r, 180, 270),  # 左上
+    )
+    pts: List[float] = []
+    for cx, cy, a0, a1 in corners:
+        for i in range(segs + 1):
+            ang = math.radians(a0 + (a1 - a0) * i / segs)
+            pts.append(cx + r * math.cos(ang))
+            pts.append(cy + r * math.sin(ang))
+    return pts
+
+
 def draw_rounded_rect(
     canvas: Any,
     x1: float,
@@ -78,43 +104,29 @@ def draw_rounded_rect(
     outline: str = "",
     width: int = 0,
 ) -> Tuple[Any, ...]:
-    """在 Canvas 上画圆角矩形，返回创建的 item id。"""
-    r = max(0, min(radius, (x2 - x1) / 2, (y2 - y1) / 2))
-    items = []
-    # 中心 + 上下条 + 左右条 + 四角扇形
-    items.append(canvas.create_rectangle(x1 + r, y1, x2 - r, y2, fill=fill, outline=""))
-    items.append(canvas.create_rectangle(x1, y1 + r, x2, y2 - r, fill=fill, outline=""))
-    items.append(canvas.create_oval(x1, y1, x1 + 2 * r, y1 + 2 * r, fill=fill, outline=""))
-    items.append(canvas.create_oval(x2 - 2 * r, y1, x2, y1 + 2 * r, fill=fill, outline=""))
-    items.append(canvas.create_oval(x1, y2 - 2 * r, x1 + 2 * r, y2, fill=fill, outline=""))
-    items.append(canvas.create_oval(x2 - 2 * r, y2 - 2 * r, x2, y2, fill=fill, outline=""))
-    if outline and width > 0:
-        # 简化描边：再画一层略大的空心圆角较难，改用多边形近似
-        items.append(
-            canvas.create_arc(
-                x1, y1, x1 + 2 * r, y1 + 2 * r, start=90, extent=90, style="arc", outline=outline, width=width
-            )
+    """用单一多边形绘制圆角矩形，避免叠加接缝失真。"""
+    pts = _rounded_rect_points(x1, y1, x2, y2, radius)
+    ow = max(0, int(width))
+    if outline and ow > 0:
+        item = canvas.create_polygon(
+            pts,
+            fill=fill,
+            outline=outline,
+            width=ow,
+            joinstyle="round",
+            smooth=False,
         )
-        items.append(
-            canvas.create_arc(
-                x2 - 2 * r, y1, x2, y1 + 2 * r, start=0, extent=90, style="arc", outline=outline, width=width
-            )
+    else:
+        # 无描边时 outline 与 fill 相同，可消除多边形边缘毛刺
+        item = canvas.create_polygon(
+            pts,
+            fill=fill,
+            outline=fill,
+            width=1,
+            joinstyle="round",
+            smooth=False,
         )
-        items.append(
-            canvas.create_arc(
-                x1, y2 - 2 * r, x1 + 2 * r, y2, start=180, extent=90, style="arc", outline=outline, width=width
-            )
-        )
-        items.append(
-            canvas.create_arc(
-                x2 - 2 * r, y2 - 2 * r, x2, y2, start=270, extent=90, style="arc", outline=outline, width=width
-            )
-        )
-        items.append(canvas.create_line(x1 + r, y1, x2 - r, y1, fill=outline, width=width))
-        items.append(canvas.create_line(x1 + r, y2, x2 - r, y2, fill=outline, width=width))
-        items.append(canvas.create_line(x1, y1 + r, x1, y2 - r, fill=outline, width=width))
-        items.append(canvas.create_line(x2, y1 + r, x2, y2 - r, fill=outline, width=width))
-    return tuple(items)
+    return (item,)
 
 
 def make_rounded_button(
@@ -128,7 +140,7 @@ def make_rounded_button(
     bold: bool = True,
     height: int = 44,
     pad_x: int = 22,
-    radius: int = 10,
+    radius: int = 8,
     min_width: int = 0,
     expand_width: bool = False,
 ) -> Any:
@@ -155,6 +167,8 @@ def make_rounded_button(
     probe.destroy()
     width = max(min_width, tw + pad_x * 2)
     h = max(32, int(height))
+    # 圆角不超过高度一半，避免过度弯曲产生视觉失真
+    radius = max(4, min(int(radius), h // 2 - 1))
 
     canvas = tk_mod.Canvas(
         parent,
@@ -166,7 +180,6 @@ def make_rounded_button(
         cursor="hand2",
     )
     if expand_width:
-        # 允许被 grid/pack 拉宽
         try:
             canvas.configure(width=1)
         except Exception:
@@ -189,18 +202,20 @@ def make_rounded_button(
     canvas._jy_expand = expand_width
     canvas._jy_items = ()
     canvas._jy_text_id = None
+    canvas._jy_paint_job = None
 
     def _paint(color: str) -> None:
         canvas.delete("all")
         w = max(int(canvas.winfo_width() or width), min_width or width, 40)
         hh = int(canvas.winfo_height() or h)
-        # 留 1px 给描边
-        x1, y1, x2, y2 = 1, 1, w - 1, hh - 1
+        inset = max(1.0, (canvas._jy_outline_w / 2.0) + 0.5)
+        x1, y1, x2, y2 = inset, inset, w - inset, hh - inset
         ow = canvas._jy_outline_w if canvas._jy_enabled else 1
         ol = canvas._jy_outline if canvas._jy_enabled else BORDER
         fc = color if canvas._jy_enabled else "#f3f4f6"
         tc = canvas._jy_fg if canvas._jy_enabled else "#9ca3af"
-        draw_rounded_rect(canvas, x1, y1, x2, y2, canvas._jy_radius, fc, ol, ow)
+        r = min(canvas._jy_radius, (x2 - x1) / 2, (y2 - y1) / 2)
+        draw_rounded_rect(canvas, x1, y1, x2, y2, r, fc, ol, ow)
         canvas._jy_text_id = canvas.create_text(
             w / 2,
             hh / 2,
@@ -208,6 +223,15 @@ def make_rounded_button(
             fill=tc,
             font=canvas._jy_font,
         )
+
+    def _schedule_paint(color: str) -> None:
+        job = canvas._jy_paint_job
+        if job is not None:
+            try:
+                canvas.after_cancel(job)
+            except Exception:
+                pass
+        canvas._jy_paint_job = canvas.after(1, lambda: _paint(color))
 
     def _on_enter(_e=None) -> None:
         if canvas._jy_enabled:
@@ -235,7 +259,6 @@ def make_rounded_button(
 
     def set_text(new_text: str) -> None:
         canvas._jy_text = new_text
-        # 必要时加宽
         probe2 = tk_mod.Label(parent, text=new_text, font=canvas._jy_font)
         probe2.update_idletasks()
         tw2 = int(probe2.winfo_reqwidth())
@@ -245,11 +268,15 @@ def make_rounded_button(
             canvas.configure(width=new_w)
         _paint(canvas._jy_fill if canvas._jy_enabled else "#f3f4f6")
 
+    def set_command(cmd: Optional[Callable[[], None]]) -> None:
+        canvas._jy_command = cmd
+
     def _on_configure(_e=None) -> None:
-        _paint(canvas._jy_fill if canvas._jy_enabled else "#f3f4f6")
+        _schedule_paint(canvas._jy_fill if canvas._jy_enabled else "#f3f4f6")
 
     canvas.configure_state = configure_state  # type: ignore[attr-defined]
     canvas.set_text = set_text  # type: ignore[attr-defined]
+    canvas.set_command = set_command  # type: ignore[attr-defined]
     canvas.bind("<Enter>", _on_enter)
     canvas.bind("<Leave>", _on_leave)
     canvas.bind("<ButtonPress-1>", _on_press)
@@ -306,15 +333,17 @@ class RoundedProgressBar:
         except Exception:
             return
         c.delete("all")
-        draw_rounded_rect(c, 0, 0, w, h, self.radius, TRACK)
+        r = min(self.radius, h / 2)
+        draw_rounded_rect(c, 0, 0, w, h, r, TRACK)
         fill_w = int(w * self._value / 100.0)
-        if fill_w > 0:
-            # 至少画到圆角直径，避免极窄时难看
-            fw = max(fill_w, min(w, self.radius * 2))
-            if self._value < 100 and fill_w < self.radius * 2:
-                fw = fill_w
-            if fw > 2:
-                draw_rounded_rect(c, 0, 0, fw, h, self.radius, PRIMARY)
+        if fill_w > 1:
+            if self._value >= 99.5:
+                fw = w
+                fr = r
+            else:
+                fw = max(fill_w, 2)
+                fr = min(r, fw / 2)
+            draw_rounded_rect(c, 0, 0, fw, h, fr, PRIMARY)
 
 
 def draw_zip_badge(canvas: Any, size: int = 56, color: str = PRIMARY) -> None:
@@ -322,18 +351,16 @@ def draw_zip_badge(canvas: Any, size: int = 56, color: str = PRIMARY) -> None:
     canvas.delete("all")
     s = size
     canvas.configure(width=s, height=s)
-    # 文件夹外框
     m = s * 0.12
     draw_rounded_rect(canvas, m, s * 0.22, s - m, s - m * 0.85, s * 0.1, color)
-    # 顶盖
     canvas.create_rectangle(m, s * 0.28, s * 0.42, s * 0.38, fill=color, outline="")
-    # 拉链
     zx = s * 0.48
     canvas.create_rectangle(zx, s * 0.32, zx + s * 0.08, s * 0.78, fill="#ffffff", outline="")
     for i in range(5):
         yy = s * 0.38 + i * s * 0.07
-        canvas.create_oval(zx - s * 0.03, yy, zx + s * 0.11, yy + s * 0.05, fill="#ffffff", outline="")
-    # ZIP 小标
+        canvas.create_oval(
+            zx - s * 0.03, yy, zx + s * 0.11, yy + s * 0.05, fill="#ffffff", outline=""
+        )
     canvas.create_text(
         s * 0.72,
         s * 0.62,
