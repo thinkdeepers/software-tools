@@ -16,8 +16,9 @@ from typing import List, Optional, Sequence, Set
 from . import __version__
 from . import core
 from .dialogs import ProgressDialog, show_alert
-from .dpi import configure_tk_scaling, enable_high_dpi
+from .dpi import configure_tk_scaling, enable_high_dpi, pick_ui_font
 from .resources import resource_path
+from . import theme as ui
 
 
 def _rmtree_quiet(path: Path) -> None:
@@ -79,16 +80,16 @@ class _App:
         root = tk.Tk()
         root.withdraw()  # 立刻隐藏，避免启动时左上角闪一下
         self.root = root
-        root.title(f"简压 {__version__} — 简洁 · 免费 · 无广告")
+        root.title(f"简压 {__version__}")
         root.protocol("WM_DELETE_WINDOW", self._on_app_exit)
         atexit.register(self._cleanup_all_temps)
 
         self._scale = configure_tk_scaling(root)
         if self._scale < 1.0:
             self._scale = 1.0
-        base_w, base_h = 480, 520
+        base_w, base_h = 520, 560
         self._win_w, self._win_h = int(base_w * self._scale), int(base_h * self._scale)
-        root.configure(bg="white")
+        ui.apply_window_chrome(root)
 
         self._set_window_icon()
         root.after(50, self._drain_events)
@@ -122,32 +123,36 @@ class _App:
         if self._main_built:
             return
         self._main_built = True
-        tk, ttk = self.tk, self.ttk
+        tk = self.tk
         scale = self._scale
+        root = self.root
 
-        WHITE = "#ffffff"
+        # ttk 仅用于预览列表；主界面改用 Canvas 圆角按钮，贴近 README 截图
         try:
-            style = ttk.Style()
+            style = self.ttk.Style()
             if "clam" in style.theme_names():
                 style.theme_use("clam")
-            style.configure("White.TFrame", background=WHITE)
-            style.configure("White.TLabel", background=WHITE)
-            style.configure("Title.TLabel", background=WHITE, foreground="#0f766e")
-            style.configure("Sub.TLabel", background=WHITE, foreground="#555555")
-            style.configure("Status.TLabel", background=WHITE, foreground="#555555")
-            style.configure(
-                "Big.TButton",
-                font=("Microsoft YaHei UI", 16, "bold"),
-                padding=int(18 * scale),
-            )
-            style.configure(
-                "Link.TButton", font=("Microsoft YaHei UI", 9), padding=int(6 * scale)
-            )
-            style.configure("Footer.TLabel", background=WHITE, foreground="#9aa0a6")
+            style.configure("White.TFrame", background=ui.BG)
             style.configure(
                 "Preview.Treeview",
-                font=("Microsoft YaHei UI", 9),
-                rowheight=int(26 * scale),
+                background=ui.BG,
+                fieldbackground=ui.BG,
+                foreground=ui.TEXT,
+                borderwidth=0,
+                font=pick_ui_font(root, 10, False),
+                rowheight=int(30 * scale),
+            )
+            style.configure(
+                "Preview.Treeview.Heading",
+                background="#f8fafc",
+                foreground=ui.TEXT_SUB,
+                relief="flat",
+                font=pick_ui_font(root, 9, True),
+            )
+            style.map(
+                "Preview.Treeview",
+                background=[("selected", ui.PRIMARY_SOFT)],
+                foreground=[("selected", ui.PRIMARY)],
             )
         except Exception:
             pass
@@ -155,86 +160,141 @@ class _App:
         self.root.geometry(f"{self._win_w}x{self._win_h}")
         self.root.minsize(self._win_w, self._win_h)
 
-        container = ttk.Frame(self.root, padding=int(24 * scale), style="White.TFrame")
+        pad = int(36 * scale)
+        container = tk.Frame(self.root, bg=ui.BG, padx=pad, pady=int(28 * scale))
         container.pack(fill="both", expand=True)
 
-        header = ttk.Frame(container, style="White.TFrame")
-        header.pack(side="top", fill="x")
-        ttk.Label(
+        # —— 品牌标题区 ——
+        header = tk.Frame(container, bg=ui.BG)
+        header.pack(side="top", fill="x", pady=(int(12 * scale), 0))
+        tk.Label(
             header,
             text="简压",
-            style="Title.TLabel",
-            font=("Microsoft YaHei UI", 22, "bold"),
-        ).pack(pady=(0, 4))
-        ttk.Label(
+            font=pick_ui_font(root, 36, True),
+            fg=ui.PRIMARY,
+            bg=ui.BG,
+        ).pack()
+        tk.Label(
             header,
             text="压缩统一为 ZIP · 解压支持常见格式 · 可加密",
-            style="Sub.TLabel",
-            font=("Microsoft YaHei UI", 10),
-        ).pack(pady=(0, 18))
+            font=pick_ui_font(root, 10, False),
+            fg=ui.TEXT_MUTED,
+            bg=ui.BG,
+        ).pack(pady=(int(8 * scale), int(28 * scale)))
 
-        buttons = ttk.Frame(container, style="White.TFrame")
+        # —— 主操作：压缩 / 解压 ——
+        buttons = tk.Frame(container, bg=ui.BG)
         buttons.pack(side="top", fill="x")
         buttons.columnconfigure(0, weight=1)
         buttons.columnconfigure(1, weight=1)
 
-        self.btn_compress = ttk.Button(
-            buttons, text="压缩", style="Big.TButton", command=self._on_compress
+        btn_h = int(56 * scale)
+        self.btn_compress = ui.make_rounded_button(
+            buttons,
+            tk,
+            "压缩",
+            self._on_compress,
+            variant="primary",
+            font_size=16,
+            height=btn_h,
+            radius=int(12 * scale),
+            min_width=int(160 * scale),
+            expand_width=True,
         )
-        self.btn_compress.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        self.btn_compress.grid(row=0, column=0, sticky="ew", padx=(0, int(10 * scale)))
 
-        self.btn_extract = ttk.Button(
-            buttons, text="解压", style="Big.TButton", command=self._on_extract
+        self.btn_extract = ui.make_rounded_button(
+            buttons,
+            tk,
+            "解压",
+            self._on_extract,
+            variant="primary",
+            font_size=16,
+            height=btn_h,
+            radius=int(12 * scale),
+            min_width=int(160 * scale),
+            expand_width=True,
         )
-        self.btn_extract.grid(row=0, column=1, sticky="ew", padx=(8, 0))
+        self.btn_extract.grid(row=0, column=1, sticky="ew", padx=(int(10 * scale), 0))
 
-        footer = ttk.Frame(container, style="White.TFrame")
-        footer.pack(side="bottom", fill="x", pady=(10, 0))
-        ttk.Separator(footer, orient="horizontal").pack(fill="x", pady=(0, 8))
-        for text in (
-            "本软件由 Opus 4.8 模型自动生成",
-            "致力于造福全人类，共建简单、和平、美好的生态",
-            "—— 洞穴理论工作室 出品",
-        ):
-            ttk.Label(
-                footer,
-                text=text,
-                style="Footer.TLabel",
-                font=("Microsoft YaHei UI", 8),
-                anchor="center",
-                justify="center",
-            ).pack(fill="x")
+        # —— 进度 + 状态 ——
+        middle = tk.Frame(container, bg=ui.BG)
+        middle.pack(side="top", fill="both", expand=True, pady=(int(28 * scale), 0))
 
-        bottom = ttk.Frame(container, style="White.TFrame")
-        bottom.pack(side="bottom", fill="x", pady=(14, 0))
-        inner = ttk.Frame(bottom, style="White.TFrame")
-        inner.pack(anchor="center")
-        ttk.Button(
-            inner,
-            text="设为默认打开",
-            style="Link.TButton",
-            command=self._on_install_menu,
-        ).pack(side="left")
-        ttk.Button(
-            inner,
-            text="取消默认打开",
-            style="Link.TButton",
-            command=self._on_uninstall_menu,
-        ).pack(side="left", padx=(8, 0))
+        self._progress_bar = ui.RoundedProgressBar(
+            middle, tk, height=int(10 * scale), radius=int(5 * scale)
+        )
+        self._progress_bar.pack(fill="x", pady=(int(8 * scale), int(10 * scale)))
+        self.progress = self._progress_bar  # 兼容旧调用 progress.configure(value=)
 
-        middle = ttk.Frame(container, style="White.TFrame")
-        middle.pack(side="top", fill="both", expand=True)
-
-        self.progress = ttk.Progressbar(middle, mode="determinate")
-        self.progress.pack(fill="x", pady=(22, 6))
-
-        self.status = ttk.Label(
+        self.status = tk.Label(
             middle,
-            text="选择文件开始压缩，或选择压缩包预览/解压",
-            style="Status.TLabel",
-            font=("Microsoft YaHei UI", 9),
+            text="选择文件开始压缩，或选择压缩包预览 / 解压",
+            font=pick_ui_font(root, 9, False),
+            fg=ui.TEXT_MUTED,
+            bg=ui.BG,
+            anchor="w",
         )
         self.status.pack(fill="x")
+
+        # —— 底部关联按钮 ——
+        bottom = tk.Frame(container, bg=ui.BG)
+        bottom.pack(side="bottom", fill="x", pady=(int(8 * scale), 0))
+
+        foot_note = tk.Frame(bottom, bg=ui.BG)
+        foot_note.pack(side="bottom", fill="x", pady=(int(14 * scale), 0))
+        tk.Label(
+            foot_note,
+            text="免费 · 无广告 · 无弹窗 · 无捆绑",
+            font=pick_ui_font(root, 8, False),
+            fg="#9ca3af",
+            bg=ui.BG,
+        ).pack()
+
+        assoc = tk.Frame(bottom, bg=ui.BG)
+        assoc.pack(side="bottom", fill="x")
+        assoc.columnconfigure(0, weight=1)
+        assoc.columnconfigure(1, weight=1)
+
+        outline_h = int(40 * scale)
+        self.btn_install = ui.make_rounded_button(
+            assoc,
+            tk,
+            "设为默认打开",
+            self._on_install_menu,
+            variant="outline",
+            font_size=10,
+            height=outline_h,
+            radius=int(10 * scale),
+            min_width=int(140 * scale),
+            expand_width=True,
+        )
+        self.btn_install.grid(row=0, column=0, sticky="ew", padx=(0, int(8 * scale)))
+
+        self.btn_uninstall = ui.make_rounded_button(
+            assoc,
+            tk,
+            "取消默认打开",
+            self._on_uninstall_menu,
+            variant="outline",
+            font_size=10,
+            height=outline_h,
+            radius=int(10 * scale),
+            min_width=int(140 * scale),
+            expand_width=True,
+        )
+        self.btn_uninstall.grid(row=0, column=1, sticky="ew", padx=(int(8 * scale), 0))
+
+        # 居中显示
+        try:
+            root.update_idletasks()
+            sw = root.winfo_screenwidth()
+            sh = root.winfo_screenheight()
+            x = max(0, (sw - self._win_w) // 2)
+            y = max(0, (sh - self._win_h) // 3)
+            root.geometry(f"{self._win_w}x{self._win_h}+{x}+{y}")
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # 密码 / 预览
@@ -325,8 +385,14 @@ class _App:
         if not self._main_built:
             return
         state = "disabled" if busy else "normal"
-        self.btn_compress.configure(state=state)
-        self.btn_extract.configure(state=state)
+        for btn in (self.btn_compress, self.btn_extract):
+            try:
+                btn.configure_state(state)
+            except Exception:
+                try:
+                    btn.configure(state=state)
+                except Exception:
+                    pass
         for preview in self._preview_windows:
             preview.set_busy(busy)
 
@@ -730,10 +796,10 @@ class _PreviewWindow:
         win = tk.Toplevel(app.root)
         self.win = win
         win.withdraw()  # 先隐藏，避免左上角闪一下
-        win.title(f"预览 — {archive.name}")
-        w, h = int(560 * scale), int(460 * scale)
-        win.minsize(int(420 * scale), int(320 * scale))
-        win.configure(bg="white")
+        win.title(f"简压 预览 — {archive.name}")
+        w, h = int(660 * scale), int(560 * scale)
+        win.minsize(int(520 * scale), int(420 * scale))
+        ui.apply_window_chrome(win)
 
         try:
             ico = resource_path("app.ico")
@@ -742,24 +808,114 @@ class _PreviewWindow:
         except Exception:
             pass
 
-        frame = ttk.Frame(win, padding=int(12 * scale), style="White.TFrame")
+        pad = int(20 * scale)
+        frame = tk.Frame(win, bg=ui.BG, padx=pad, pady=pad)
         frame.pack(fill="both", expand=True)
 
-        ttk.Label(
-            frame,
+        # —— 底部按钮（先 pack 到底部，避免被列表挤出可视区）——
+        buttons = tk.Frame(frame, bg=ui.BG)
+        buttons.pack(side="bottom", fill="x", pady=(int(12 * scale), 0))
+
+        self.btn_close = ui.make_rounded_button(
+            buttons,
+            tk,
+            "关闭",
+            self._close,
+            variant="ghost",
+            font_size=10,
+            height=int(40 * scale),
+            radius=int(10 * scale),
+            min_width=int(88 * scale),
+        )
+        self.btn_close.pack(side="left")
+
+        right = tk.Frame(buttons, bg=ui.BG)
+        right.pack(side="right")
+        self.btn_to = ui.make_rounded_button(
+            right,
+            tk,
+            "解压到…",
+            self._extract_to,
+            variant="primary",
+            font_size=10,
+            height=int(40 * scale),
+            radius=int(10 * scale),
+            min_width=int(110 * scale),
+        )
+        self.btn_to.pack(side="right")
+        self.btn_here = ui.make_rounded_button(
+            right,
+            tk,
+            "解压到当前文件夹",
+            self._extract_here,
+            variant="primary",
+            font_size=10,
+            height=int(40 * scale),
+            radius=int(10 * scale),
+            min_width=int(150 * scale),
+        )
+        self.btn_here.pack(side="right", padx=(0, int(8 * scale)))
+
+        # —— 进度（贴在按钮上方）——
+        prog = tk.Frame(frame, bg=ui.BG)
+        prog.pack(side="bottom", fill="x", pady=(int(10 * scale), 0))
+        self._progress_bar = ui.RoundedProgressBar(
+            prog, tk, height=int(8 * scale), radius=int(4 * scale)
+        )
+        self._progress_bar.pack(fill="x")
+        self.progress = self._progress_bar
+        self.status = tk.Label(
+            prog,
+            text="双击文件可打开 · 双击压缩包可再预览 · 选择下方按钮解压",
+            font=pick_ui_font(win, 9, False),
+            fg=ui.TEXT_MUTED,
+            bg=ui.BG,
+            anchor="w",
+        )
+        self.status.pack(fill="x", pady=(int(6 * scale), 0))
+
+        # —— 头部：图标 + 文件名 ——
+        header = tk.Frame(frame, bg=ui.BG)
+        header.pack(side="top", fill="x", pady=(0, int(14 * scale)))
+
+        icon_size = int(56 * scale)
+        icon_widget, self._icon_photo = ui.make_zip_icon(header, tk, size=icon_size)
+        icon_widget.pack(side="left", padx=(0, int(14 * scale)))
+
+        titles = tk.Frame(header, bg=ui.BG)
+        titles.pack(side="left", fill="x", expand=True)
+        tk.Label(
+            titles,
             text=archive.name,
-            style="Title.TLabel",
-            font=("Microsoft YaHei UI", 12, "bold"),
-        ).pack(anchor="w")
+            font=pick_ui_font(win, 16, True),
+            fg=ui.TEXT,
+            bg=ui.BG,
+            anchor="w",
+        ).pack(fill="x")
         info = f"{len(members)} 个项目"
         if any(m.encrypted for m in members) or password:
             info += " · 已加密"
-        ttk.Label(
-            frame, text=info, style="Sub.TLabel", font=("Microsoft YaHei UI", 9)
-        ).pack(anchor="w", pady=(2, 8))
+        tk.Label(
+            titles,
+            text=info,
+            font=pick_ui_font(win, 10, False),
+            fg=ui.TEXT_MUTED,
+            bg=ui.BG,
+            anchor="w",
+        ).pack(fill="x", pady=(int(2 * scale), 0))
 
-        tree_frame = ttk.Frame(frame, style="White.TFrame")
-        tree_frame.pack(fill="both", expand=True)
+        # —— 列表外框 ——
+        list_wrap = tk.Frame(
+            frame,
+            bg=ui.BG,
+            highlightbackground=ui.BORDER,
+            highlightthickness=1,
+            bd=0,
+        )
+        list_wrap.pack(side="top", fill="both", expand=True)
+
+        tree_frame = tk.Frame(list_wrap, bg=ui.BG)
+        tree_frame.pack(fill="both", expand=True, padx=1, pady=1)
 
         columns = ("size", "compressed", "flag")
         tree = ttk.Treeview(
@@ -772,7 +928,7 @@ class _PreviewWindow:
         tree.heading("size", text="大小")
         tree.heading("compressed", text="压缩后")
         tree.heading("flag", text="")
-        tree.column("#0", width=int(280 * scale), stretch=True)
+        tree.column("#0", width=int(300 * scale), stretch=True)
         tree.column("size", width=int(90 * scale), anchor="e")
         tree.column("compressed", width=int(90 * scale), anchor="e")
         tree.column("flag", width=int(80 * scale), anchor="center")
@@ -797,29 +953,6 @@ class _PreviewWindow:
 
         self.tree = tree
         tree.bind("<Double-1>", self._on_double_click)
-
-        # 进度区域（解压时可见）
-        prog = ttk.Frame(frame, style="White.TFrame")
-        prog.pack(fill="x", pady=(10, 0))
-        self.progress = ttk.Progressbar(prog, mode="determinate")
-        self.progress.pack(fill="x")
-        self.status = ttk.Label(
-            prog,
-            text="双击文件可打开 · 双击压缩包可再预览 · 选择下方按钮解压",
-            style="Status.TLabel",
-            font=("Microsoft YaHei UI", 9),
-        )
-        self.status.pack(fill="x", pady=(4, 0))
-
-        buttons = ttk.Frame(frame, style="White.TFrame")
-        buttons.pack(fill="x", pady=(10, 0))
-        self.btn_to = ttk.Button(buttons, text="解压到…", command=self._extract_to)
-        self.btn_to.pack(side="right")
-        self.btn_here = ttk.Button(
-            buttons, text="解压到当前文件夹", command=self._extract_here
-        )
-        self.btn_here.pack(side="right", padx=(0, 8))
-        ttk.Button(buttons, text="关闭", command=self._close).pack(side="left")
 
         win.protocol("WM_DELETE_WINDOW", self._close)
 
@@ -854,11 +987,14 @@ class _PreviewWindow:
 
     def set_busy(self, busy: bool) -> None:
         state = "disabled" if busy else "normal"
-        try:
-            self.btn_to.configure(state=state)
-            self.btn_here.configure(state=state)
-        except Exception:
-            pass
+        for btn in (self.btn_to, self.btn_here):
+            try:
+                btn.configure_state(state)
+            except Exception:
+                try:
+                    btn.configure(state=state)
+                except Exception:
+                    pass
 
     def update_progress(self, pct: int, name: str) -> None:
         try:

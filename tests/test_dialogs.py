@@ -41,11 +41,23 @@ def test_progress_dialog_result_page_not_blank():
         dlg._show_result_inplace()
 
         texts = []
-        for child in dlg._body.winfo_children():
+
+        def _collect(widget) -> None:
             try:
-                texts.append(str(child.cget("text")))
+                texts.append(str(widget.cget("text")))
             except Exception:
                 pass
+            # Canvas 圆角按钮把文案画在 item 上
+            try:
+                for item in widget.find_all():
+                    if widget.type(item) == "text":
+                        texts.append(str(widget.itemcget(item, "text")))
+            except Exception:
+                pass
+            for child in widget.winfo_children():
+                _collect(child)
+
+        _collect(dlg._body)
         assert "已解压" in texts
         assert "简压" in texts
         assert "确定" in texts

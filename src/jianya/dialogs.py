@@ -14,6 +14,7 @@ from typing import Any, Callable, Optional
 
 from .dpi import configure_tk_scaling, enable_high_dpi, pick_ui_font
 from .resources import resource_path
+from . import theme as ui
 
 
 ProgressFn = Callable[[int, int, str], None]
@@ -73,7 +74,7 @@ class ProgressDialog:
 
         win = self.win
         win.title(title)
-        win.configure(bg="#ffffff")
+        ui.apply_window_chrome(win)
         # 进度页与完成页共用同一尺寸，切换时不改大小，避免放大黑边
         self._w = int(480 * self.scale)
         self._h = int(280 * self.scale)
@@ -97,52 +98,11 @@ class ProgressDialog:
         except Exception:
             pass
 
-        pad = int(22 * self.scale)
-        self._body = tk.Frame(win, bg="#ffffff", padx=pad, pady=pad)
+        pad = int(24 * self.scale)
+        self._body = tk.Frame(win, bg=ui.BG, padx=pad, pady=pad)
         self._body.pack(fill="both", expand=True)
 
-        self.title_label = tk.Label(
-            self._body,
-            text=title,
-            font=pick_ui_font(win, 13, True),
-            fg="#0f766e",
-            bg="#ffffff",
-            anchor="w",
-        )
-        self.title_label.pack(fill="x")
-
-        self.status_label = tk.Label(
-            self._body,
-            text=status,
-            font=pick_ui_font(win, 10, False),
-            fg="#333333",
-            bg="#ffffff",
-            anchor="w",
-        )
-        self.status_label.pack(fill="x", pady=(12, 14))
-
-        bar_h = max(16, int(20 * self.scale))
-        self.bar_canvas = tk.Canvas(
-            self._body,
-            height=bar_h,
-            bg="#e5e7eb",
-            highlightthickness=0,
-            bd=0,
-        )
-        self.bar_canvas.pack(fill="x")
-        self._bar_rect = self.bar_canvas.create_rectangle(
-            0, 0, 0, bar_h, fill="#0f766e", width=0
-        )
-
-        self.pct_label = tk.Label(
-            self._body,
-            text="请稍候…",
-            font=pick_ui_font(win, 11, True),
-            fg="#0f766e",
-            bg="#ffffff",
-            anchor="e",
-        )
-        self.pct_label.pack(fill="x", pady=(10, 0))
+        self._build_progress_page(status)
 
         win.protocol("WM_DELETE_WINDOW", self._on_user_close)
 
@@ -171,6 +131,84 @@ class ProgressDialog:
         win.after(20, self._drain)
         win.after(40, self._animate)
 
+    def _build_progress_page(self, status: str) -> None:
+        """截图风格：左侧 ZIP 图标 + 状态、进度条与百分比、底部分隔线与取消。"""
+        tk = self.tk
+        body = self._body
+        scale = self.scale
+
+        top = tk.Frame(body, bg=ui.BG)
+        top.pack(fill="x", pady=(int(4 * scale), 0))
+
+        icon_size = int(56 * scale)
+        icon_widget, self._icon_photo = ui.make_zip_icon(top, tk, size=icon_size)
+        icon_widget.pack(side="left", padx=(0, int(14 * scale)), anchor="n")
+
+        right = tk.Frame(top, bg=ui.BG)
+        right.pack(side="left", fill="both", expand=True)
+
+        self.status_label = tk.Label(
+            right,
+            text=status,
+            font=pick_ui_font(self.win, 11, False),
+            fg=ui.TEXT,
+            bg=ui.BG,
+            anchor="w",
+        )
+        self.status_label.pack(fill="x", pady=(int(4 * scale), int(12 * scale)))
+
+        bar_row = tk.Frame(right, bg=ui.BG)
+        bar_row.pack(fill="x")
+        bar_row.columnconfigure(0, weight=1)
+
+        bar_h = max(12, int(14 * scale))
+        self.bar_canvas = tk.Canvas(
+            bar_row,
+            height=bar_h,
+            bg=ui.TRACK,
+            highlightthickness=0,
+            bd=0,
+        )
+        self.bar_canvas.grid(row=0, column=0, sticky="ew")
+        self._bar_rect = self.bar_canvas.create_rectangle(
+            0, 0, 0, bar_h, fill=ui.PRIMARY, width=0
+        )
+
+        self.pct_label = tk.Label(
+            bar_row,
+            text="…",
+            font=pick_ui_font(self.win, 11, True),
+            fg=ui.TEXT,
+            bg=ui.BG,
+            width=4,
+            anchor="e",
+        )
+        self.pct_label.grid(row=0, column=1, padx=(int(10 * scale), 0))
+
+        # 兼容旧字段（部分逻辑会改 title_label）
+        self.title_label = self.status_label
+
+        # 底栏
+        spacer = tk.Frame(body, bg=ui.BG)
+        spacer.pack(fill="both", expand=True)
+
+        tk.Frame(body, bg=ui.BORDER, height=1).pack(fill="x")
+        footer = tk.Frame(body, bg=ui.BG)
+        footer.pack(fill="x", pady=(int(12 * scale), 0))
+
+        self._cancel_btn = ui.make_rounded_button(
+            footer,
+            tk,
+            "取消",
+            self._on_user_close,
+            variant="outline",
+            font_size=10,
+            height=int(34 * scale),
+            radius=int(8 * scale),
+            min_width=int(88 * scale),
+        )
+        self._cancel_btn.pack(side="right")
+
     def _on_user_close(self) -> None:
         if not self._finished:
             return
@@ -195,19 +233,58 @@ class ProgressDialog:
             return
         try:
             self.bar_canvas.update_idletasks()
-            width = max(int(self.bar_canvas.winfo_width()), int(400 * self.scale))
-            height = max(int(self.bar_canvas.winfo_height()), 16)
+            width = max(int(self.bar_canvas.winfo_width()), int(280 * self.scale))
+            height = max(int(self.bar_canvas.winfo_height()), 12)
         except Exception:
             return
+
+        self.bar_canvas.delete("all")
+        # 轨道
+        try:
+            ui.draw_rounded_rect(
+                self.bar_canvas, 0, 0, width, height, max(3, height // 2), ui.TRACK
+            )
+        except Exception:
+            self.bar_canvas.create_rectangle(0, 0, width, height, fill=ui.TRACK, width=0)
 
         if self._indeterminate:
             block = max(48, int(width * 0.28))
             x0 = int(self._anim_pos) % (width + block) - block
-            x1 = x0 + block
-            self.bar_canvas.coords(self._bar_rect, x0, 0, x1, height)
+            x1 = min(width, x0 + block)
+            x0 = max(0, x0)
+            if x1 > x0:
+                try:
+                    ui.draw_rounded_rect(
+                        self.bar_canvas,
+                        x0,
+                        0,
+                        x1,
+                        height,
+                        max(3, height // 2),
+                        ui.PRIMARY,
+                    )
+                except Exception:
+                    self.bar_canvas.create_rectangle(
+                        x0, 0, x1, height, fill=ui.PRIMARY, width=0
+                    )
         else:
             fill = int(width * max(0, min(100, self._pct)) / 100.0)
-            self.bar_canvas.coords(self._bar_rect, 0, 0, fill, height)
+            if fill > 2:
+                try:
+                    ui.draw_rounded_rect(
+                        self.bar_canvas,
+                        0,
+                        0,
+                        fill,
+                        height,
+                        max(3, height // 2),
+                        ui.PRIMARY,
+                    )
+                except Exception:
+                    self.bar_canvas.create_rectangle(
+                        0, 0, fill, height, fill=ui.PRIMARY, width=0
+                    )
+            self._bar_rect = None
 
     def _animate(self) -> None:
         if self._closed or self._showing_result:
@@ -279,7 +356,7 @@ class ProgressDialog:
         title = self._result_title or "简压"
         message = self._result_message or ""
         is_error = self._result_error
-        accent = "#b91c1c" if is_error else "#0f766e"
+        accent = ui.DANGER if is_error else ui.PRIMARY
         badge = "出错" if is_error else "已完成"
         if not is_error:
             if "解压" in title or "已解压" in message or "已解压" in title:
@@ -316,52 +393,63 @@ class ProgressDialog:
         win.title(title)
 
         try:
+            top = tk.Frame(self._body, bg=ui.BG)
+            top.pack(fill="x")
+
+            icon_size = int(48 * self.scale)
+            icon_widget, self._result_icon = ui.make_zip_icon(top, tk, size=icon_size)
+            icon_widget.pack(side="left", padx=(0, int(12 * self.scale)), anchor="n")
+
+            texts = tk.Frame(top, bg=ui.BG)
+            texts.pack(side="left", fill="both", expand=True)
+
             tk.Label(
-                self._body,
+                texts,
                 text=badge,
                 font=pick_ui_font(win, 16, True),
                 fg=accent,
-                bg="#ffffff",
+                bg=ui.BG,
                 anchor="w",
             ).pack(fill="x")
 
             tk.Label(
-                self._body,
+                texts,
                 text=title,
                 font=pick_ui_font(win, 11, True),
-                fg="#111827",
-                bg="#ffffff",
+                fg=ui.TEXT,
+                bg=ui.BG,
                 anchor="w",
-            ).pack(fill="x", pady=(8, 0))
+            ).pack(fill="x", pady=(int(4 * self.scale), 0))
 
             # 路径可能较长：限制换行宽度，避免撑破固定窗口
             msg_label = tk.Label(
                 self._body,
                 text=message,
                 font=pick_ui_font(win, 10, False),
-                fg="#374151",
-                bg="#ffffff",
+                fg=ui.TEXT_SUB,
+                bg=ui.BG,
                 anchor="nw",
                 justify="left",
                 wraplength=int(400 * self.scale),
             )
-            msg_label.pack(fill="both", expand=True, pady=(6, 12))
+            msg_label.pack(fill="both", expand=True, pady=(int(10 * self.scale), int(12 * self.scale)))
 
-            btn = tk.Button(
-                self._body,
-                text="确定",
-                font=pick_ui_font(win, 11, True),
-                fg="#ffffff",
-                bg=accent,
-                activeforeground="#ffffff",
-                activebackground=accent,
-                relief="flat",
-                padx=int(22 * self.scale),
-                pady=int(6 * self.scale),
-                cursor="hand2",
-                command=self.close,
+            tk.Frame(self._body, bg=ui.BORDER, height=1).pack(fill="x")
+            footer = tk.Frame(self._body, bg=ui.BG)
+            footer.pack(fill="x", pady=(int(12 * self.scale), 0))
+
+            btn = ui.make_rounded_button(
+                footer,
+                tk,
+                "确定",
+                self.close,
+                variant="primary",
+                font_size=11,
+                height=int(36 * self.scale),
+                radius=int(8 * self.scale),
+                min_width=int(96 * self.scale),
             )
-            btn.pack(anchor="e")
+            btn.pack(side="right")
             win.bind("<Return>", lambda _e: self.close())
             win.bind("<Escape>", lambda _e: self.close())
 
@@ -449,7 +537,7 @@ def show_alert(title: str, message: str, error: bool = False) -> None:
     root.withdraw()  # 先隐藏，避免左上角闪一下
     scale = configure_tk_scaling(root)
     root.title(title)
-    root.configure(bg="#ffffff")
+    ui.apply_window_chrome(root)
     root.resizable(False, False)
     try:
         root.attributes("-topmost", True)
@@ -463,10 +551,10 @@ def show_alert(title: str, message: str, error: bool = False) -> None:
         pass
 
     pad = int(24 * scale)
-    frame = tk.Frame(root, bg="#ffffff", padx=pad, pady=pad)
+    frame = tk.Frame(root, bg=ui.BG, padx=pad, pady=pad)
     frame.pack(fill="both", expand=True)
 
-    accent = "#b91c1c" if error else "#0f766e"
+    accent = ui.DANGER if error else ui.PRIMARY
     badge = "出错" if error else "已完成"
     if not error:
         if "解压" in title or "已解压" in message:
@@ -479,7 +567,7 @@ def show_alert(title: str, message: str, error: bool = False) -> None:
         text=badge,
         font=pick_ui_font(root, 16, True),
         fg=accent,
-        bg="#ffffff",
+        bg=ui.BG,
         anchor="w",
     ).pack(fill="x")
 
@@ -487,8 +575,8 @@ def show_alert(title: str, message: str, error: bool = False) -> None:
         frame,
         text=title,
         font=pick_ui_font(root, 11, True),
-        fg="#111827",
-        bg="#ffffff",
+        fg=ui.TEXT,
+        bg=ui.BG,
         anchor="w",
     ).pack(fill="x", pady=(10, 0))
 
@@ -496,8 +584,8 @@ def show_alert(title: str, message: str, error: bool = False) -> None:
         frame,
         text=message,
         font=pick_ui_font(root, 10, False),
-        fg="#374151",
-        bg="#ffffff",
+        fg=ui.TEXT_SUB,
+        bg=ui.BG,
         anchor="w",
         justify="left",
         wraplength=int(380 * scale),
@@ -509,20 +597,18 @@ def show_alert(title: str, message: str, error: bool = False) -> None:
         except Exception:
             pass
 
-    tk.Button(
+    btn = ui.make_rounded_button(
         frame,
-        text="确定",
-        font=pick_ui_font(root, 11, True),
-        fg="#ffffff",
-        bg=accent,
-        activeforeground="#ffffff",
-        activebackground=accent,
-        relief="flat",
-        padx=18,
-        pady=8,
-        cursor="hand2",
-        command=_ok,
-    ).pack(anchor="e")
+        tk,
+        "确定",
+        _ok,
+        variant="primary",
+        font_size=11,
+        height=int(36 * scale),
+        radius=int(8 * scale),
+        min_width=int(96 * scale),
+    )
+    btn.pack(anchor="e")
     root.bind("<Return>", lambda _e: _ok())
     root.bind("<Escape>", lambda _e: _ok())
 
