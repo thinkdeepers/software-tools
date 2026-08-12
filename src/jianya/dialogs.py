@@ -57,6 +57,7 @@ class ProgressDialog:
 
         if parent is None:
             root = tk.Tk()
+            root.withdraw()  # 先隐藏，避免左上角闪一下
             self.scale = configure_tk_scaling(root)
             self.root = root
             self.win = root
@@ -67,6 +68,7 @@ class ProgressDialog:
             except Exception:
                 self.scale = 1.0
             self.win = tk.Toplevel(parent)
+            self.win.withdraw()  # 先隐藏，定位后再显示
             self._wait_var = tk.BooleanVar(master=self.root, value=False)
 
         win = self.win
@@ -74,7 +76,6 @@ class ProgressDialog:
         win.configure(bg="#ffffff")
         self._w = int(480 * self.scale)
         self._h = int(200 * self.scale)
-        win.geometry(f"{self._w}x{self._h}")
         win.minsize(self._w, self._h)
         win.resizable(False, False)
 
@@ -84,12 +85,6 @@ class ProgressDialog:
             pass
         try:
             win.transient(self.root)
-        except Exception:
-            pass
-        try:
-            win.deiconify()
-            win.lift()
-            win.focus_force()
         except Exception:
             pass
 
@@ -149,12 +144,21 @@ class ProgressDialog:
 
         win.protocol("WM_DELETE_WINDOW", self._on_user_close)
 
+        # 先算好居中位置再显示，避免左上角闪窗
         try:
+            win.update_idletasks()
             sw = win.winfo_screenwidth()
             sh = win.winfo_screenheight()
             x = max(0, (sw - self._w) // 2)
             y = max(0, (sh - self._h) // 3)
             win.geometry(f"{self._w}x{self._h}+{x}+{y}")
+        except Exception:
+            win.geometry(f"{self._w}x{self._h}")
+
+        try:
+            win.deiconify()
+            win.lift()
+            win.focus_force()
         except Exception:
             pass
 
@@ -435,6 +439,7 @@ def show_alert(title: str, message: str, error: bool = False) -> None:
     import tkinter as tk
 
     root = tk.Tk()
+    root.withdraw()  # 先隐藏，避免左上角闪一下
     scale = configure_tk_scaling(root)
     root.title(title)
     root.configure(bg="#ffffff")

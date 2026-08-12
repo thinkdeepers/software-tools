@@ -77,9 +77,9 @@ class _App:
         self._temp_dir_set: Set[Path] = set()
 
         root = tk.Tk()
+        root.withdraw()  # 立刻隐藏，避免启动时左上角闪一下
         self.root = root
         root.title(f"简压 {__version__} — 简洁 · 免费 · 无广告")
-        root.withdraw()
         root.protocol("WM_DELETE_WINDOW", self._on_app_exit)
         atexit.register(self._cleanup_all_temps)
 
@@ -728,9 +728,9 @@ class _PreviewWindow:
 
         win = tk.Toplevel(app.root)
         self.win = win
+        win.withdraw()  # 先隐藏，避免左上角闪一下
         win.title(f"预览 — {archive.name}")
         w, h = int(560 * scale), int(460 * scale)
-        win.geometry(f"{w}x{h}")
         win.minsize(int(420 * scale), int(320 * scale))
         win.configure(bg="white")
 
@@ -821,7 +821,23 @@ class _PreviewWindow:
         ttk.Button(buttons, text="关闭", command=self._close).pack(side="left")
 
         win.protocol("WM_DELETE_WINDOW", self._close)
-        win.focus_force()
+
+        # 居中后再显示
+        try:
+            win.update_idletasks()
+            sw = win.winfo_screenwidth()
+            sh = win.winfo_screenheight()
+            x = max(0, (sw - w) // 2)
+            y = max(0, (sh - h) // 3)
+            win.geometry(f"{w}x{h}+{x}+{y}")
+        except Exception:
+            win.geometry(f"{w}x{h}")
+        try:
+            win.deiconify()
+            win.lift()
+            win.focus_force()
+        except Exception:
+            pass
 
     def own_temp_dir(self, path: Path, register_app: bool = True) -> None:
         if path not in self._temp_dirs:

@@ -117,8 +117,8 @@ def _prompt_password(prompt: str = "请输入密码：") -> Optional[str]:
         from .dpi import configure_tk_scaling
 
         root = tk.Tk()
-        configure_tk_scaling(root)
         root.withdraw()
+        configure_tk_scaling(root)
         value = simpledialog.askstring("简压", prompt, show="*", parent=root)
         root.destroy()
         return value
