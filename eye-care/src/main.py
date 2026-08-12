@@ -16,7 +16,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from autostart import set_autostart
-from break_timer import BreakOverlay, BreakTimer
+from break_timer import BreakOverlayManager, BreakTimer
 from config import AppConfig, load_config, save_config
 from filter_manager import FilterManager
 from settings_window import MainWindow
@@ -34,7 +34,7 @@ class EyeCareApp:
         self._config = load_config()
         self._filter = FilterManager()
         self._break_timer = BreakTimer()
-        self._break_overlay: BreakOverlay | None = None
+        self._break_overlay: BreakOverlayManager | None = None
         self._main_window: MainWindow | None = None
 
         self._schedule_timer = QTimer()
@@ -134,8 +134,8 @@ class EyeCareApp:
 
         if self._config.break_fullscreen:
             if self._break_overlay:
-                self._break_overlay.close()
-            self._break_overlay = BreakOverlay(break_seconds)
+                self._break_overlay.close_all()
+            self._break_overlay = BreakOverlayManager(break_seconds)
             self._break_overlay.dismissed.connect(self._break_timer.on_break_finished)
             self._break_overlay.snoozed.connect(self._break_timer.on_break_snoozed)
             self._break_overlay.show_fullscreen()

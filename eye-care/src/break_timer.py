@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PyQt6.QtCore import QObject, QTimer, pyqtSignal, Qt
+from PyQt6.QtCore import QObject, QTimer, pyqtSignal, Qt, QRect
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QApplication,
@@ -14,16 +14,19 @@ from PyQt6.QtWidgets import (
 )
 
 
-class BreakOverlay(QWidget):
-    """全屏休息提醒界面"""
+class _BreakScreenWindow(QWidget):
+    """单显示器休息遮罩"""
 
-    dismissed = pyqtSignal()
-    snoozed = pyqtSignal()
-
-    def __init__(self, break_seconds: int, parent: QWidget | None = None):
+    def __init__(
+        self,
+        geometry: QRect,
+        is_primary: bool,
+        manager: BreakOverlayManager,
+        parent: QWidget | None = None,
+    ):
         super().__init__(parent)
-        self._remaining = break_seconds
-        self._total = break_seconds
+        self._manager = manager
+        self._is_primary = is_primary
 
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -32,91 +35,149 @@ class BreakOverlay(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
         self.setStyleSheet("background-color: #1a2332;")
+        self.setGeometry(geometry)
 
         layout = QVBoxLayout(self)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        title = QLabel("👁 该休息一下了")
+        title = QLabel("👁 该休息一下了" if is_primary else "👁 休息时间")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title_font = QFont()
-        title_font.setPointSize(28)
+        title_font.setPointSize(28 if is_primary else 22)
         title_font.setBold(True)
         title.setFont(title_font)
         title.setStyleSheet("color: #7dd3a8; margin-bottom: 16px;")
 
-        self._countdown = QLabel(self._format_time(self._remaining))
+        self._countdown = QLabel(manager.format_time(manager.remaining))
         self._countdown.setAlignment(Qt.AlignmentFlag.AlignCenter)
         cd_font = QFont()
-        cd_font.setPointSize(64)
+        cd_font.setPointSize(64 if is_primary else 48)
         cd_font.setBold(True)
         self._countdown.setFont(cd_font)
         self._countdown.setStyleSheet("color: #ffffff;")
-
-        hint = QLabel("远眺窗外，放松双眼\n遵循 20-20-20 法则：每20分钟看20英尺外至少20秒")
-        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        hint.setStyleSheet("color: #a0aec0; font-size: 16px; margin-top: 12px;")
-
-        btn_row = QHBoxLayout()
-        btn_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        skip_btn = QPushButton("跳过休息")
-        skip_btn.setStyleSheet(
-            "QPushButton { background: #4a5568; color: white; padding: 10px 24px;"
-            " border-radius: 6px; font-size: 14px; }"
-            "QPushButton:hover { background: #718096; }"
-        )
-        skip_btn.clicked.connect(self._on_skip)
-
-        snooze_btn = QPushButton("稍后提醒 (5分钟)")
-        snooze_btn.setStyleSheet(
-            "QPushButton { background: #2d6a4f; color: white; padding: 10px 24px;"
-            " border-radius: 6px; font-size: 14px; margin-left: 12px; }"
-            "QPushButton:hover { background: #40916c; }"
-        )
-        snooze_btn.clicked.connect(self._on_snooze)
-
-        btn_row.addWidget(skip_btn)
-        btn_row.addWidget(snooze_btn)
+        manager.register_countdown(self._countdown)
 
         layout.addWidget(title)
         layout.addWidget(self._countdown)
-        layout.addWidget(hint)
-        layout.addLayout(btn_row)
+
+        if is_primary:
+            hint = QLabel(
+                "远眺窗外，放松双眼\n遵循 20-20-20 法则：每20分钟看20英尺外至少20秒"
+            )
+            hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            hint.setStyleSheet("color: #a0aec0; font-size: 16px; margin-top: 12px;")
+            layout.addWidget(hint)
+
+            btn_row = QHBoxLayout()
+            btn_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+            skip_btn = QPushButton("跳过休息")
+            skip_btn.setStyleSheet(
+                "QPushButton { background: #4a5568; color: white; padding: 10px 24px;"
+                " border-radius: 6px; font-size: 14px; }"
+                "QPushButton:hover { background: #718096; }"
+            )
+            skip_btn.clicked.connect(manager.skip)
+
+            snooze_btn = QPushButton("稍后提醒 (5分钟)")
+            snooze_btn.setStyleSheet(
+                "QPushButton { background: #2d6a4f; color: white; padding: 10px 24px;"
+                " border-radius: 6px; font-size: 14px; margin-left: 12px; }"
+                "QPushButton:hover { background: #40916c; }"
+            )
+            snooze_btn.clicked.connect(manager.snooze)
+
+            btn_row.addWidget(skip_btn)
+            btn_row.addWidget(snooze_btn)
+            layout.addLayout(btn_row)
+        else:
+            sub = QLabel("请在主屏操作")
+            sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            sub.setStyleSheet("color: #a0aec0; font-size: 14px; margin-top: 16px;")
+            layout.addWidget(sub)
+
+    def show_on_screen(self) -> None:
+        self.show()
+        self.raise_()
+        if self._is_primary:
+            self.activateWindow()
+
+
+class BreakOverlayManager(QObject):
+    """多显示器全屏休息界面管理"""
+
+    dismissed = pyqtSignal()
+    snoozed = pyqtSignal()
+
+    def __init__(self, break_seconds: int, parent: QObject | None = None):
+        super().__init__(parent)
+        self._remaining = break_seconds
+        self._windows: list[_BreakScreenWindow] = []
+        self._countdown_labels: list[QLabel] = []
 
         self._timer = QTimer(self)
+        self._timer.setInterval(1000)
         self._timer.timeout.connect(self._tick)
 
-    def _format_time(self, seconds: int) -> str:
+    @property
+    def remaining(self) -> int:
+        return self._remaining
+
+    def register_countdown(self, label: QLabel) -> None:
+        self._countdown_labels.append(label)
+
+    @staticmethod
+    def format_time(seconds: int) -> str:
         m, s = divmod(max(0, seconds), 60)
         return f"{m:02d}:{s:02d}"
 
-    def _tick(self) -> None:
-        self._remaining -= 1
-        self._countdown.setText(self._format_time(self._remaining))
-        if self._remaining <= 0:
-            self._timer.stop()
-            self.dismissed.emit()
-            self.close()
-
-    def _on_skip(self) -> None:
-        self._timer.stop()
-        self.dismissed.emit()
-        self.close()
-
-    def _on_snooze(self) -> None:
-        self._timer.stop()
-        self.snoozed.emit()
-        self.close()
+    def _update_countdowns(self) -> None:
+        text = self.format_time(self._remaining)
+        for label in self._countdown_labels:
+            label.setText(text)
 
     def show_fullscreen(self) -> None:
+        self.close_all()
         app = QApplication.instance()
-        if app and app.primaryScreen():
-            geo = app.primaryScreen().geometry()
-            for screen in app.screens():
-                geo = geo.united(screen.geometry())
-            self.setGeometry(geo)
-        self.showFullScreen()
-        self._timer.start(1000)
+        if not app:
+            return
+
+        primary = app.primaryScreen()
+        for screen in app.screens():
+            is_primary = screen is primary
+            win = _BreakScreenWindow(screen.geometry(), is_primary, self)
+            win.show_on_screen()
+            self._windows.append(win)
+
+        self._timer.start()
+
+    def close_all(self) -> None:
+        self._timer.stop()
+        for win in self._windows:
+            win.close()
+        self._windows.clear()
+        self._countdown_labels.clear()
+
+    def _tick(self) -> None:
+        self._remaining -= 1
+        self._update_countdowns()
+        if self._remaining <= 0:
+            self._finish()
+
+    def skip(self) -> None:
+        self._finish()
+
+    def snooze(self) -> None:
+        self.close_all()
+        self.snoozed.emit()
+
+    def _finish(self) -> None:
+        self.close_all()
+        self.dismissed.emit()
+
+
+# 兼容旧接口
+BreakOverlay = BreakOverlayManager
 
 
 class BreakTimer(QObject):
