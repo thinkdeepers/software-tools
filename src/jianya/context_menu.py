@@ -157,10 +157,13 @@ def _delete_verb(winreg, base_path: str, verb_key: str):
 
 
 def _register_progid(winreg, open_cmd: str, extract_cmd: str) -> None:
-    """注册 ProgID：决定压缩包的显示名称、图标与双击打开行为。"""
+    """注册 ProgID：双击打开预览；右键顶部为「解压到当前文件夹」。"""
     classes = "Software\\Classes"
     progid_path = f"{classes}\\{_PROGID}"
     shell = f"{progid_path}\\shell"
+
+    # 先清旧 shell，避免残留默认动词导致双击变成解压
+    _delete_key_tree(winreg, shell)
 
     _set_sz(winreg, progid_path, None, "简压压缩包")
     _set_sz(winreg, progid_path, "FriendlyTypeName", "简压压缩包")
@@ -169,8 +172,7 @@ def _register_progid(winreg, open_cmd: str, extract_cmd: str) -> None:
     if icon:
         _set_sz(winreg, f"{progid_path}\\DefaultIcon", None, icon)
 
-    # 双击仍打开预览；右键顶部优先「解压到当前文件夹」
-    _create_verb(winreg, shell, "open", _OPEN_LABEL, open_cmd)
+    # 先注册解压（Position=Top → 右键菜单靠前）
     _create_verb(
         winreg,
         shell,
@@ -179,7 +181,8 @@ def _register_progid(winreg, open_cmd: str, extract_cmd: str) -> None:
         extract_cmd,
         position="Top",
     )
-    # shell 默认动词 = open（双击预览）；解压靠 Position=Top 靠前显示
+    # 再注册 open：双击默认动作 = 预览
+    _create_verb(winreg, shell, "open", _OPEN_LABEL, open_cmd)
     _set_sz(winreg, shell, None, "open")
 
 
@@ -188,11 +191,12 @@ def _register_application(winreg, open_cmd: str, extract_cmd: str) -> None:
     app = _exe_basename()
     base = f"Software\\Classes\\Applications\\{app}"
     shell = f"{base}\\shell"
+    _delete_key_tree(winreg, shell)
+
     _set_sz(winreg, base, "FriendlyAppName", _APP_NAME)
     icon = _icon()
     if icon:
         _set_sz(winreg, f"{base}\\DefaultIcon", None, icon)
-    _create_verb(winreg, shell, "open", _OPEN_LABEL, open_cmd)
     _create_verb(
         winreg,
         shell,
@@ -201,6 +205,7 @@ def _register_application(winreg, open_cmd: str, extract_cmd: str) -> None:
         extract_cmd,
         position="Top",
     )
+    _create_verb(winreg, shell, "open", _OPEN_LABEL, open_cmd)
     _set_sz(winreg, shell, None, "open")
     # 声明支持的扩展名
     for ext in _EXTRACT_EXTS:
@@ -252,9 +257,16 @@ def _clear_user_choice(winreg, ext: str) -> None:
 
 
 def _associate_extension(winreg, ext: str, open_cmd: str, extract_cmd: str) -> None:
-    """把扩展名关联到 ProgID，并直接在扩展名下挂右键动词。"""
+    """把扩展名关联到 ProgID。
+
+    不在 ``.ext\\shell`` 下挂动词：那里的默认动词容易覆盖 ProgID，
+    导致双击变成解压。右键解压改由 ProgID + SystemFileAssociations 提供。
+    """
     classes = "Software\\Classes"
     ext_path = f"{classes}\\{ext}"
+
+    # 清掉扩展名下旧的 shell（可能把默认动词设成了解压）
+    _delete_key_tree(winreg, f"{ext_path}\\shell")
 
     # 设为默认 ProgID（当前用户下优先于系统默认，除非存在受保护的 UserChoice）。
     _set_sz(winreg, ext_path, None, _PROGID)
@@ -270,20 +282,28 @@ def _associate_extension(winreg, ext: str, open_cmd: str, extract_cmd: str) -> N
     _set_sz(winreg, ext_path, "PerceivedType", "compressed")
     _set_sz(winreg, ext_path, "Content Type", "application/x-compressed")
 
-    # 扩展名自身的 shell（部分场景 ProgID 未接管时仍能显示右键）
-    shell = f"{ext_path}\\shell"
-    _create_verb(
-        winreg,
-        shell,
-        _EXTRACT_KEY,
-        _EXTRACT_LABEL,
-        extract_cmd,
-        position="Top",
-    )
-    _create_verb(winreg, shell, _OPEN_KEY, _OPEN_LABEL, open_cmd)
-
     # 清掉可能被其它软件锁定的 UserChoice
     _clear_user_choice(winreg, ext)
+
+
+def _register_extract_everywhere(winreg, open_cmd: str, extract_cmd: str) -> None:
+    """在 SystemFileAssociations 只注册「解压」，保证右键靠前出现解压项。
+
+    不在此处注册「打开」，避免右键第一项变成打开；双击打开由 ProgID 的 open 负责。
+    """
+    classes = "Software\\Classes"
+    for ext in _EXTRACT_EXTS:
+        base = f"{classes}\\SystemFileAssociations\\{ext}\\shell"
+        # 清掉旧的打开项，只保留解压
+        _delete_verb(winreg, base, _OPEN_KEY)
+        _create_verb(
+            winreg,
+            base,
+            _EXTRACT_KEY,
+            _EXTRACT_LABEL,
+            extract_cmd,
+            position="Top",
+        )
 
 
 def _register_capabilities(winreg, exts: Iterable[str]) -> None:
@@ -372,22 +392,6 @@ def _try_set_as_default(exts: Iterable[str]) -> None:
         pass
 
 
-def _register_extract_everywhere(winreg, open_cmd: str, extract_cmd: str) -> None:
-    """在 SystemFileAssociations 注册解压/打开，确保非默认时右键也有入口。"""
-    classes = "Software\\Classes"
-    for ext in _EXTRACT_EXTS:
-        base = f"{classes}\\SystemFileAssociations\\{ext}\\shell"
-        _create_verb(
-            winreg,
-            base,
-            _EXTRACT_KEY,
-            _EXTRACT_LABEL,
-            extract_cmd,
-            position="Top",
-        )
-        _create_verb(winreg, base, _OPEN_KEY, _OPEN_LABEL, open_cmd)
-
-
 def install() -> None:
     """注册文件关联与右键菜单。"""
     _require_windows()
@@ -398,13 +402,13 @@ def install() -> None:
     open_cmd = _launcher("--open")
     classes = "Software\\Classes"
 
-    # 1) ProgID：图标 + 双击打开（预览）+ 右键解压
+    # 1) ProgID：双击 = 预览；右键顶部 = 解压到当前文件夹
     _register_progid(winreg, open_cmd, extract_cmd)
 
     # 2) Applications 注册（打开方式列表）
     _register_application(winreg, open_cmd, extract_cmd)
 
-    # 3) 扩展名关联（含清除 UserChoice，并在扩展名下挂右键）
+    # 3) 扩展名关联（清掉 .ext\\shell 旧动词，避免双击变解压）
     for ext in _EXTRACT_EXTS:
         _associate_extension(winreg, ext, open_cmd, extract_cmd)
 
@@ -423,7 +427,7 @@ def install() -> None:
         compress_cmd,
     )
 
-    # 6) SystemFileAssociations 兜底右键
+    # 6) SystemFileAssociations：仅注册解压（靠前），不注册打开
     _register_extract_everywhere(winreg, open_cmd, extract_cmd)
 
     # 7) 尝试 COM 设为默认

@@ -290,6 +290,63 @@ def _archive_stem(archive: Path) -> str:
     stem = archive.stem
     return stem or "archive"
 
+
+def _top_level_names(member_names: Sequence[str]) -> List[str]:
+    """从压缩包条目名中提取顶层文件/目录名（去重、保序）。"""
+    seen = set()
+    tops: List[str] = []
+    for raw in member_names:
+        name = _normalize_member_name(fix_archive_filename(raw))
+        if not name:
+            continue
+        top = name.split("/", 1)[0]
+        if not top or top in seen or top in (".", ".."):
+            continue
+        seen.add(top)
+        tops.append(top)
+    return tops
+
+
+def _strip_member_prefix(name: str, prefix: Optional[str]) -> Optional[str]:
+    """去掉唯一根目录前缀；若条目就是根目录本身则返回 None（跳过）。"""
+    norm = _normalize_member_name(name)
+    if not prefix:
+        return norm
+    if norm == prefix:
+        return None
+    head = prefix + "/"
+    if norm.startswith(head):
+        return norm[len(head) :]
+    return norm
+
+
+def _plan_extract_destination(
+    archive: Path,
+    output_dir: Optional[os.PathLike | str],
+    member_names: Sequence[str],
+) -> Tuple[Path, Optional[str]]:
+    """计算解压目录，并决定是否剥掉包内唯一根目录（避免套两层）。
+
+    - 包内只有一个顶层目录：解压到 ``父目录/该目录名``，并剥掉该前缀
+      （``proj.zip`` 含 ``proj/a.txt`` → ``./proj/a.txt``，不会变成 ``proj/proj/a.txt``）
+    - 否则：解压到 ``父目录/压缩包名``，不剥前缀
+    - 目标已存在时自动 `` (1)``、`` (2)``…
+    """
+    base = Path(output_dir) if output_dir else archive.parent
+    tops = _top_level_names(member_names)
+    if len(tops) == 1:
+        only = tops[0]
+        # 唯一顶层是目录（存在 only/xxx 子路径）时，剥掉该层
+        is_wrapper_dir = any(
+            _normalize_member_name(fix_archive_filename(n)).startswith(only + "/")
+            for n in member_names
+        )
+        if is_wrapper_dir:
+            return _unique_path(base / only), only
+    stem = _archive_stem(archive)
+    return _unique_path(base / stem), None
+
+
 def _iter_files(paths: Sequence[Path]):
     """展开目录，产出 (绝对文件路径, 压缩包内相对路径)。
 
@@ -760,15 +817,8 @@ def _safe_join(base: Path, *paths: str) -> Path:
     return target
 
 
-def _extract_dir_for(archive: Path, output_dir: Optional[os.PathLike | str]) -> Path:
-    """确定解压目标目录。
-
-    在「当前文件夹」或用户指定文件夹下，创建与压缩包同名的子目录；
-    若该目录已存在（例如再次解压），则自动命名为 ``demo (1)``、``demo (2)``…
-    不会把用户选中的文件夹本身改名为「文件夹 (1)」。
-    """
-    base = Path(output_dir) if output_dir else archive.parent
-    return _unique_path(base / _archive_stem(archive))
+def _normalize_member_name(name: str) -> str:
+    return name.replace("\\", "/").strip("/")
 
 
 def _extract_zip(
@@ -776,26 +826,39 @@ def _extract_zip(
     dest: Path,
     progress: Optional[ProgressCallback],
     password: Optional[str],
+    strip_prefix: Optional[str] = None,
 ):
     zf, members = _open_best_zip(archive, password)
     try:
         total = len(members) or 1
         for i, member in enumerate(members, start=1):
             # 修正中文文件名后再解压，避免落盘乱码。
-            member.filename = fix_archive_filename(member.filename).replace("\\", "/")
-            _safe_join(dest, member.filename)
+            fixed = fix_archive_filename(member.filename).replace("\\", "/")
+            # 先按原始相对路径做穿越检查，再剥前缀
+            _safe_join(dest, fixed)
+            rel = _strip_member_prefix(fixed, strip_prefix)
+            if rel is None:
+                if progress:
+                    progress(i, total, fixed)
+                continue
+            member.filename = rel
             try:
                 zf.extract(member, dest)
             except RuntimeError as exc:
                 _raise_password_error(exc)
                 raise
             if progress:
-                progress(i, total, member.filename)
+                progress(i, total, rel)
     finally:
         zf.close()
 
 
-def _extract_tar(archive: Path, dest: Path, progress: Optional[ProgressCallback]):
+def _extract_tar(
+    archive: Path,
+    dest: Path,
+    progress: Optional[ProgressCallback],
+    strip_prefix: Optional[str] = None,
+):
     # Python 3.12+ 支持 filter='data'，可拒绝危险的 tar 条目并抑制弃用警告。
     supports_filter = sys.version_info >= (3, 12)
     with tarfile.open(archive) as tf:
@@ -803,12 +866,18 @@ def _extract_tar(archive: Path, dest: Path, progress: Optional[ProgressCallback]
         total = len(members) or 1
         for i, member in enumerate(members, start=1):
             _safe_join(dest, member.name)
+            rel = _strip_member_prefix(member.name, strip_prefix)
+            if rel is None:
+                if progress:
+                    progress(i, total, member.name)
+                continue
+            member.name = rel
             if supports_filter:
                 tf.extract(member, dest, filter="data")
             else:
                 tf.extract(member, dest)
             if progress:
-                progress(i, total, member.name)
+                progress(i, total, rel)
 
 
 def _extract_plain(archive: Path, dest: Path, progress: Optional[ProgressCallback]):
@@ -836,11 +905,44 @@ def _extract_plain(archive: Path, dest: Path, progress: Optional[ProgressCallbac
         progress(1, 1, out_name)
 
 
+def _hoist_stripped_root(dest: Path, strip_prefix: str) -> None:
+    """若解压后出现 dest/prefix/…，把内容提升到 dest/，去掉多余的一层。"""
+    nested = dest / strip_prefix
+    if not nested.exists():
+        return
+    for child in list(nested.iterdir()):
+        target = dest / child.name
+        if target.exists():
+            target = _unique_path(target)
+        try:
+            child.rename(target)
+        except OSError:
+            # 跨设备等失败时尝试拷贝
+            import shutil
+
+            if child.is_dir():
+                shutil.copytree(child, target, dirs_exist_ok=True)
+                shutil.rmtree(child, ignore_errors=True)
+            else:
+                shutil.copy2(child, target)
+                try:
+                    child.unlink()
+                except OSError:
+                    pass
+    try:
+        nested.rmdir()
+    except OSError:
+        import shutil
+
+        shutil.rmtree(nested, ignore_errors=True)
+
+
 def _extract_7z(
     archive: Path,
     dest: Path,
     progress: Optional[ProgressCallback],
     password: Optional[str],
+    strip_prefix: Optional[str] = None,
 ):
     if not HAS_7Z:
         raise ArchiveError("解压 7z 需要安装 py7zr（pip install py7zr）。")
@@ -855,6 +957,8 @@ def _extract_7z(
             zf.extractall(path=dest)
             if progress:
                 progress(total, total, archive.name)
+        if strip_prefix:
+            _hoist_stripped_root(dest, strip_prefix)
     except PasswordRequiredError:
         raise
     except Exception as exc:
@@ -869,6 +973,7 @@ def _extract_rar(
     dest: Path,
     progress: Optional[ProgressCallback],
     password: Optional[str],
+    strip_prefix: Optional[str] = None,
 ):
     try:
         with _open_rar(archive, password) as rf:
@@ -908,6 +1013,8 @@ def _extract_rar(
                         pass
             if progress:
                 progress(total, total, archive.name)
+        if strip_prefix:
+            _hoist_stripped_root(dest, strip_prefix)
     except PasswordRequiredError:
         raise
     except ArchiveError:
@@ -929,7 +1036,8 @@ def extract_archive(
 
     :param archive: 压缩包路径。
     :param output_dir: 输出「父」目录；缺省为压缩包所在目录。
-        实际会在其下创建与压缩包同名的子目录；若已存在则自动加 `` (1)``、`` (2)``…
+        实际会在其下创建合适的子目录；若已存在则自动加 `` (1)``、`` (2)``…
+        若包内只有一层同名根目录，会剥掉避免套两层。
     :param progress: 进度回调 ``(done, total, name)``。
     :param password: 解压加密压缩包时的密码。
     :returns: 实际解压到的目录。
@@ -938,20 +1046,31 @@ def extract_archive(
     if not archive_path.is_file():
         raise ArchiveError(f"文件不存在：{archive_path}")
 
-    dest = _extract_dir_for(archive_path, output_dir)
+    pwd = (password or "").strip() or None
+    # 先列出条目，用于决定目标目录与是否剥根目录
+    try:
+        members = list_archive(archive_path, password=pwd)
+        member_names = [m.name for m in members]
+    except PasswordRequiredError:
+        raise
+    except Exception:
+        member_names = []
+
+    dest, strip_prefix = _plan_extract_destination(
+        archive_path, output_dir, member_names
+    )
     dest.mkdir(parents=True, exist_ok=True)
     lower = archive_path.name.lower()
-    pwd = (password or "").strip() or None
 
     try:
         if lower.endswith(_ZIP_SUFFIXES):
-            _extract_zip(archive_path, dest, progress, pwd)
+            _extract_zip(archive_path, dest, progress, pwd, strip_prefix)
         elif lower.endswith(_TAR_SUFFIXES) or tarfile.is_tarfile(archive_path):
-            _extract_tar(archive_path, dest, progress)
+            _extract_tar(archive_path, dest, progress, strip_prefix)
         elif lower.endswith(".7z"):
-            _extract_7z(archive_path, dest, progress, pwd)
+            _extract_7z(archive_path, dest, progress, pwd, strip_prefix)
         elif lower.endswith(".rar"):
-            _extract_rar(archive_path, dest, progress, pwd)
+            _extract_rar(archive_path, dest, progress, pwd, strip_prefix)
         elif lower.endswith(_PLAIN_SUFFIXES):
             _extract_plain(archive_path, dest, progress)
         else:
@@ -963,10 +1082,6 @@ def extract_archive(
         raise ArchiveError(f"解压失败：{exc}") from exc
 
     return dest
-
-
-def _normalize_member_name(name: str) -> str:
-    return name.replace("\\", "/").strip("/")
 
 
 def extract_member(

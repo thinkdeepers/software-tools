@@ -47,10 +47,11 @@ def test_compress_then_extract_roundtrip(tmp_path):
     zip_path = core.compress_to_zip([src], output=tmp_path / "out.zip")
 
     dest = core.extract_archive(zip_path, output_dir=tmp_path / "unpacked")
-    # 在指定父目录下创建与压缩包同名的子目录 out/
-    assert dest == tmp_path / "unpacked" / "out"
-    assert (dest / "proj" / "a.txt").read_text(encoding="utf-8") == "hello"
-    assert (dest / "proj" / "sub" / "b.txt").read_text(encoding="utf-8") == "world"
+    # 包内唯一根目录为 proj/ → 解压到 unpacked/proj，并剥掉一层
+    assert dest == tmp_path / "unpacked" / "proj"
+    assert (dest / "a.txt").read_text(encoding="utf-8") == "hello"
+    assert (dest / "sub" / "b.txt").read_text(encoding="utf-8") == "world"
+    assert not (dest / "proj").exists()
 
 
 def test_extract_into_existing_dir_not_renamed(tmp_path):
@@ -99,6 +100,21 @@ def test_extract_default_goes_to_archive_parent(tmp_path):
     dest = core.extract_archive(archive)
     assert dest == tmp_path / "pack"
     assert (dest / "a.txt").read_text(encoding="utf-8") == "here"
+
+
+def test_extract_avoids_double_folder(tmp_path):
+    """压缩文件夹后再解压，不应出现 proj/proj/ 两层。"""
+    src = tmp_path / "proj"
+    src.mkdir()
+    (src / "a.txt").write_text("one-layer", encoding="utf-8")
+    archives = tmp_path / "archives"
+    archives.mkdir()
+    archive = core.compress_to_zip([src], output=archives / "proj.zip")
+
+    dest = core.extract_archive(archive, output_dir=tmp_path / "out")
+    assert dest == tmp_path / "out" / "proj"
+    assert (dest / "a.txt").read_text(encoding="utf-8") == "one-layer"
+    assert not (dest / "proj").exists()
 
 
 def test_extract_member_opens_single_file(tmp_path):
