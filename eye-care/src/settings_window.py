@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import (
 
 from config import AppConfig, save_config
 from icon import get_app_icon, render_app_pixmap
-from theme import APP_STYLESHEET, MAIN_WINDOW_EXTRA
+from theme import MAIN_WINDOW_EXTRA, build_stylesheet
 
 
 class SliderRow(QWidget):
@@ -74,7 +74,7 @@ class MainWindow(QWidget):
             | Qt.WindowType.WindowMinimizeButtonHint
         )
         self.setMinimumSize(500, 520)
-        self.setStyleSheet(APP_STYLESHEET + MAIN_WINDOW_EXTRA)
+        self.setStyleSheet(build_stylesheet() + MAIN_WINDOW_EXTRA)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(20, 16, 20, 12)

@@ -1,42 +1,67 @@
 """应用全局主题样式"""
 
-APP_STYLESHEET = """
-* {
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+
+def _assets_dir() -> Path:
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS) / "assets"
+    return Path(__file__).resolve().parent.parent / "assets"
+
+
+def _qss_path(filename: str) -> str:
+    """Qt stylesheet url() 需要正斜杠路径"""
+    return (_assets_dir() / filename).as_posix()
+
+
+def build_stylesheet() -> str:
+    check_on = _qss_path("checkbox_on.png")
+    check_off = _qss_path("checkbox_off.png")
+
+    return f"""
+* {{
     font-family: "Microsoft YaHei UI", "Segoe UI", "PingFang SC", sans-serif;
     font-size: 13px;
-}
+}}
 
-QWidget#MainWindow {
+QWidget#MainWindow {{
     background-color: #f0fdf4;
-}
+}}
 
-QTabWidget::pane {
+QTabWidget::pane {{
     border: none;
     background: transparent;
     top: -1px;
-}
+}}
 
-QTabBar::tab {
-    background: #dcfce7;
-    color: #166534;
+QTabBar::tab {{
+    background: transparent;
+    color: #64748b;
     border: none;
-    border-radius: 10px;
-    padding: 8px 18px;
-    margin: 4px 3px;
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
+    padding: 10px 16px;
+    margin: 0 2px;
     min-width: 72px;
-}
+}}
 
-QTabBar::tab:selected {
-    background: #22c55e;
-    color: white;
+QTabBar::tab:selected {{
+    background: transparent;
+    color: #15803d;
     font-weight: bold;
-}
+    border-bottom: 2px solid #22c55e;
+}}
 
-QTabBar::tab:hover:!selected {
-    background: #bbf7d0;
-}
+QTabBar::tab:hover:!selected {{
+    color: #166534;
+    background: #ecfdf5;
+    border-radius: 8px;
+}}
 
-QGroupBox {
+QGroupBox {{
     background: #ffffff;
     border: 1px solid #d1fae5;
     border-radius: 14px;
@@ -44,76 +69,82 @@ QGroupBox {
     padding: 18px 14px 12px 14px;
     font-weight: 600;
     color: #14532d;
-}
+}}
 
-QGroupBox::title {
+QGroupBox::title {{
     subcontrol-origin: margin;
     left: 14px;
     padding: 0 6px;
     color: #15803d;
-}
+}}
 
-QLabel {
+QLabel {{
     color: #334155;
-}
+}}
 
-QCheckBox {
+QCheckBox {{
     color: #1e293b;
-    spacing: 8px;
-}
+    spacing: 10px;
+}}
 
-QCheckBox::indicator {
-    width: 18px;
-    height: 18px;
-    border-radius: 5px;
-    border: 2px solid #86efac;
-    background: white;
-}
+QCheckBox::indicator {{
+    width: 20px;
+    height: 20px;
+    border: none;
+    background: transparent;
+}}
 
-QCheckBox::indicator:checked {
-    background: #22c55e;
-    border-color: #16a34a;
-}
+QCheckBox::indicator:unchecked {{
+    image: url("{check_off}");
+}}
 
-QComboBox, QSpinBox, QTimeEdit {
+QCheckBox::indicator:checked {{
+    image: url("{check_on}");
+}}
+
+QCheckBox::indicator:hover {{
+    opacity: 0.9;
+}}
+
+QComboBox, QSpinBox, QTimeEdit {{
     background: #ffffff;
     border: 1px solid #bbf7d0;
     border-radius: 8px;
     padding: 6px 10px;
     color: #1e293b;
     min-height: 20px;
-}
+}}
 
-QComboBox:hover, QSpinBox:hover, QTimeEdit:hover {
+QComboBox:hover, QSpinBox:hover, QTimeEdit:hover {{
     border-color: #4ade80;
-}
+}}
 
-QComboBox::drop-down {
+QComboBox::drop-down {{
     border: none;
     width: 24px;
-}
+}}
 
-QSlider::groove:horizontal {
+QSlider::groove:horizontal {{
     height: 6px;
     background: #dcfce7;
     border-radius: 3px;
-}
+}}
 
-QSlider::handle:horizontal {
+QSlider::handle:horizontal {{
     width: 18px;
     height: 18px;
     margin: -6px 0;
-    background: #22c55e;
-    border: 2px solid #ffffff;
+    background: #ffffff;
+    border: 2px solid #22c55e;
     border-radius: 9px;
-}
+}}
 
-QSlider::sub-page:horizontal {
+QSlider::sub-page:horizontal {{
     background: #86efac;
     border-radius: 3px;
-}
+}}
 
-QPushButton {
+QPushButton {{
     background: #22c55e;
     color: white;
     border: none;
@@ -121,51 +152,52 @@ QPushButton {
     padding: 9px 22px;
     font-weight: 600;
     min-width: 80px;
-}
+}}
 
-QPushButton:hover {
+QPushButton:hover {{
     background: #16a34a;
-}
+}}
 
-QPushButton:pressed {
+QPushButton:pressed {{
     background: #15803d;
-}
+}}
 
-QPushButton#secondaryBtn {
+QPushButton#secondaryBtn {{
     background: #ffffff;
     color: #15803d;
     border: 1.5px solid #86efac;
-}
+}}
 
-QPushButton#secondaryBtn:hover {
+QPushButton#secondaryBtn:hover {{
     background: #f0fdf4;
     border-color: #4ade80;
-}
+}}
 
-QMenu {
+QMenu {{
     background: #ffffff;
     border: 1px solid #d1fae5;
     border-radius: 10px;
     padding: 6px;
-}
+}}
 
-QMenu::item {
+QMenu::item {{
     padding: 8px 28px 8px 16px;
     border-radius: 6px;
     color: #1e293b;
-}
+}}
 
-QMenu::item:selected {
-    background: #dcfce7;
+QMenu::item:selected {{
+    background: #ecfdf5;
     color: #14532d;
-}
+}}
 
-QMenu::separator {
+QMenu::separator {{
     height: 1px;
     background: #ecfdf5;
     margin: 4px 8px;
-}
+}}
 """
+
 
 MAIN_WINDOW_EXTRA = """
 QLabel#appTitle {
@@ -180,8 +212,9 @@ QLabel#appSubtitle {
 }
 
 QLabel#statusBadge {
-    background: #dcfce7;
+    background: #ecfdf5;
     color: #15803d;
+    border: 1px solid #86efac;
     border-radius: 12px;
     padding: 4px 12px;
     font-size: 12px;
@@ -189,8 +222,9 @@ QLabel#statusBadge {
 }
 
 QLabel#statusBadge[off="true"] {
-    background: #f1f5f9;
+    background: #f8fafc;
     color: #94a3b8;
+    border: 1px solid #e2e8f0;
 }
 
 QLabel#footer {
@@ -200,3 +234,6 @@ QLabel#footer {
     line-height: 1.5;
 }
 """
+
+# 兼容旧导入
+APP_STYLESHEET = build_stylesheet()

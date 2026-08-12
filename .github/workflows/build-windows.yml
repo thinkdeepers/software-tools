@@ -22,7 +22,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -r eye-care/requirements.txt pyinstaller
+          pip install -r eye-care/requirements.txt pyinstaller pillow
 
       - name: Verify app icon
         shell: pwsh
@@ -31,27 +31,44 @@ jobs:
           $bytes = [IO.File]::ReadAllBytes("eye-care/assets/icon.ico")
           $count = [BitConverter]::ToUInt16($bytes, 4)
           if ($count -lt 7) { throw "icon.ico must contain at least 7 sizes, got $count" }
-          Write-Host "icon.ico OK ($count sizes)"
+          $offset = [BitConverter]::ToUInt32($bytes, 18)
+          $biSize = [BitConverter]::ToUInt32($bytes, [int]$offset)
+          if ($biSize -ne 40) { throw "icon.ico must use BMP/DIB frames, biSize=$biSize" }
+          Write-Host "icon.ico OK ($count BMP sizes)"
+          if (-not (Test-Path eye-care/assets/checkbox_on.png)) { throw "checkbox icons missing" }
 
       - name: Build EXE
         working-directory: eye-care
-        run: pyinstaller --noconfirm --clean eye-care.spec
+        shell: pwsh
+        run: |
+          pyinstaller --noconfirm --clean eye-care.spec
+          if (-not (Test-Path dist/EyeCare.exe)) { throw "EyeCare.exe not built" }
+          # 复制中文文件名版本，方便用户识别
+          Copy-Item -Force dist/EyeCare.exe "dist/护眼卫士.exe"
+          $size = (Get-Item dist/EyeCare.exe).Length
+          Write-Host "Built EXE size: $size"
 
       - name: Copy to windows-install folder
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path eye-care/windows-install | Out-Null
-          Copy-Item -Force eye-care/dist/护眼卫士.exe eye-care/windows-install/护眼卫士.exe
+          Copy-Item -Force eye-care/dist/EyeCare.exe eye-care/windows-install/EyeCare.exe
+          Copy-Item -Force "eye-care/dist/护眼卫士.exe" "eye-care/windows-install/护眼卫士.exe"
+          Copy-Item -Force eye-care/assets/icon.ico eye-care/windows-install/icon.ico
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: 护眼卫士-Windows
-          path: eye-care/dist/护眼卫士.exe
+          path: |
+            eye-care/dist/EyeCare.exe
+            eye-care/dist/护眼卫士.exe
           retention-days: 30
 
       - name: Create Release asset (on tag)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: eye-care/dist/护眼卫士.exe
+          files: |
+            eye-care/dist/EyeCare.exe
+            eye-care/dist/护眼卫士.exe

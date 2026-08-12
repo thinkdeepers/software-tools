@@ -22,7 +22,7 @@ from filter_manager import FilterManager
 from settings_window import MainWindow
 from tray import TrayManager
 from icon import get_app_icon
-from theme import APP_STYLESHEET
+from theme import build_stylesheet
 from win_utils import (
     IS_WINDOWS,
     activate_existing_instance,
@@ -168,7 +168,7 @@ def main() -> int:
     app.setApplicationName("护眼卫士")
     app.setQuitOnLastWindowClosed(False)
     app.setWindowIcon(get_app_icon())
-    app.setStyleSheet(APP_STYLESHEET)
+    app.setStyleSheet(build_stylesheet())
 
     if not QSystemTrayIcon.isSystemTrayAvailable():
         QMessageBox.critical(None, "护眼卫士", "系统托盘不可用，程序无法运行。")

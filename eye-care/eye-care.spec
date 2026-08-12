@@ -1,27 +1,38 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller 打包配置 - Windows EXE"""
 
-import sys
 from pathlib import Path
 
 block_cipher = None
 root = Path(SPECPATH)
 src = root / "src"
-icon_file = root / "assets" / "icon.ico"
+assets = root / "assets"
+icon_file = assets / "icon.ico"
+version_file = assets / "version_info.txt"
+
 if not icon_file.exists():
-    raise FileNotFoundError(f"缺少应用图标: {icon_file}，请先运行 python scripts/generate_icon.py")
+    raise FileNotFoundError(
+        f"缺少应用图标: {icon_file}，请先运行 python scripts/generate_icon.py"
+    )
 
 a = Analysis(
     [str(src / "main.py")],
     pathex=[str(src)],
     binaries=[],
-    datas=[],
+    datas=[
+        (str(assets / "checkbox_on.png"), "assets"),
+        (str(assets / "checkbox_off.png"), "assets"),
+        (str(assets / "icon.png"), "assets"),
+        (str(assets / "icon.ico"), "assets"),
+    ],
     hiddenimports=[
         "PyQt6.QtCore",
         "PyQt6.QtGui",
         "PyQt6.QtWidgets",
         "gamma_filter",
         "filter_manager",
+        "icon",
+        "theme",
     ],
     hookspath=[],
     hooksconfig={},
@@ -35,6 +46,7 @@ a = Analysis(
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
+# 使用 ASCII 文件名打包，Windows 资源管理器对图标嵌入兼容性更好
 exe = EXE(
     pyz,
     a.scripts,
@@ -42,7 +54,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name="护眼卫士",
+    name="EyeCare",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -55,6 +67,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=str(icon_file),
+    icon=str(icon_file.resolve()),
+    version=str(version_file.resolve()) if version_file.exists() else None,
     uac_admin=False,
 )
