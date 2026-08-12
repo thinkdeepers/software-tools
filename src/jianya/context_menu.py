@@ -7,7 +7,7 @@
 - 常见压缩包（.zip/.7z/.rar/.tar/.gz/.tgz/.bz2/.xz…）图标变为简压图标；
 - 双击压缩包默认由简压打开并预览内容；
 - 右键任意文件/文件夹可「压缩为 ZIP（简压）」；
-- 右键压缩包可「解压到此处（简压）」。
+- 右键压缩包顶部显示「解压到当前文件夹（简压）」。
 """
 
 from __future__ import annotations
@@ -23,10 +23,15 @@ _EXTRACT_EXTS = [
 
 _COMPRESS_KEY = "Jianya.Compress"
 _EXTRACT_KEY = "Jianya.Extract"
+_OPEN_KEY = "Jianya.Open"
 _PROGID = "Jianya.Archive"
 _APP_NAME = "简压"
 _CAPABILITIES_PATH = f"Software\\{_APP_NAME}\\Capabilities"
 _REGISTERED_APPS = "Software\\RegisteredApplications"
+
+_EXTRACT_LABEL = "解压到当前文件夹（简压）"
+_OPEN_LABEL = "用简压打开"
+_COMPRESS_LABEL = "压缩为 ZIP（简压）"
 
 
 class ContextMenuError(Exception):
@@ -123,14 +128,26 @@ def _delete_key_tree(winreg, path: str) -> None:
         pass
 
 
-def _create_verb(winreg, base_path: str, verb_key: str, label: str, command: str):
+def _create_verb(
+    winreg,
+    base_path: str,
+    verb_key: str,
+    label: str,
+    command: str,
+    *,
+    position: Optional[str] = None,
+) -> None:
     """在 ``base_path`` 下创建一个右键动词（含 command 子键）。"""
     verb_path = f"{base_path}\\{verb_key}"
     with winreg.CreateKey(winreg.HKEY_CURRENT_USER, verb_path) as key:
         winreg.SetValueEx(key, None, 0, winreg.REG_SZ, label)
+        # MUIVerb 让新版资源管理器更稳定显示文案
+        winreg.SetValueEx(key, "MUIVerb", 0, winreg.REG_SZ, label)
         icon = _icon()
         if icon:
             winreg.SetValueEx(key, "Icon", 0, winreg.REG_SZ, icon)
+        if position:
+            winreg.SetValueEx(key, "Position", 0, winreg.REG_SZ, position)
     with winreg.CreateKey(winreg.HKEY_CURRENT_USER, f"{verb_path}\\command") as key:
         winreg.SetValueEx(key, None, 0, winreg.REG_SZ, command)
 
@@ -143,6 +160,7 @@ def _register_progid(winreg, open_cmd: str, extract_cmd: str) -> None:
     """注册 ProgID：决定压缩包的显示名称、图标与双击打开行为。"""
     classes = "Software\\Classes"
     progid_path = f"{classes}\\{_PROGID}"
+    shell = f"{progid_path}\\shell"
 
     _set_sz(winreg, progid_path, None, "简压压缩包")
     _set_sz(winreg, progid_path, "FriendlyTypeName", "简压压缩包")
@@ -151,46 +169,64 @@ def _register_progid(winreg, open_cmd: str, extract_cmd: str) -> None:
     if icon:
         _set_sz(winreg, f"{progid_path}\\DefaultIcon", None, icon)
 
-    # 双击 → 用简压预览
-    _set_sz(winreg, f"{progid_path}\\shell\\open", None, "用简压打开")
-    if icon:
-        _set_sz(winreg, f"{progid_path}\\shell\\open", "Icon", icon)
-    _set_sz(winreg, f"{progid_path}\\shell\\open\\command", None, open_cmd)
-
-    # ProgID 上再挂一个「解压到此处」动词
+    # 双击仍打开预览；右键顶部优先「解压到当前文件夹」
+    _create_verb(winreg, shell, "open", _OPEN_LABEL, open_cmd)
     _create_verb(
-        winreg, f"{progid_path}\\shell", _EXTRACT_KEY, "解压到此处（简压）", extract_cmd
+        winreg,
+        shell,
+        _EXTRACT_KEY,
+        _EXTRACT_LABEL,
+        extract_cmd,
+        position="Top",
     )
+    # shell 默认动词 = open（双击预览）；解压靠 Position=Top 靠前显示
+    _set_sz(winreg, shell, None, "open")
 
 
-def _register_application(winreg, open_cmd: str) -> None:
+def _register_application(winreg, open_cmd: str, extract_cmd: str) -> None:
     """注册到 Applications，便于“打开方式”与默认应用识别。"""
     app = _exe_basename()
     base = f"Software\\Classes\\Applications\\{app}"
+    shell = f"{base}\\shell"
     _set_sz(winreg, base, "FriendlyAppName", _APP_NAME)
     icon = _icon()
     if icon:
         _set_sz(winreg, f"{base}\\DefaultIcon", None, icon)
-    _set_sz(winreg, f"{base}\\shell\\open", None, "用简压打开")
-    if icon:
-        _set_sz(winreg, f"{base}\\shell\\open", "Icon", icon)
-    _set_sz(winreg, f"{base}\\shell\\open\\command", None, open_cmd)
+    _create_verb(winreg, shell, "open", _OPEN_LABEL, open_cmd)
+    _create_verb(
+        winreg,
+        shell,
+        _EXTRACT_KEY,
+        _EXTRACT_LABEL,
+        extract_cmd,
+        position="Top",
+    )
+    _set_sz(winreg, shell, None, "open")
     # 声明支持的扩展名
     for ext in _EXTRACT_EXTS:
         _set_sz(winreg, f"{base}\\SupportedTypes", ext, "")
+
+    # App Paths：帮助系统定位 exe
+    if getattr(sys, "frozen", False):
+        app_paths = (
+            "Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\"
+            + _exe_basename()
+        )
+        _set_sz(winreg, app_paths, None, sys.executable)
+        _set_sz(winreg, app_paths, "Path", os.path.dirname(sys.executable))
 
 
 def _clear_user_choice(winreg, ext: str) -> None:
     """尝试清除 Explorer 的 UserChoice，使 HKCU Classes 关联生效。
 
-    WinRAR 等软件常写入 UserChoice 锁定默认程序。删除后资源管理器会回退到
-    ``HKCU\\Software\\Classes\\{ext}`` 的 ProgID。失败时静默忽略。
+    Win10/11 的 UserChoice 带哈希保护，删除后可能被系统重建；
+    仍尽量清除，以便 HKCU ProgID 有机会接管。失败时静默忽略。
     """
     base = (
         "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\"
         f"FileExts\\{ext}"
     )
-    # 先清 UserChoice / UserChoiceLatest
+    # 先清 UserChoice / UserChoiceLatest（含可能的 Hash 子结构）
     for leaf in ("UserChoice", "UserChoiceLatest"):
         _delete_key_tree(winreg, f"{base}\\{leaf}")
     # 写入 OpenWithProgids，确保出现在打开方式中
@@ -204,10 +240,19 @@ def _clear_user_choice(winreg, ext: str) -> None:
         _set_sz(winreg, f"{base}\\OpenWithList", "MRUList", "a")
     except OSError:
         pass
+    # 取消「始终使用此应用」提示的屏蔽
+    try:
+        toast = (
+            "Software\\Microsoft\\Windows\\CurrentVersion\\"
+            "ApplicationAssociationToasts"
+        )
+        _set_sz(winreg, toast, f"{_PROGID}_{ext}", "0")
+    except OSError:
+        pass
 
 
-def _associate_extension(winreg, ext: str) -> None:
-    """把扩展名关联到 ProgID，使图标与默认打开程序生效。"""
+def _associate_extension(winreg, ext: str, open_cmd: str, extract_cmd: str) -> None:
+    """把扩展名关联到 ProgID，并直接在扩展名下挂右键动词。"""
     classes = "Software\\Classes"
     ext_path = f"{classes}\\{ext}"
 
@@ -216,14 +261,28 @@ def _associate_extension(winreg, ext: str) -> None:
 
     # 出现在「打开方式」列表中。
     _set_sz(winreg, f"{ext_path}\\OpenWithProgids", _PROGID, "")
+    try:
+        _set_none(winreg, f"{ext_path}\\OpenWithProgids", _PROGID)
+    except OSError:
+        pass
 
     # PerceivedType 帮助资源管理器把它识别为压缩包类型。
     _set_sz(winreg, ext_path, "PerceivedType", "compressed")
-
-    # Content Type
     _set_sz(winreg, ext_path, "Content Type", "application/x-compressed")
 
-    # 清掉可能被 WinRAR 锁定的 UserChoice（尤其是 .rar）
+    # 扩展名自身的 shell（部分场景 ProgID 未接管时仍能显示右键）
+    shell = f"{ext_path}\\shell"
+    _create_verb(
+        winreg,
+        shell,
+        _EXTRACT_KEY,
+        _EXTRACT_LABEL,
+        extract_cmd,
+        position="Top",
+    )
+    _create_verb(winreg, shell, _OPEN_KEY, _OPEN_LABEL, open_cmd)
+
+    # 清掉可能被其它软件锁定的 UserChoice
     _clear_user_choice(winreg, ext)
 
 
@@ -236,6 +295,9 @@ def _register_capabilities(winreg, exts: Iterable[str]) -> None:
         "ApplicationDescription",
         "免费、简洁、无广告的压缩/解压工具",
     )
+    icon = _icon()
+    if icon:
+        _set_sz(winreg, _CAPABILITIES_PATH, "ApplicationIcon", icon)
     for ext in exts:
         _set_sz(winreg, f"{_CAPABILITIES_PATH}\\FileAssociations", ext, _PROGID)
 
@@ -243,17 +305,87 @@ def _register_capabilities(winreg, exts: Iterable[str]) -> None:
 
 
 def _try_set_as_default(exts: Iterable[str]) -> None:
-    """尽量通过系统 API 把简压设为各扩展名的默认程序（Win8+）。"""
+    """尽量通过系统 COM API 把简压设为各扩展名的默认程序（Win8+）。"""
     try:
         import ctypes
         from ctypes import wintypes
+        from uuid import UUID
 
-        # IApplicationAssociationRegistration::SetAppAsDefault
-        # 通过 ole32/COM 调用不稳定，这里额外用 AssocSetValue 风格的 Classes 写入即可。
-        # 再通知 Shell 刷新。
-        _ = (ctypes, wintypes)
+        ole32 = ctypes.windll.ole32
+        ole32.CoInitialize(None)
+
+        class GUID(ctypes.Structure):
+            _fields_ = [
+                ("Data1", ctypes.c_ulong),
+                ("Data2", ctypes.c_ushort),
+                ("Data3", ctypes.c_ushort),
+                ("Data4", ctypes.c_ubyte * 8),
+            ]
+
+            def __init__(self, uuid_str: str):
+                u = UUID(uuid_str)
+                ctypes.Structure.__init__(self)
+                self.Data1 = u.time_low
+                self.Data2 = u.time_mid
+                self.Data3 = u.time_hi_version
+                for i, b in enumerate(u.bytes[8:]):
+                    self.Data4[i] = b
+
+        # CLSID_ApplicationAssociationRegistration / IApplicationAssociationRegistration
+        CLSID = GUID("{591209c7-767b-42b2-9fba-44ee4615f2c7}")
+        IID = GUID("{4e530b0a-e611-4c77-a3ac-9031d022281b}")
+
+        punk = ctypes.c_void_p()
+        hr = ole32.CoCreateInstance(
+            ctypes.byref(CLSID),
+            None,
+            1,  # CLSCTX_INPROC_SERVER
+            ctypes.byref(IID),
+            ctypes.byref(punk),
+        )
+        if hr != 0 or not punk.value:
+            return
+
+        # vtable: QI, AddRef, Release, QueryCurrentDefault,
+        # QueryAppIsDefault, QueryAppIsDefaultAll, SetAppAsDefault, SetAppAsDefaultAll
+        vtbl = ctypes.cast(punk, ctypes.POINTER(ctypes.c_void_p)).contents
+        vtbl_ptr = ctypes.cast(vtbl, ctypes.POINTER(ctypes.c_void_p))
+
+        SetAppAsDefault = ctypes.WINFUNCTYPE(
+            ctypes.HRESULT,
+            ctypes.c_void_p,
+            wintypes.LPCWSTR,
+            wintypes.LPCWSTR,
+            ctypes.c_int,
+        )(vtbl_ptr[6])
+
+        AT_FILEEXTENSION = 0
+        for ext in exts:
+            try:
+                SetAppAsDefault(punk, _APP_NAME, ext, AT_FILEEXTENSION)
+            except Exception:
+                pass
+
+        Release = ctypes.WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)(vtbl_ptr[2])
+        Release(punk)
     except Exception:
         pass
+
+
+def _register_extract_everywhere(winreg, open_cmd: str, extract_cmd: str) -> None:
+    """在 SystemFileAssociations 注册解压/打开，确保非默认时右键也有入口。"""
+    classes = "Software\\Classes"
+    for ext in _EXTRACT_EXTS:
+        base = f"{classes}\\SystemFileAssociations\\{ext}\\shell"
+        _create_verb(
+            winreg,
+            base,
+            _EXTRACT_KEY,
+            _EXTRACT_LABEL,
+            extract_cmd,
+            position="Top",
+        )
+        _create_verb(winreg, base, _OPEN_KEY, _OPEN_LABEL, open_cmd)
 
 
 def install() -> None:
@@ -266,30 +398,35 @@ def install() -> None:
     open_cmd = _launcher("--open")
     classes = "Software\\Classes"
 
-    # 1) ProgID：图标 + 双击打开（预览）
+    # 1) ProgID：图标 + 双击打开（预览）+ 右键解压
     _register_progid(winreg, open_cmd, extract_cmd)
 
     # 2) Applications 注册（打开方式列表）
-    _register_application(winreg, open_cmd)
+    _register_application(winreg, open_cmd, extract_cmd)
 
-    # 3) 扩展名关联（含清除 UserChoice，重点修复 .rar）
+    # 3) 扩展名关联（含清除 UserChoice，并在扩展名下挂右键）
     for ext in _EXTRACT_EXTS:
-        _associate_extension(winreg, ext)
+        _associate_extension(winreg, ext, open_cmd, extract_cmd)
 
     # 4) 出现在系统「默认应用」中
     _register_capabilities(winreg, _EXTRACT_EXTS)
 
     # 5) 右键：任意文件/文件夹 → 压缩
-    _create_verb(winreg, f"{classes}\\*\\shell", _COMPRESS_KEY, "压缩为 ZIP（简压）", compress_cmd)
-    _create_verb(winreg, f"{classes}\\Directory\\shell", _COMPRESS_KEY, "压缩为 ZIP（简压）", compress_cmd)
+    _create_verb(
+        winreg, f"{classes}\\*\\shell", _COMPRESS_KEY, _COMPRESS_LABEL, compress_cmd
+    )
+    _create_verb(
+        winreg,
+        f"{classes}\\Directory\\shell",
+        _COMPRESS_KEY,
+        _COMPRESS_LABEL,
+        compress_cmd,
+    )
 
-    # 6) 右键：压缩包 → 解压（SystemFileAssociations，兼容未被 ProgID 接管的场景）
-    for ext in _EXTRACT_EXTS:
-        base = f"{classes}\\SystemFileAssociations\\{ext}\\shell"
-        _create_verb(winreg, base, _EXTRACT_KEY, "解压到此处（简压）", extract_cmd)
-        # 同时挂上“用简压打开”
-        _create_verb(winreg, base, "Jianya.Open", "用简压打开", open_cmd)
+    # 6) SystemFileAssociations 兜底右键
+    _register_extract_everywhere(winreg, open_cmd, extract_cmd)
 
+    # 7) 尝试 COM 设为默认
     _try_set_as_default(_EXTRACT_EXTS)
     _notify_shell_changed()
 
@@ -307,10 +444,17 @@ def uninstall() -> None:
     for ext in _EXTRACT_EXTS:
         base = f"{classes}\\SystemFileAssociations\\{ext}\\shell"
         _delete_verb(winreg, base, _EXTRACT_KEY)
-        _delete_verb(winreg, base, "Jianya.Open")
+        _delete_verb(winreg, base, _OPEN_KEY)
+        # 扩展名下的动词
+        _delete_verb(winreg, f"{classes}\\{ext}\\shell", _EXTRACT_KEY)
+        _delete_verb(winreg, f"{classes}\\{ext}\\shell", _OPEN_KEY)
 
-    # Applications
+    # Applications / App Paths
     _delete_key_tree(winreg, f"{classes}\\Applications\\{_exe_basename()}")
+    _delete_key_tree(
+        winreg,
+        "Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\" + _exe_basename(),
+    )
 
     # 扩展名：仅当仍指向我们的 ProgID 时才清除默认值
     for ext in _EXTRACT_EXTS:
@@ -362,6 +506,12 @@ def _notify_shell_changed() -> None:
 
         SHCNE_ASSOCCHANGED = 0x08000000
         SHCNF_IDLIST = 0x0000
-        ctypes.windll.shell32.SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, None, None)
+        ctypes.windll.shell32.SHChangeNotify(
+            SHCNE_ASSOCCHANGED, SHCNF_IDLIST, None, None
+        )
+        # 再刷一次，部分环境一次不够
+        ctypes.windll.shell32.SHChangeNotify(
+            SHCNE_ASSOCCHANGED, SHCNF_IDLIST, None, None
+        )
     except Exception:
         pass

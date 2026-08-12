@@ -3,7 +3,7 @@
 ; 编译：ISCC.exe installer\jianya.iss   （需先用 build_windows.py 生成 dist\简压.exe）
 
 #define MyAppName "简压"
-#define MyAppVersion "1.1.7"
+#define MyAppVersion "1.1.8"
 #define MyAppExeName "简压.exe"
 #define MyAppPublisher "简压"
 
@@ -32,7 +32,8 @@ Name: "chinesesimplified"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加图标:"
-Name: "contextmenu"; Description: "将简压设为压缩包默认打开程序，并加入右键菜单（推荐）"; GroupDescription: "系统集成:"
+; 默认勾选：安装后注册右键菜单与文件关联（可取消）
+Name: "contextmenu"; Description: "注册右键菜单，并将简压设为压缩包默认打开程序（推荐）"; GroupDescription: "系统集成:"; Flags: checkedonce
 
 [Files]
 Source: "..\dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
@@ -46,8 +47,8 @@ Name: "{group}\卸载 {#MyAppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
-; 安装完成后静默注册右键菜单
-Filename: "{app}\{#MyAppExeName}"; Parameters: "--install --quiet"; Tasks: contextmenu; Flags: runhidden; StatusMsg: "正在关联压缩包格式并注册右键菜单..."
+; 安装完成后注册右键菜单与文件关联（勾选「系统集成」时）
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--install --quiet"; Tasks: contextmenu; Flags: runhidden waituntilterminated; StatusMsg: "正在注册右键菜单与文件关联..."
 ; 安装结束可选立即运行
 Filename: "{app}\{#MyAppExeName}"; Description: "立即运行 {#MyAppName}"; Flags: nowait postinstall skipifsilent
 

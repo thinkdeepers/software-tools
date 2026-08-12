@@ -27,6 +27,10 @@ def test_launcher_open_and_extract_commands():
     assert extract_cmd.rstrip().endswith('"%1"')
 
 
+def test_extract_menu_label_is_current_folder():
+    assert "解压到当前文件夹" in context_menu._EXTRACT_LABEL
+
+
 def test_non_windows_install_raises(monkeypatch):
     monkeypatch.setattr(os, "name", "posix")
     try:

@@ -32,7 +32,7 @@ def test_extract_cli_with_password(tmp_path, monkeypatch):
     out = tmp_path / "out"
     code = cli._run_extract(str(archive), str(out), "abc")
     assert code == 0
-    assert (out / "x.txt").read_text(encoding="utf-8") == "cli-secret"
+    assert (out / "e" / "x.txt").read_text(encoding="utf-8") == "cli-secret"
 
 
 def test_extract_cli_wrong_password_then_cancel(tmp_path, monkeypatch):

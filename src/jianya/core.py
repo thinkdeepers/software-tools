@@ -6,7 +6,7 @@
   gz / bz2 / xz），并在安装了可选依赖时额外支持 7z / rar。
 - 预览：可列出压缩包内文件，供界面双击打开时浏览；也可解压单个文件以打开。
 - 密码：支持加密压缩，以及解压加密压缩包时传入密码。
-- 解压目标：默认解压到压缩包所在目录；指定目录时直接解压进去（不套同名子目录）。
+- 解压目标：在当前/指定文件夹下创建与压缩包同名的子目录；已存在则自动加 (1)/(2)…
 
 所有耗时操作都支持一个 ``progress`` 回调，方便界面显示进度。
 回调签名为 ``progress(done: int, total: int, name: str)``。
@@ -253,7 +253,10 @@ def _ensure_rar_ready() -> None:
 
 
 def _unique_path(path: Path) -> Path:
-    """若目标路径已存在，则在文件名后追加 (1)/(2)… 直到不冲突。"""
+    """若目标路径已存在，则在文件名后追加 (1)/(2)… 直到不冲突。
+
+    目录与无后缀文件同样适用：``demo`` → ``demo (1)``。
+    """
     if not path.exists():
         return path
     stem, suffix = path.stem, path.suffix
@@ -265,6 +268,9 @@ def _unique_path(path: Path) -> Path:
             stem = path.name[: -len(compound)]
             suffix = path.name[-len(compound) :]
             break
+    # 纯目录名（无后缀）时 stem 即 name
+    if suffix == "" and path.name != stem:
+        stem = path.name
     index = 1
     while True:
         candidate = parent / f"{stem} ({index}){suffix}"
@@ -272,6 +278,17 @@ def _unique_path(path: Path) -> Path:
             return candidate
         index += 1
 
+
+def _archive_stem(archive: Path) -> str:
+    """压缩包主文件名：demo.zip → demo，data.tar.gz → data。"""
+    name = archive.name
+    lower = name.lower()
+    for compound in (".tar.gz", ".tar.bz2", ".tar.xz"):
+        if lower.endswith(compound):
+            stem = name[: -len(compound)]
+            return stem or archive.stem
+    stem = archive.stem
+    return stem or "archive"
 
 def _iter_files(paths: Sequence[Path]):
     """展开目录，产出 (绝对文件路径, 压缩包内相对路径)。
@@ -746,12 +763,12 @@ def _safe_join(base: Path, *paths: str) -> Path:
 def _extract_dir_for(archive: Path, output_dir: Optional[os.PathLike | str]) -> Path:
     """确定解压目标目录。
 
-    - 指定 ``output_dir`` 时：解压到该目录（即用户选择的文件夹）。
-    - 未指定时：解压到压缩包所在的当前文件夹。
+    在「当前文件夹」或用户指定文件夹下，创建与压缩包同名的子目录；
+    若该目录已存在（例如再次解压），则自动命名为 ``demo (1)``、``demo (2)``…
+    不会把用户选中的文件夹本身改名为「文件夹 (1)」。
     """
-    if output_dir:
-        return Path(output_dir)
-    return archive.parent
+    base = Path(output_dir) if output_dir else archive.parent
+    return _unique_path(base / _archive_stem(archive))
 
 
 def _extract_zip(
@@ -911,9 +928,8 @@ def extract_archive(
     """将压缩包解压到目录。
 
     :param archive: 压缩包路径。
-    :param output_dir: 输出目录；缺省时解压到压缩包所在的当前文件夹。
-        指定目录时**直接解压到该目录**，不会再套一层同名子目录，
-        也不会因为目标目录已存在而改名。
+    :param output_dir: 输出「父」目录；缺省为压缩包所在目录。
+        实际会在其下创建与压缩包同名的子目录；若已存在则自动加 `` (1)``、`` (2)``…
     :param progress: 进度回调 ``(done, total, name)``。
     :param password: 解压加密压缩包时的密码。
     :returns: 实际解压到的目录。

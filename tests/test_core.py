@@ -47,13 +47,14 @@ def test_compress_then_extract_roundtrip(tmp_path):
     zip_path = core.compress_to_zip([src], output=tmp_path / "out.zip")
 
     dest = core.extract_archive(zip_path, output_dir=tmp_path / "unpacked")
-    assert dest == tmp_path / "unpacked"
+    # 在指定父目录下创建与压缩包同名的子目录 out/
+    assert dest == tmp_path / "unpacked" / "out"
     assert (dest / "proj" / "a.txt").read_text(encoding="utf-8") == "hello"
     assert (dest / "proj" / "sub" / "b.txt").read_text(encoding="utf-8") == "world"
 
 
 def test_extract_into_existing_dir_not_renamed(tmp_path):
-    """「解压到…」选中已有文件夹时，应直接解压进去，而不是改名为「文件夹 (1)」。"""
+    """「解压到…」选中已有文件夹时，应在其下创建同名子目录，而不是改名为「文件夹 (1)」。"""
     src = tmp_path / "note.txt"
     src.write_text("hi", encoding="utf-8")
     archive = core.compress_to_zip([src], output=tmp_path / "n.zip")
@@ -63,23 +64,41 @@ def test_extract_into_existing_dir_not_renamed(tmp_path):
     (chosen / "keep.txt").write_text("keep", encoding="utf-8")
 
     dest = core.extract_archive(archive, output_dir=chosen)
-    assert dest == chosen
+    assert dest == chosen / "n"
     assert not (tmp_path / "chosen (1)").exists()
-    assert (chosen / "note.txt").read_text(encoding="utf-8") == "hi"
+    assert (dest / "note.txt").read_text(encoding="utf-8") == "hi"
     assert (chosen / "keep.txt").read_text(encoding="utf-8") == "keep"
 
 
+def test_extract_again_creates_numbered_folder(tmp_path):
+    """目录已有解压结果时，再次解压应生成 demo (1) 等新目录。"""
+    src = tmp_path / "a.txt"
+    src.write_text("v1", encoding="utf-8")
+    archive = core.compress_to_zip([src], output=tmp_path / "demo.zip")
+
+    first = core.extract_archive(archive)
+    assert first == tmp_path / "demo"
+    assert (first / "a.txt").read_text(encoding="utf-8") == "v1"
+
+    src.write_text("v2", encoding="utf-8")
+    archive = core.compress_to_zip([src], output=tmp_path / "demo.zip")
+    # 覆盖原 zip 后再解压
+    second = core.extract_archive(archive)
+    assert second == tmp_path / "demo (1)"
+    assert (second / "a.txt").read_text(encoding="utf-8") == "v2"
+    # 原目录保持不变
+    assert (first / "a.txt").read_text(encoding="utf-8") == "v1"
+
+
 def test_extract_default_goes_to_archive_parent(tmp_path):
-    """未指定输出目录时，解压到压缩包所在的当前文件夹。"""
+    """未指定输出目录时，在压缩包所在目录下创建同名子目录。"""
     src = tmp_path / "a.txt"
     src.write_text("here", encoding="utf-8")
     archive = core.compress_to_zip([src], output=tmp_path / "pack.zip")
 
     dest = core.extract_archive(archive)
-    assert dest == tmp_path
-    assert (tmp_path / "a.txt").read_text(encoding="utf-8") == "here"
-    # 不应再创建同名子目录 pack/ 并把文件放进去
-    assert not (tmp_path / "pack" / "a.txt").exists()
+    assert dest == tmp_path / "pack"
+    assert (dest / "a.txt").read_text(encoding="utf-8") == "here"
 
 
 def test_extract_member_opens_single_file(tmp_path):
@@ -197,7 +216,7 @@ def test_compress_empty_inputs():
 def test_extract_targz_roundtrip(tmp_path):
     import tarfile
 
-    src = tmp_path / "data"
+    src = tmp_path / "srcdata"
     src.mkdir()
     (src / "f.txt").write_text("tar-content", encoding="utf-8")
     archive = tmp_path / "data.tar.gz"
@@ -205,8 +224,8 @@ def test_extract_targz_roundtrip(tmp_path):
         tf.add(src / "f.txt", arcname="f.txt")
 
     dest = core.extract_archive(archive)
-    assert dest == tmp_path
-    assert (tmp_path / "f.txt").read_text(encoding="utf-8") == "tar-content"
+    assert dest == tmp_path / "data"
+    assert (dest / "f.txt").read_text(encoding="utf-8") == "tar-content"
 
 
 def test_extract_gz_plain(tmp_path):
@@ -216,8 +235,9 @@ def test_extract_gz_plain(tmp_path):
     with gzip.open(archive, "wb") as f:
         f.write("plain".encode("utf-8"))
     dest = core.extract_archive(archive)
-    assert dest == tmp_path
-    assert (tmp_path / "single.txt").read_text(encoding="utf-8") == "plain"
+    # single.txt.gz → 同名目录 single.txt/ 下再放 single.txt 文件
+    assert dest == tmp_path / "single.txt"
+    assert (dest / "single.txt").read_text(encoding="utf-8") == "plain"
 
 
 def test_zip_slip_protection(tmp_path):

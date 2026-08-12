@@ -461,8 +461,8 @@ class _App:
     ) -> None:
         """供预览窗口调用。
 
-        ask_dir=True：「解压到…」弹出选目录，解压到用户选中的文件夹。
-        ask_dir=False：「解压到当前文件夹」直接解压到压缩包所在目录。
+        ask_dir=True：「解压到…」弹出选目录，在所选文件夹下创建同名目录（冲突则 (1)）。
+        ask_dir=False：「解压到当前文件夹」在压缩包所在目录下创建同名目录（冲突则 (1)）。
         """
         if self._busy:
             return
@@ -472,7 +472,7 @@ class _App:
                 return
             output = chosen
         else:
-            # 解压到压缩包所在的当前文件夹
+            # 父目录 = 压缩包所在处；实际子目录由 core 按同名+(1) 规则创建
             output = str(Path(archive).resolve().parent)
         self._start_task(self._do_extract, archive, output, password)
 
@@ -599,10 +599,13 @@ class _App:
             if install:
                 context_menu.install()
                 self._info(
-                    "已设为默认打开程序。\n"
-                    "· zip/7z/rar 等压缩包将显示简压图标\n"
+                    "已注册文件关联与右键菜单。\n"
+                    "· zip/7z/rar 等压缩包将优先用简压打开（显示简压图标）\n"
                     "· 双击压缩包可预览内容并解压\n"
-                    "· 右键文件可压缩，右键压缩包可解压"
+                    "· 右键压缩包可「解压到当前文件夹」\n"
+                    "· 右键文件/文件夹可「压缩为 ZIP」\n\n"
+                    "若个别格式仍不是默认，请到：\n"
+                    "设置 → 应用 → 默认应用 → 按文件类型，选「简压」。"
                 )
             else:
                 context_menu.uninstall()
