@@ -20,7 +20,9 @@ from break_timer import BreakOverlayManager, BreakTimer
 from config import AppConfig, load_config, save_config
 from filter_manager import FilterManager
 from settings_window import MainWindow
-from tray import TrayManager, _make_tray_icon
+from tray import TrayManager
+from icon import get_app_icon
+from theme import APP_STYLESHEET
 from win_utils import (
     IS_WINDOWS,
     activate_existing_instance,
@@ -165,7 +167,8 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("护眼卫士")
     app.setQuitOnLastWindowClosed(False)
-    app.setWindowIcon(_make_tray_icon())
+    app.setWindowIcon(get_app_icon())
+    app.setStyleSheet(APP_STYLESHEET)
 
     if not QSystemTrayIcon.isSystemTrayAvailable():
         QMessageBox.critical(None, "护眼卫士", "系统托盘不可用，程序无法运行。")

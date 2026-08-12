@@ -3,32 +3,11 @@
 from __future__ import annotations
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
-from PyQt6.QtGui import QAction, QIcon, QPixmap, QPainter, QColor, QFont
+from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import QMenu, QSystemTrayIcon
 
 from config import AppConfig
-
-
-def _make_tray_icon() -> QIcon:
-    size = 64
-    pix = QPixmap(size, size)
-    pix.fill(QColor(0, 0, 0, 0))
-    painter = QPainter(pix)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-
-    painter.setBrush(QColor(45, 106, 79))
-    painter.setPen(QColor(125, 211, 168))
-    painter.drawEllipse(4, 4, size - 8, size - 8)
-
-    font = QFont()
-    font.setPointSize(28)
-    font.setBold(True)
-    painter.setFont(font)
-    painter.setPen(QColor(255, 255, 255))
-    painter.drawText(pix.rect(), 0x84, "眼")  # AlignCenter
-
-    painter.end()
-    return QIcon(pix)
+from icon import get_app_icon
 
 
 class TrayManager(QObject):
@@ -40,7 +19,7 @@ class TrayManager(QObject):
     def __init__(self, config: AppConfig, parent: QObject | None = None):
         super().__init__(parent)
         self._config = config
-        self._tray = QSystemTrayIcon(_make_tray_icon(), parent)
+        self._tray = QSystemTrayIcon(get_app_icon(), parent)
         self._tray.setToolTip("护眼卫士 - 双击打开主界面")
 
         self._toggle_action = QAction("关闭护眼", self)
@@ -83,7 +62,6 @@ class TrayManager(QObject):
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
             self._open_main_window()
         elif reason == QSystemTrayIcon.ActivationReason.Trigger:
-            # Windows 托盘有时不触发 DoubleClick，用两次单击模拟双击
             self._click_count += 1
             if self._click_count >= 2:
                 self._open_main_window()

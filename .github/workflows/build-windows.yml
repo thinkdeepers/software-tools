@@ -22,7 +22,10 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -r eye-care/requirements.txt pyinstaller
+          pip install -r eye-care/requirements.txt pyinstaller pillow
+
+      - name: Generate app icon
+        run: python eye-care/scripts/generate_icon.py
 
       - name: Build EXE
         working-directory: eye-care

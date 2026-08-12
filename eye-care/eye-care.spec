@@ -7,6 +7,7 @@ from pathlib import Path
 block_cipher = None
 root = Path(SPECPATH)
 src = root / "src"
+icon_file = root / "assets" / "icon.ico"
 
 a = Analysis(
     [str(src / "main.py")],
@@ -52,5 +53,6 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=str(icon_file) if icon_file.exists() else None,
     uac_admin=False,
 )

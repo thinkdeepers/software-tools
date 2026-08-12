@@ -34,7 +34,15 @@ class _BreakScreenWindow(QWidget):
             | Qt.WindowType.Tool
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
-        self.setStyleSheet("background-color: #1a2332;")
+        self.setStyleSheet("""
+            QWidget { background-color: #0f172a; }
+            QLabel { color: #e2e8f0; }
+            QPushButton {
+                background: #22c55e; color: white; border: none;
+                border-radius: 10px; padding: 10px 24px; font-size: 14px; font-weight: 600;
+            }
+            QPushButton:hover { background: #16a34a; }
+        """)
         self.setGeometry(geometry)
 
         layout = QVBoxLayout(self)
@@ -46,7 +54,7 @@ class _BreakScreenWindow(QWidget):
         title_font.setPointSize(28 if is_primary else 22)
         title_font.setBold(True)
         title.setFont(title_font)
-        title.setStyleSheet("color: #7dd3a8; margin-bottom: 16px;")
+        title.setStyleSheet("color: #6ee7b7; margin-bottom: 16px;")
 
         self._countdown = QLabel(manager.format_time(manager.remaining))
         self._countdown.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -54,7 +62,7 @@ class _BreakScreenWindow(QWidget):
         cd_font.setPointSize(64 if is_primary else 48)
         cd_font.setBold(True)
         self._countdown.setFont(cd_font)
-        self._countdown.setStyleSheet("color: #ffffff;")
+        self._countdown.setStyleSheet("color: #f8fafc;")
         manager.register_countdown(self._countdown)
 
         layout.addWidget(title)
@@ -65,7 +73,7 @@ class _BreakScreenWindow(QWidget):
                 "远眺窗外，放松双眼\n遵循 20-20-20 法则：每20分钟看20英尺外至少20秒"
             )
             hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            hint.setStyleSheet("color: #a0aec0; font-size: 16px; margin-top: 12px;")
+            hint.setStyleSheet("color: #94a3b8; font-size: 16px; margin-top: 12px;")
             layout.addWidget(hint)
 
             btn_row = QHBoxLayout()
@@ -73,17 +81,17 @@ class _BreakScreenWindow(QWidget):
 
             skip_btn = QPushButton("跳过休息")
             skip_btn.setStyleSheet(
-                "QPushButton { background: #4a5568; color: white; padding: 10px 24px;"
-                " border-radius: 6px; font-size: 14px; }"
-                "QPushButton:hover { background: #718096; }"
+                "QPushButton { background: #334155; color: white; padding: 10px 24px;"
+                " border-radius: 10px; font-size: 14px; }"
+                "QPushButton:hover { background: #475569; }"
             )
             skip_btn.clicked.connect(manager.skip)
 
             snooze_btn = QPushButton("稍后提醒 (5分钟)")
             snooze_btn.setStyleSheet(
-                "QPushButton { background: #2d6a4f; color: white; padding: 10px 24px;"
-                " border-radius: 6px; font-size: 14px; margin-left: 12px; }"
-                "QPushButton:hover { background: #40916c; }"
+                "QPushButton { background: #22c55e; color: white; padding: 10px 24px;"
+                " border-radius: 10px; font-size: 14px; margin-left: 12px; }"
+                "QPushButton:hover { background: #16a34a; }"
             )
             snooze_btn.clicked.connect(manager.snooze)
 

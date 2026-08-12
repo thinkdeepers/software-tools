@@ -12,7 +12,7 @@ echo "==> 安装护眼卫士到 $INSTALL_DIR"
 mkdir -p "$INSTALL_DIR" "$BIN_DIR" "$DESKTOP_DIR"
 
 # 复制项目文件
-cp -r "$SCRIPT_DIR/src" "$SCRIPT_DIR/requirements.txt" "$SCRIPT_DIR/run.sh" "$INSTALL_DIR/"
+cp -r "$SCRIPT_DIR/src" "$SCRIPT_DIR/assets" "$SCRIPT_DIR/requirements.txt" "$SCRIPT_DIR/run.sh" "$INSTALL_DIR/"
 chmod +x "$INSTALL_DIR/run.sh"
 
 # 安装 Python 依赖
