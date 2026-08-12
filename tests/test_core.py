@@ -47,8 +47,60 @@ def test_compress_then_extract_roundtrip(tmp_path):
     zip_path = core.compress_to_zip([src], output=tmp_path / "out.zip")
 
     dest = core.extract_archive(zip_path, output_dir=tmp_path / "unpacked")
+    assert dest == tmp_path / "unpacked"
     assert (dest / "proj" / "a.txt").read_text(encoding="utf-8") == "hello"
     assert (dest / "proj" / "sub" / "b.txt").read_text(encoding="utf-8") == "world"
+
+
+def test_extract_into_existing_dir_not_renamed(tmp_path):
+    """「解压到…」选中已有文件夹时，应直接解压进去，而不是改名为「文件夹 (1)」。"""
+    src = tmp_path / "note.txt"
+    src.write_text("hi", encoding="utf-8")
+    archive = core.compress_to_zip([src], output=tmp_path / "n.zip")
+
+    chosen = tmp_path / "chosen"
+    chosen.mkdir()
+    (chosen / "keep.txt").write_text("keep", encoding="utf-8")
+
+    dest = core.extract_archive(archive, output_dir=chosen)
+    assert dest == chosen
+    assert not (tmp_path / "chosen (1)").exists()
+    assert (chosen / "note.txt").read_text(encoding="utf-8") == "hi"
+    assert (chosen / "keep.txt").read_text(encoding="utf-8") == "keep"
+
+
+def test_extract_default_goes_to_archive_parent(tmp_path):
+    """未指定输出目录时，解压到压缩包所在的当前文件夹。"""
+    src = tmp_path / "a.txt"
+    src.write_text("here", encoding="utf-8")
+    archive = core.compress_to_zip([src], output=tmp_path / "pack.zip")
+
+    dest = core.extract_archive(archive)
+    assert dest == tmp_path
+    assert (tmp_path / "a.txt").read_text(encoding="utf-8") == "here"
+    # 不应再创建同名子目录 pack/ 并把文件放进去
+    assert not (tmp_path / "pack" / "a.txt").exists()
+
+
+def test_extract_member_opens_single_file(tmp_path):
+    src = tmp_path / "readme.txt"
+    src.write_text("open-me", encoding="utf-8")
+    archive = core.compress_to_zip([src], output=tmp_path / "p.zip")
+    out_dir = tmp_path / "one"
+    path = core.extract_member(archive, "readme.txt", output_dir=out_dir)
+    assert path.is_file()
+    assert path.read_text(encoding="utf-8") == "open-me"
+
+
+def test_extract_member_nested_path(tmp_path):
+    root = tmp_path / "proj"
+    root.mkdir()
+    nested = root / "sub"
+    nested.mkdir()
+    (nested / "deep.txt").write_text("nested", encoding="utf-8")
+    archive = core.compress_to_zip([root], output=tmp_path / "n.zip")
+    out = core.extract_member(archive, "proj/sub/deep.txt", output_dir=tmp_path / "x")
+    assert out.read_text(encoding="utf-8") == "nested"
 
 
 def test_output_extension_forced_to_zip(tmp_path):
@@ -103,7 +155,8 @@ def test_extract_targz_roundtrip(tmp_path):
         tf.add(src / "f.txt", arcname="f.txt")
 
     dest = core.extract_archive(archive)
-    assert (dest / "f.txt").read_text(encoding="utf-8") == "tar-content"
+    assert dest == tmp_path
+    assert (tmp_path / "f.txt").read_text(encoding="utf-8") == "tar-content"
 
 
 def test_extract_gz_plain(tmp_path):
@@ -113,7 +166,8 @@ def test_extract_gz_plain(tmp_path):
     with gzip.open(archive, "wb") as f:
         f.write("plain".encode("utf-8"))
     dest = core.extract_archive(archive)
-    assert (dest / "single.txt").read_text(encoding="utf-8") == "plain"
+    assert dest == tmp_path
+    assert (tmp_path / "single.txt").read_text(encoding="utf-8") == "plain"
 
 
 def test_zip_slip_protection(tmp_path):

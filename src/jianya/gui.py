@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import os
 import queue
+import subprocess
 import sys
+import tempfile
 import threading
 from pathlib import Path
 from typing import List, Optional, Sequence
@@ -401,15 +404,65 @@ class _App:
         password: Optional[str] = None,
         ask_dir: bool = False,
     ) -> None:
-        """供预览窗口调用。ask_dir=True 时才弹出选目录。"""
+        """供预览窗口调用。
+
+        ask_dir=True：「解压到…」弹出选目录，解压到用户选中的文件夹。
+        ask_dir=False：「解压到当前文件夹」直接解压到压缩包所在目录。
+        """
         if self._busy:
             return
         if ask_dir:
-            chosen = self.filedialog.askdirectory(title="选择解压到的目录")
+            chosen = self.filedialog.askdirectory(title="选择解压到的文件夹")
             if not chosen:
                 return
             output = chosen
+        else:
+            # 解压到压缩包所在的当前文件夹
+            output = str(Path(archive).resolve().parent)
         self._start_task(self._do_extract, archive, output, password)
+
+    def open_archive_member(
+        self,
+        archive: Path,
+        member_name: str,
+        password: Optional[str] = None,
+    ) -> None:
+        """双击预览列表中的文件：解压到临时目录并用系统默认程序打开。"""
+        if self._busy:
+            return
+        try:
+            tmp = Path(tempfile.mkdtemp(prefix="jianya-open-"))
+            out = core.extract_member(
+                archive, member_name, output_dir=tmp, password=password
+            )
+            self._reveal_path(out)
+        except core.PasswordRequiredError as exc:
+            pwd = self.ask_password("加密压缩包", f"{exc}\n请输入密码：")
+            if pwd is None:
+                return
+            try:
+                tmp = Path(tempfile.mkdtemp(prefix="jianya-open-"))
+                out = core.extract_member(
+                    archive, member_name, output_dir=tmp, password=pwd
+                )
+                self._reveal_path(out)
+            except Exception as err:
+                self._error(str(err))
+        except Exception as exc:
+            self._error(str(exc))
+
+    def _reveal_path(self, path: Path) -> None:
+        """用系统默认程序打开文件。"""
+        target = str(path)
+        try:
+            if sys.platform == "win32":
+                os.startfile(target)  # type: ignore[attr-defined]
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", target], close_fds=True)
+            else:
+                subprocess.Popen(["xdg-open", target], close_fds=True)
+        except Exception as exc:
+            self._error(f"无法打开文件：{exc}")
 
     def _on_install_menu(self) -> None:
         self._manage_menu(install=True)
@@ -605,6 +658,9 @@ class _PreviewWindow:
                 ),
             )
 
+        self.tree = tree
+        tree.bind("<Double-1>", self._on_double_click)
+
         # 进度区域（解压时可见）
         prog = ttk.Frame(frame, style="White.TFrame")
         prog.pack(fill="x", pady=(10, 0))
@@ -612,7 +668,7 @@ class _PreviewWindow:
         self.progress.pack(fill="x")
         self.status = ttk.Label(
             prog,
-            text="选择下方按钮开始解压",
+            text="双击文件可打开 · 选择下方按钮开始解压",
             style="Status.TLabel",
             font=("Microsoft YaHei UI", 9),
         )
@@ -623,7 +679,7 @@ class _PreviewWindow:
         self.btn_to = ttk.Button(buttons, text="解压到…", command=self._extract_to)
         self.btn_to.pack(side="right")
         self.btn_here = ttk.Button(
-            buttons, text="解压到同名目录", command=self._extract_here
+            buttons, text="解压到当前文件夹", command=self._extract_here
         )
         self.btn_here.pack(side="right", padx=(0, 8))
         ttk.Button(buttons, text="关闭", command=self._close).pack(side="left")
@@ -650,9 +706,27 @@ class _PreviewWindow:
         self.win.destroy()
         self.app._preview_closed(self)
 
+    def _on_double_click(self, event) -> None:
+        item = self.tree.identify_row(event.y)
+        if not item:
+            return
+        name = self.tree.item(item, "text")
+        member = None
+        for m in self.members:
+            if m.name == name or m.name.rstrip("/") == str(name).rstrip("/"):
+                member = m
+                break
+        if member is None:
+            return
+        if member.is_dir:
+            self.status.configure(text="请双击文件以打开（目录请先解压）")
+            return
+        self.status.configure(text=f"正在打开 {member.name}…")
+        self.app.open_archive_member(self.archive, member.name, self.password)
+
     def _extract_here(self) -> None:
-        # 直接解压到同名目录，不先弹目录框
-        self.status.configure(text="正在解压…")
+        # 解压到压缩包所在的当前文件夹
+        self.status.configure(text="正在解压到当前文件夹…")
         self.progress.configure(value=0)
         self.app.extract_archive_interactive(
             str(self.archive),
@@ -662,6 +736,7 @@ class _PreviewWindow:
         )
 
     def _extract_to(self) -> None:
+        # 解压到用户选择的文件夹（不再套同名子目录）
         self.app.extract_archive_interactive(
             str(self.archive),
             output=None,
