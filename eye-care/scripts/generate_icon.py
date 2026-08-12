@@ -55,8 +55,8 @@ def main() -> None:
 
     png_path = ICON_ICO_PATH.parent / "icon.png"
     pil_images[-1].save(png_path, format="PNG")
-    print(f"已生成: {ICON_ICO_PATH}")
-    print(f"已生成: {png_path}")
+    print(f"Generated: {ICON_ICO_PATH}")
+    print(f"Generated: {png_path}")
 
 
 if __name__ == "__main__":
