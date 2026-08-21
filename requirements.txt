@@ -6,6 +6,7 @@
 py7zr>=0.20          # 7z 解压 / 加密 7z 读取
 rarfile>=4.0         # rar 解压（需 UnRAR 工具，安装版已捆绑）
 pyzipper>=0.3.6      # AES 加密 ZIP 的创建与解压
+# zipfile-deflate64  # 可选：ZIP Deflate64。Windows 有 wheel；Linux 需编译，失败不影响其余解压。
 
 # 打包为 Windows 可执行文件（开发时使用）：
 # pyinstaller>=6.0

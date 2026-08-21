@@ -150,6 +150,14 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 1
+    try:
+        __import__("zipfile_deflate64")
+    except ImportError:
+        print(
+            "未检测到 zipfile_deflate64，Deflate64 压缩的 ZIP 可能有部分文件无法解压。"
+            "建议：pip install zipfile-deflate64",
+            file=sys.stderr,
+        )
 
     unrar = _ensure_unrar(root)
     if not unrar:
@@ -169,6 +177,14 @@ def main() -> int:
         "--collect-all", "py7zr",
         "--collect-all", "pyzipper",
     ]
+    try:
+        __import__("zipfile_deflate64")
+        cmd += [
+            "--hidden-import", "zipfile_deflate64",
+            "--collect-all", "zipfile_deflate64",
+        ]
+    except ImportError:
+        pass
 
     assets = os.path.join(root, "assets")
     icon = os.path.join(assets, "app.ico")

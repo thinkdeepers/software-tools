@@ -3,7 +3,7 @@
 ; 编译：ISCC.exe installer\jianya.iss   （需先用 build_windows.py 生成 dist\简压.exe）
 
 #define MyAppName "简压"
-#define MyAppVersion "1.1.13"
+#define MyAppVersion "1.1.14"
 #define MyAppExeName "简压.exe"
 #define MyAppPublisher "简压"
 

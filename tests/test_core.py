@@ -47,11 +47,10 @@ def test_compress_then_extract_roundtrip(tmp_path):
     zip_path = core.compress_to_zip([src], output=tmp_path / "out.zip")
 
     dest = core.extract_archive(zip_path, output_dir=tmp_path / "unpacked")
-    # 包内唯一根目录为 proj/ → 解压到 unpacked/proj，并剥掉一层
-    assert dest == tmp_path / "unpacked" / "proj"
-    assert (dest / "a.txt").read_text(encoding="utf-8") == "hello"
-    assert (dest / "sub" / "b.txt").read_text(encoding="utf-8") == "world"
-    assert not (dest / "proj").exists()
+    # 始终建与压缩包同名的文件夹；包内根目录 proj 与 out 不同名，予以保留
+    assert dest == tmp_path / "unpacked" / "out"
+    assert (dest / "proj" / "a.txt").read_text(encoding="utf-8") == "hello"
+    assert (dest / "proj" / "sub" / "b.txt").read_text(encoding="utf-8") == "world"
 
 
 def test_extract_into_existing_dir_not_renamed(tmp_path):
@@ -103,7 +102,7 @@ def test_extract_default_goes_to_archive_parent(tmp_path):
 
 
 def test_extract_avoids_double_folder(tmp_path):
-    """压缩文件夹后再解压，不应出现 proj/proj/ 两层。"""
+    """压缩文件夹后再解压：目标文件夹与压缩包同名，并剥掉包内同名根目录。"""
     src = tmp_path / "proj"
     src.mkdir()
     (src / "a.txt").write_text("one-layer", encoding="utf-8")
@@ -115,6 +114,32 @@ def test_extract_avoids_double_folder(tmp_path):
     assert dest == tmp_path / "out" / "proj"
     assert (dest / "a.txt").read_text(encoding="utf-8") == "one-layer"
     assert not (dest / "proj").exists()
+
+
+def test_extract_always_uses_archive_name(tmp_path):
+    """包内根目录与压缩包不同名时，仍新建压缩包同名文件夹。"""
+    src = tmp_path / "inner"
+    src.mkdir()
+    (src / "a.txt").write_text("inside", encoding="utf-8")
+    archive = core.compress_to_zip([src], output=tmp_path / "pack.zip")
+
+    dest = core.extract_archive(archive, output_dir=tmp_path / "here")
+    assert dest == tmp_path / "here" / "pack"
+    assert (dest / "inner" / "a.txt").read_text(encoding="utf-8") == "inside"
+
+
+def test_extract_skips_zip_slip_keeps_good_files(tmp_path):
+    """含穿越路径时跳过危险条目，其余文件仍解压到同名文件夹。"""
+    archive = tmp_path / "mixed.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("ok.txt", "safe")
+        zf.writestr("../escape.txt", "bad")
+
+    dest = core.extract_archive(archive, output_dir=tmp_path / "out")
+    assert dest == tmp_path / "out" / "mixed"
+    assert (dest / "ok.txt").read_text(encoding="utf-8") == "safe"
+    assert not (tmp_path / "escape.txt").exists()
+    assert not (tmp_path / "out" / "escape.txt").exists()
 
 
 def test_extract_member_opens_single_file(tmp_path):
@@ -219,9 +244,24 @@ def test_fix_archive_filename_gbk_mojibake():
     assert core.fix_archive_filename(raw) == raw
 
 
+def test_extract_file_dir_name_collision(tmp_path):
+    """同名文件占了目录位时，仍能解压其子文件。"""
+    archive = tmp_path / "collide.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("folder", b"i-am-file")
+        zf.writestr("folder/child.txt", "nested")
+
+    dest = core.extract_archive(archive)
+    assert dest == tmp_path / "collide"
+    assert (dest / "folder" / "child.txt").read_text(encoding="utf-8") == "nested"
+    leftovers = list(dest.glob("folder*"))
+    assert leftovers
+
+
 def test_extract_missing_file(tmp_path):
     with pytest.raises(core.ArchiveError):
         core.extract_archive(tmp_path / "nope.zip")
+
 
 
 def test_compress_empty_inputs():
@@ -256,12 +296,14 @@ def test_extract_gz_plain(tmp_path):
     assert (dest / "single.txt").read_text(encoding="utf-8") == "plain"
 
 
-def test_zip_slip_protection(tmp_path):
+def test_zip_slip_only_archive_fails(tmp_path):
+    """全部都是穿越路径时，不解压出有效文件，并报错。"""
     malicious = tmp_path / "evil.zip"
     with zipfile.ZipFile(malicious, "w") as zf:
         zf.writestr("../escape.txt", "bad")
     with pytest.raises(core.ArchiveError):
         core.extract_archive(malicious, output_dir=tmp_path / "out")
+    assert not (tmp_path / "escape.txt").exists()
 
 
 def test_list_zip_preview(tmp_path):

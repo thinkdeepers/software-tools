@@ -6,7 +6,8 @@
   gz / bz2 / xz），并在安装了可选依赖时额外支持 7z / rar。
 - 预览：可列出压缩包内文件，供界面双击打开时浏览；也可解压单个文件以打开。
 - 密码：支持加密压缩，以及解压加密压缩包时传入密码。
-- 解压目标：在当前/指定文件夹下创建与压缩包同名的子目录；已存在则自动加 (1)/(2)…
+- 解压目标：始终新建与压缩包同名的文件夹，把内容放进去；已存在则自动加 (1)/(2)…
+  若包内唯一根目录与压缩包同名，则剥掉该层，避免 ``proj/proj``。
 
 所有耗时操作都支持一个 ``progress`` 回调，方便界面显示进度。
 回调签名为 ``progress(done: int, total: int, name: str)``。
@@ -18,6 +19,7 @@ import bz2
 import gzip
 import lzma
 import os
+import stat
 import sys
 import tarfile
 import zipfile
@@ -46,6 +48,13 @@ try:  # AES 加密 ZIP
     HAS_PYZIPPER = True
 except Exception:  # pragma: no cover - 取决于运行环境
     HAS_PYZIPPER = False
+
+try:  # ZIP Deflate64（WinRAR / 资源管理器大文件常用，标准库不支持）
+    import zipfile_deflate64  # type: ignore  # noqa: F401
+
+    HAS_DEFLATE64 = True
+except Exception:  # pragma: no cover - 取决于运行环境
+    HAS_DEFLATE64 = False
 
 
 ProgressCallback = Callable[[int, int, str], None]
@@ -320,31 +329,123 @@ def _strip_member_prefix(name: str, prefix: Optional[str]) -> Optional[str]:
     return norm
 
 
+_WINDOWS_RESERVED = {
+    "con",
+    "prn",
+    "aux",
+    "nul",
+    *(f"com{i}" for i in range(1, 10)),
+    *(f"lpt{i}" for i in range(1, 10)),
+}
+_WINDOWS_ILLEGAL = set('<>:"|?*') | {chr(i) for i in range(32)}
+
+
+def _sanitize_path_component(part: str) -> str:
+    """清洗单层文件/目录名，避免 Windows 非法字符与保留名导致解压失败。"""
+    cleaned = part.replace("\x00", "_")
+    if os.name == "nt":
+        cleaned = "".join("_" if ch in _WINDOWS_ILLEGAL else ch for ch in cleaned)
+        cleaned = cleaned.rstrip(" .")
+        stem = cleaned.split(".", 1)[0]
+        if stem.lower() in _WINDOWS_RESERVED:
+            cleaned = "_" + cleaned
+    return cleaned or "_"
+
+
+def _relpath_for_extract(name: str, strip_prefix: Optional[str]) -> Optional[str]:
+    """得到可落盘的相对路径；非法 / 穿越条目返回 None（跳过，不中断整包）。"""
+    rel = _strip_member_prefix(name, strip_prefix)
+    if not rel:
+        return None
+    rel = rel.replace("\\", "/").strip("/")
+    if not rel or rel in (".", ".."):
+        return None
+    parts: List[str] = []
+    for part in rel.split("/"):
+        if part in ("", "."):
+            continue
+        if part == "..":
+            return None
+        parts.append(_sanitize_path_component(part))
+    if not parts:
+        return None
+    return "/".join(parts)
+
+
+def _output_path_inside(dest: Path, rel: str) -> Optional[Path]:
+    """把相对路径接到 dest 下；穿越则返回 None。"""
+    dest.mkdir(parents=True, exist_ok=True)
+    dest_resolved = dest.resolve()
+    target = dest.joinpath(*rel.split("/"))
+    try:
+        resolved = target.resolve()
+    except OSError:
+        return None
+    if dest_resolved != resolved and dest_resolved not in resolved.parents:
+        return None
+    return target
+
+
+def _ensure_directory(path: Path) -> None:
+    """确保 path 是目录；若被同名文件占用则把文件让开。"""
+    if path.exists() and path.is_file():
+        path.rename(_unique_path(path.parent / f"{path.name}.file"))
+    path.mkdir(parents=True, exist_ok=True)
+
+
+def _prepare_file_path(path: Path) -> Path:
+    """准备写出文件：创建父目录；若路径已是目录则改用唯一文件名。"""
+    _ensure_directory(path.parent)
+    if path.exists() and path.is_dir():
+        return _unique_path(path)
+    return path
+
+
+def _is_zip_directory(info: zipfile.ZipInfo) -> bool:
+    name = str(info.filename).replace("\\", "/")
+    if name.endswith("/"):
+        return True
+    is_dir = getattr(info, "is_dir", None)
+    if callable(is_dir):
+        try:
+            if is_dir():
+                return True
+        except Exception:
+            pass
+    if int(getattr(info, "file_size", 0) or 0) > 0:
+        return False
+    ext = int(getattr(info, "external_attr", 0) or 0)
+    if ext & 0x10:  # DOS 目录位
+        return True
+    unix = ext >> 16
+    return bool(unix) and stat.S_ISDIR(unix)
+
+
 def _plan_extract_destination(
     archive: Path,
     output_dir: Optional[os.PathLike | str],
     member_names: Sequence[str],
 ) -> Tuple[Path, Optional[str]]:
-    """计算解压目录，并决定是否剥掉包内唯一根目录（避免套两层）。
+    """始终在父目录下新建与压缩包同名的文件夹。
 
-    - 包内只有一个顶层目录：解压到 ``父目录/该目录名``，并剥掉该前缀
-      （``proj.zip`` 含 ``proj/a.txt`` → ``./proj/a.txt``，不会变成 ``proj/proj/a.txt``）
-    - 否则：解压到 ``父目录/压缩包名``，不剥前缀
-    - 目标已存在时自动 `` (1)``、`` (2)``…
+    - ``demo.zip`` → ``父目录/demo/``
+    - 目标已存在时自动 ``demo (1)``、``demo (2)``…
+    - 仅当包内唯一根目录与压缩包同名时剥掉该层，避免 ``proj/proj``
     """
     base = Path(output_dir) if output_dir else archive.parent
+    stem = _archive_stem(archive)
+    dest = _unique_path(base / stem)
+    strip_prefix: Optional[str] = None
     tops = _top_level_names(member_names)
     if len(tops) == 1:
         only = tops[0]
-        # 唯一顶层是目录（存在 only/xxx 子路径）时，剥掉该层
         is_wrapper_dir = any(
             _normalize_member_name(fix_archive_filename(n)).startswith(only + "/")
             for n in member_names
         )
-        if is_wrapper_dir:
-            return _unique_path(base / only), only
-    stem = _archive_stem(archive)
-    return _unique_path(base / stem), None
+        if is_wrapper_dir and only == stem:
+            strip_prefix = only
+    return dest, strip_prefix
 
 
 def _iter_files(paths: Sequence[Path]):
@@ -829,28 +930,45 @@ def _extract_zip(
     strip_prefix: Optional[str] = None,
 ):
     zf, members = _open_best_zip(archive, password)
+    extracted = 0
     try:
         total = len(members) or 1
         for i, member in enumerate(members, start=1):
-            # 修正中文文件名后再解压，避免落盘乱码。
             fixed = fix_archive_filename(member.filename).replace("\\", "/")
-            # 先按原始相对路径做穿越检查，再剥前缀
-            _safe_join(dest, fixed)
-            rel = _strip_member_prefix(fixed, strip_prefix)
+            rel = _relpath_for_extract(fixed, strip_prefix)
             if rel is None:
                 if progress:
                     progress(i, total, fixed)
                 continue
-            member.filename = rel
+            out = _output_path_inside(dest, rel)
+            if out is None:
+                if progress:
+                    progress(i, total, rel)
+                continue
             try:
-                zf.extract(member, dest)
-            except RuntimeError as exc:
-                _raise_password_error(exc)
+                if _is_zip_directory(member):
+                    _ensure_directory(out)
+                else:
+                    out = _prepare_file_path(out)
+                    data = zf.read(member)
+                    out.write_bytes(data)
+                extracted += 1
+            except PasswordRequiredError:
                 raise
+            except Exception as exc:
+                _raise_password_error(exc)
+                if _is_password_message(str(exc)):
+                    raise PasswordRequiredError("压缩包已加密，请输入正确密码。") from exc
+                # 单个条目失败不中断整包（非法名、不支持的压缩算法等）
+                if progress:
+                    progress(i, total, rel)
+                continue
             if progress:
                 progress(i, total, rel)
     finally:
         zf.close()
+    if extracted == 0 and members:
+        raise ArchiveError("解压失败：压缩包中没有可写出的有效文件。")
 
 
 def _extract_tar(
@@ -859,25 +977,54 @@ def _extract_tar(
     progress: Optional[ProgressCallback],
     strip_prefix: Optional[str] = None,
 ):
-    # Python 3.12+ 支持 filter='data'，可拒绝危险的 tar 条目并抑制弃用警告。
-    supports_filter = sys.version_info >= (3, 12)
+    extracted = 0
     with tarfile.open(archive) as tf:
         members = tf.getmembers()
         total = len(members) or 1
         for i, member in enumerate(members, start=1):
-            _safe_join(dest, member.name)
-            rel = _strip_member_prefix(member.name, strip_prefix)
+            rel = _relpath_for_extract(member.name, strip_prefix)
             if rel is None:
                 if progress:
                     progress(i, total, member.name)
                 continue
-            member.name = rel
-            if supports_filter:
-                tf.extract(member, dest, filter="data")
-            else:
-                tf.extract(member, dest)
+            out = _output_path_inside(dest, rel)
+            if out is None:
+                if progress:
+                    progress(i, total, rel)
+                continue
+            try:
+                if member.isdir():
+                    _ensure_directory(out)
+                    extracted += 1
+                elif member.isfile() or member.isreg():
+                    src = tf.extractfile(member)
+                    if src is None:
+                        if progress:
+                            progress(i, total, rel)
+                        continue
+                    out = _prepare_file_path(out)
+                    with src, open(out, "wb") as dst:
+                        while True:
+                            chunk = src.read(1024 * 1024)
+                            if not chunk:
+                                break
+                            dst.write(chunk)
+                    extracted += 1
+                else:
+                    # 符号链接 / 设备文件等跳过，避免整包失败
+                    if progress:
+                        progress(i, total, rel)
+                    continue
+            except PasswordRequiredError:
+                raise
+            except Exception:
+                if progress:
+                    progress(i, total, rel)
+                continue
             if progress:
                 progress(i, total, rel)
+    if extracted == 0 and members:
+        raise ArchiveError("解压失败：压缩包中没有可写出的有效文件。")
 
 
 def _extract_plain(archive: Path, dest: Path, progress: Optional[ProgressCallback]):
@@ -987,16 +1134,30 @@ def _extract_rar(
                 raise PasswordRequiredError("压缩包已加密，请输入密码。")
             if archive_needs_pw and not members:
                 raise PasswordRequiredError("压缩包已加密，请输入正确密码。")
-            # 预检路径穿越，并把显示名修正为可读中文（extractall 仍用内部名）。
+            # 跳过穿越 / 非法路径，避免单个坏条目导致整包失败。
+            safe_members = []
             for member in members:
                 safe_name = fix_archive_filename(member.filename).replace("\\", "/")
-                _safe_join(dest, safe_name)
-            total = len(members) or 1
+                rel = _relpath_for_extract(safe_name, None)
+                if rel is None or _output_path_inside(dest, rel) is None:
+                    continue
+                safe_members.append(member)
+            if not safe_members:
+                raise ArchiveError("解压失败：压缩包中没有可写出的有效文件。")
+            total = len(safe_members) or 1
             if progress:
                 # 1% 起步，让进度条从动画切到确定模式并保持可见
                 progress(max(1, total // 100), total, archive.name)
-            # 头加密 RAR5 下逐文件 extract 可能 CRC 失败；extractall 更可靠。
-            rf.extractall(dest)
+            # 头加密 RAR5 下逐文件 extract 可能 CRC 失败；全安全时 extractall 更可靠。
+            if len(safe_members) == len(members):
+                rf.extractall(dest)
+            else:
+                for member in safe_members:
+                    try:
+                        rf.extract(member, path=dest)
+                    except Exception as exc:
+                        _raise_password_error(exc)
+                        continue
             # 若落盘文件名乱码，尝试重命名为修正后的中文名。
             for member in members:
                 raw = member.filename
@@ -1036,8 +1197,8 @@ def extract_archive(
 
     :param archive: 压缩包路径。
     :param output_dir: 输出「父」目录；缺省为压缩包所在目录。
-        实际会在其下创建合适的子目录；若已存在则自动加 `` (1)``、`` (2)``…
-        若包内只有一层同名根目录，会剥掉避免套两层。
+        实际会在其下新建与压缩包同名的文件夹；若已存在则自动加 `` (1)``、`` (2)``…
+        若包内唯一根目录与压缩包同名，会剥掉该层避免套两层。
     :param progress: 进度回调 ``(done, total, name)``。
     :param password: 解压加密压缩包时的密码。
     :returns: 实际解压到的目录。
@@ -1153,9 +1314,15 @@ def _extract_zip_member(
             raise ArchiveError("不能打开目录，请选择文件。")
 
         # 写出时使用修正后的相对路径，避免乱码
-        rel = fix_archive_filename(target.filename).replace("\\", "/")
-        out_path = _safe_join(dest, rel)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
+        rel = _relpath_for_extract(
+            fix_archive_filename(target.filename).replace("\\", "/"), None
+        )
+        if rel is None:
+            raise ArchiveError(f"无法写出不安全的路径：{member_name}")
+        out_path = _output_path_inside(dest, rel)
+        if out_path is None:
+            raise ArchiveError(f"无法写出不安全的路径：{member_name}")
+        out_path = _prepare_file_path(out_path)
         try:
             data = zf.read(target)
         except RuntimeError as exc:
@@ -1178,8 +1345,13 @@ def _extract_tar_member(archive: Path, member_name: str, dest: Path) -> Path:
             raise ArchiveError(f"压缩包中找不到：{member_name}")
         if target.isdir():
             raise ArchiveError("不能打开目录，请选择文件。")
-        out_path = _safe_join(dest, target.name)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
+        rel = _relpath_for_extract(target.name, None)
+        if rel is None:
+            raise ArchiveError(f"无法写出不安全的路径：{member_name}")
+        out_path = _output_path_inside(dest, rel)
+        if out_path is None:
+            raise ArchiveError(f"无法写出不安全的路径：{member_name}")
+        out_path = _prepare_file_path(out_path)
         src = tf.extractfile(target)
         if src is None:
             raise ArchiveError(f"无法读取：{member_name}")
