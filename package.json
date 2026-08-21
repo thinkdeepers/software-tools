@@ -31,12 +31,20 @@
       "package.json"
     ],
     "win": {
-      "target": ["nsis"]
+      "target": ["nsis", "portable"],
+      "icon": "assets/icon.ico",
+      "artifactName": "${productName}.${ext}"
+    },
+    "portable": {
+      "artifactName": "github同步助手.exe"
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true
+      "createDesktopShortcut": true,
+      "shortcutName": "github同步助手",
+      "uninstallDisplayName": "github同步助手",
+      "artifactName": "github同步助手-setup.${ext}"
     }
   }
 }
