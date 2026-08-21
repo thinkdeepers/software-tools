@@ -69,7 +69,21 @@ main { flex: 1; overflow-y: auto; padding: 18px 20px; }
   border-radius: 20px; padding: 1px 10px; font-size: 12px; margin-left: 8px;
 }
 .task .path { color: var(--muted); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.task .last { color: var(--muted); font-size: 12px; margin-top: 3px; }
+.task .hint { color: var(--muted); font-size: 12px; margin-top: 4px; line-height: 1.6; }
+.task.repo-hub { margin-bottom: 0; border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+.task.child-task {
+  margin-left: 22px; margin-top: 0; padding: 10px 14px;
+  border-top: none; border-top-left-radius: 0; border-top-right-radius: 0;
+  background: #12171f;
+}
+.task.child-task .title .branch-tag { margin-left: 0; }
+.pick-item.featured {
+  background: rgba(47,129,247,.12); border: 1px solid rgba(47,129,247,.35);
+  border-radius: 8px; margin-bottom: 4px;
+}
+.pick-item.featured:hover { background: rgba(47,129,247,.2); }
+.mode-split { color: var(--muted); font-size: 12.5px; padding: 4px 2px 0; }
+#wz-step2 .pick-list { height: 240px; }
 .badge { border-radius: 20px; padding: 3px 12px; font-size: 12.5px; white-space: nowrap; }
 .badge.ok { background: rgba(63,185,80,.15); color: var(--green); }
 .badge.syncing, .badge.init { background: rgba(47,129,247,.15); color: var(--accent); }

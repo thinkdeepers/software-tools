@@ -30,8 +30,31 @@ const server = http.createServer((req, res) => {
       private: true,
       description: '端到端测试仓库（本地模拟）',
     }] : []));
+  } else if (url === '/repos/testuser/AI-pet-demo') {
+    res.end(JSON.stringify({
+      full_name: 'testuser/AI-pet-demo',
+      clone_url: `file://${BARE}`,
+      default_branch: 'main',
+      private: true,
+      description: '端到端测试仓库（本地模拟）',
+    }));
   } else if (url === '/repos/testuser/AI-pet-demo/branches') {
     res.end(JSON.stringify(page === '1' ? branches().map(name => ({ name })) : []));
+  } else if (req.method === 'DELETE' && url.startsWith('/repos/testuser/AI-pet-demo/git/refs/heads/')) {
+    const branch = decodeURIComponent(url.slice('/repos/testuser/AI-pet-demo/git/refs/heads/'.length));
+    try {
+      if (branch === 'main') {
+        res.statusCode = 422;
+        res.end(JSON.stringify({ message: 'Cannot delete the default branch' }));
+        return;
+      }
+      execSync(`git --git-dir="${BARE}" update-ref -d "refs/heads/${branch}"`);
+      res.statusCode = 204;
+      res.end();
+    } catch (e) {
+      res.statusCode = 404;
+      res.end(JSON.stringify({ message: String(e) }));
+    }
   } else {
     res.statusCode = 404;
     res.end(JSON.stringify({ message: 'Not Found' }));

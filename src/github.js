@@ -11,13 +11,14 @@ async function req(token, url, options = {}) {
       ...(options.headers || {}),
     },
   });
+  const body = await res.text().catch(() => '');
   if (!res.ok) {
-    const body = await res.text().catch(() => '');
     const err = new Error(`GitHub API ${res.status}: ${body.slice(0, 200)}`);
     err.status = res.status;
     throw err;
   }
-  return res.json();
+  if (!body) return null;
+  try { return JSON.parse(body); } catch { return null; }
 }
 
 // 验证 token 并返回用户信息
@@ -53,4 +54,25 @@ async function listBranches(token, fullName) {
   return all.map(b => b.name);
 }
 
-module.exports = { getUser, listRepos, listBranches };
+async function getRepo(token, fullName) {
+  const r = await req(token, `/repos/${fullName}`);
+  return {
+    fullName: r.full_name,
+    cloneUrl: r.clone_url,
+    defaultBranch: r.default_branch,
+    private: r.private,
+    description: r.description || '',
+  };
+}
+
+async function deleteBranch(token, fullName, branch) {
+  const ref = String(branch).split('/').map(encodeURIComponent).join('/');
+  try {
+    await req(token, `/repos/${fullName}/git/refs/heads/${ref}`, { method: 'DELETE' });
+  } catch (e) {
+    if (e.status === 404) return; // 已经不存在
+    throw e;
+  }
+}
+
+module.exports = { getUser, listRepos, listBranches, getRepo, deleteBranch };

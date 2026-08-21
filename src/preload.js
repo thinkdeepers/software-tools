@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('api', {
   pickFolder: () => ipcRenderer.invoke('pick-folder'),
   addMapping: (payload) => ipcRenderer.invoke('add-mapping', payload),
   removeMapping: (id) => ipcRenderer.invoke('remove-mapping', id),
+  deleteRepoBranch: (id) => ipcRenderer.invoke('delete-repo-branch', id),
   toggleMapping: (id, enabled) => ipcRenderer.invoke('toggle-mapping', id, enabled),
   syncNow: (id) => ipcRenderer.invoke('sync-now', id),
   resolveConflict: (id, strategy) => ipcRenderer.invoke('resolve-conflict', id, strategy),

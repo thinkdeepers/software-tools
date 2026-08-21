@@ -2,7 +2,7 @@ const $ = (id) => document.getElementById(id);
 
 let state = { user: null, mappings: [], logs: [], settings: {} };
 let repos = [];
-let wizard = { repo: null, branch: null, createBranch: false, folder: null };
+let wizard = { repo: null, branch: null, createBranch: false, folder: null, mode: 'branch' };
 
 // ---------------- 渲染 ----------------
 const STATUS_TEXT = {
@@ -24,34 +24,73 @@ function render() {
   $('empty-hint').classList.toggle('hidden', state.mappings.length > 0);
 
   for (const m of state.mappings) {
-    const el = document.createElement('div');
-    el.className = 'task';
-    const last = m.lastSync ? `上次同步 ${new Date(m.lastSync).toLocaleString('zh-CN')}` : '尚未同步';
-    el.innerHTML = `
-      <div class="info">
-        <div class="title">${esc(m.repoFullName)}<span class="branch-tag">⎇ ${esc(m.branch)}</span></div>
-        <div class="path">📁 ${esc(m.folder)}</div>
-        <div class="last">${last}${m.error ? ' · ' + esc(m.error) : ''}</div>
-        ${m.status === 'conflict' ? `
-        <div class="conflict-bar">
-          <span>本地与云端修改了同一文件，保留哪边的版本？</span>
-          <button class="ghost small" data-act="res-local" data-id="${m.id}">以本地为准</button>
-          <button class="ghost small" data-act="res-remote" data-id="${m.id}">以云端为准</button>
-        </div>` : ''}
-      </div>
-      <span class="badge ${m.status}">${STATUS_TEXT[m.status] || m.status}</span>
-      <div class="ops">
-        <button class="ghost small" data-act="sync" data-id="${m.id}">立即同步</button>
-        <button class="ghost small" data-act="open" data-id="${m.id}">打开文件夹</button>
-        <button class="ghost small" data-act="toggle" data-id="${m.id}">${m.enabled ? '暂停' : '启用'}</button>
-        <button class="ghost small" data-act="del" data-id="${m.id}">删除</button>
-      </div>`;
-    list.appendChild(el);
+    if (m.mode === 'repo') {
+      list.appendChild(renderRepoTask(m));
+      for (const b of m.branches || []) list.appendChild(renderBranchTask(b, true));
+    } else {
+      list.appendChild(renderBranchTask(m, false));
+    }
   }
 
   const logBox = $('log-box');
   logBox.innerHTML = state.logs.map(l => `<div>${esc(l)}</div>`).join('');
   logBox.scrollTop = logBox.scrollHeight;
+}
+
+function lastLine(m) {
+  const last = m.lastSync ? `上次同步 ${new Date(m.lastSync).toLocaleString('zh-CN')}` : '尚未同步';
+  return last + (m.error ? ' · ' + esc(m.error) : '');
+}
+
+function conflictBar(m) {
+  if (m.status !== 'conflict') return '';
+  return `<div class="conflict-bar">
+    <span>本地与云端修改了同一文件，保留哪边的版本？</span>
+    <button class="ghost small" data-act="res-local" data-id="${m.id}">以本地为准</button>
+    <button class="ghost small" data-act="res-remote" data-id="${m.id}">以云端为准</button>
+  </div>`;
+}
+
+function renderRepoTask(m) {
+  const el = document.createElement('div');
+  el.className = 'task repo-hub';
+  const n = (m.branches || []).length;
+  el.innerHTML = `
+    <div class="info">
+      <div class="title">${esc(m.repoFullName)}<span class="branch-tag">整仓同步 · ${n} 个分支</span></div>
+      <div class="path">📁 ${esc(m.folder)}</div>
+      <div class="last">${lastLine(m)}</div>
+      <div class="hint">每个一层文件夹对应一个分支；删除某文件夹（或点「删除分支」）将删除 GitHub 上对应分支</div>
+    </div>
+    <span class="badge ${m.status}">${STATUS_TEXT[m.status] || m.status}</span>
+    <div class="ops">
+      <button class="ghost small" data-act="sync" data-id="${m.id}">全部同步</button>
+      <button class="ghost small" data-act="open" data-id="${m.id}">打开文件夹</button>
+      <button class="ghost small" data-act="toggle" data-id="${m.id}">${m.enabled ? '暂停' : '启用'}</button>
+      <button class="ghost small" data-act="del" data-id="${m.id}">删除任务</button>
+    </div>`;
+  return el;
+}
+
+function renderBranchTask(m, nested) {
+  const el = document.createElement('div');
+  el.className = nested ? 'task child-task' : 'task';
+  el.innerHTML = `
+    <div class="info">
+      <div class="title">${nested ? '' : esc(m.repoFullName)}<span class="branch-tag">⎇ ${esc(m.branch)}</span></div>
+      <div class="path">📁 ${esc(m.folder)}</div>
+      <div class="last">${lastLine(m)}</div>
+      ${conflictBar(m)}
+    </div>
+    <span class="badge ${m.status}">${STATUS_TEXT[m.status] || m.status}</span>
+    <div class="ops">
+      <button class="ghost small" data-act="sync" data-id="${m.id}">立即同步</button>
+      <button class="ghost small" data-act="open" data-id="${m.id}">打开文件夹</button>
+      ${nested ? `<button class="ghost small" data-act="del-branch" data-id="${m.id}">删除分支</button>` : `
+      <button class="ghost small" data-act="toggle" data-id="${m.id}">${m.enabled ? '暂停' : '启用'}</button>
+      <button class="ghost small" data-act="del" data-id="${m.id}">删除</button>`}
+    </div>`;
+  return el;
 }
 
 function esc(s) {
@@ -84,9 +123,13 @@ $('task-list').addEventListener('click', async (e) => {
   if (act === 'open') window.api.openFolder(id);
   if (act === 'toggle') {
     const m = state.mappings.find(x => x.id === id);
-    window.api.toggleMapping(id, !m.enabled);
+    if (m) window.api.toggleMapping(id, !m.enabled);
   }
-  if (act === 'del' && confirm('删除该同步任务？（本地文件不会被删除）')) window.api.removeMapping(id);
+  if (act === 'del' && confirm('删除该同步任务？（本地文件与远程分支都不会被删除）')) window.api.removeMapping(id);
+  if (act === 'del-branch' && confirm('将删除本地该分支文件夹，并删除 GitHub 上对应分支。默认分支无法删除。确定？')) {
+    try { await window.api.deleteRepoBranch(id); }
+    catch (e) { alert(e.message.replace(/^Error invoking remote method '.*?': (Error: )?/, '')); }
+  }
   if (act === 'res-local') window.api.resolveConflict(id, 'local');
   if (act === 'res-remote') window.api.resolveConflict(id, 'remote');
 });
@@ -98,12 +141,12 @@ function showStep(n) {
   $('wz-step3').classList.toggle('hidden', n !== 3);
   $('wizard-title').textContent =
     n === 1 ? '新建同步 · 第 1 步：选择仓库' :
-    n === 2 ? '新建同步 · 第 2 步：选择分支' :
+    n === 2 ? '新建同步 · 第 2 步：整仓或单个分支' :
               '新建同步 · 第 3 步：选择本地文件夹';
 }
 
 $('btn-add').onclick = async () => {
-  wizard = { repo: null, branch: null, createBranch: false, folder: null };
+  wizard = { repo: null, branch: null, createBranch: false, folder: null, mode: 'branch' };
   $('wizard').classList.remove('hidden');
   $('wizard-err').textContent = '';
   $('folder-display').value = '';
@@ -161,13 +204,31 @@ $('btn-new-branch').onclick = () => {
   if (!name) return;
   pickBranch(name, true);
 };
+$('repo-mode-pick').onclick = () => { if (wizard.repo) pickRepoMode(); };
+
+function pickRepoMode() {
+  wizard.mode = 'repo';
+  wizard.branch = null;
+  wizard.createBranch = false;
+  showStep(3);
+  $('chosen-summary').textContent = `${wizard.repo.fullName} · 整仓同步（每个分支一层文件夹）`;
+  $('folder-tip').innerHTML =
+    '· 所选目录下，每个远程分支会成为一层文件夹（分支名中的 / 等特殊字符会换成 _）<br />' +
+    '· 之后双向自动同步每个分支<br />' +
+    '· 删除某个分支文件夹，将同时删除 GitHub 上对应分支（默认分支除外）';
+}
 
 function pickBranch(branch, isNew) {
+  wizard.mode = 'branch';
   wizard.branch = branch;
   wizard.createBranch = isNew;
   showStep(3);
   $('chosen-summary').textContent =
     `${wizard.repo.fullName} 的分支「${branch}」${isNew ? '（新建）' : ''} ⇄ 本地文件夹`;
+  $('folder-tip').innerHTML =
+    '· 空文件夹：自动下载分支全部内容<br />' +
+    '· 非空文件夹：自动初始化并与分支内容合并（同名冲突以本地文件为准）<br />' +
+    '· 每个文件夹只能绑定一个分支';
 }
 
 $('btn-pick-folder').onclick = async () => {
@@ -178,16 +239,19 @@ $('btn-pick-folder').onclick = async () => {
 $('btn-create').onclick = async () => {
   $('wizard-err').textContent = '';
   if (!wizard.folder) { $('wizard-err').textContent = '请先选择本地文件夹'; return; }
+  if (wizard.mode !== 'repo' && !wizard.branch) { $('wizard-err').textContent = '请先选择分支'; return; }
   $('btn-create').disabled = true;
   $('btn-create').textContent = '初始化中，请稍候...';
   try {
     await window.api.addMapping({
+      mode: wizard.mode === 'repo' ? 'repo' : 'branch',
       repoFullName: wizard.repo.fullName,
       cloneUrl: wizard.repo.cloneUrl,
       branch: wizard.branch,
       folder: wizard.folder,
       createBranch: wizard.createBranch,
       baseBranch: wizard.repo.defaultBranch,
+      defaultBranch: wizard.repo.defaultBranch,
     });
     $('wizard').classList.add('hidden');
   } catch (e) {

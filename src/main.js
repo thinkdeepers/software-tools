@@ -43,9 +43,35 @@ function makeEngine() {
     }),
     getPollInterval: () => Number(process.env.SYNC_POLL_SEC) || cfg.settings.pollIntervalSec || 30,
     onUpdate: broadcast,
+    onPersist: persistMappings,
     log,
+    listBranches: (fullName) => github.listBranches(store.getToken(cfg), fullName),
+    deleteBranch: (fullName, branch) => github.deleteBranch(store.getToken(cfg), fullName, branch),
+    getDefaultBranch: async (fullName) => {
+      const r = await github.getRepo(store.getToken(cfg), fullName);
+      return r.defaultBranch;
+    },
   });
-  for (const m of cfg.mappings) engine.addTask(m);
+  for (const m of cfg.mappings) engine.addFromConfig(m);
+}
+
+function persistMappings() {
+  if (!engine) return;
+  cfg.mappings = engine.serialize();
+  store.save(cfg);
+}
+
+function foldersOverlap(a, b) {
+  const A = path.resolve(a);
+  const B = path.resolve(b);
+  const sep = path.sep;
+  const eq = process.platform === 'win32'
+    ? (x, y) => x.toLowerCase() === y.toLowerCase()
+    : (x, y) => x === y;
+  const starts = process.platform === 'win32'
+    ? (x, y) => x.toLowerCase().startsWith(y.toLowerCase())
+    : (x, y) => x.startsWith(y);
+  return eq(A, B) || starts(A, B + sep) || starts(B, A + sep);
 }
 
 async function tryAutoLogin() {
@@ -166,39 +192,64 @@ ipcMain.handle('pick-folder', async () => {
 });
 
 ipcMain.handle('add-mapping', async (_e, payload) => {
-  const { repoFullName, cloneUrl, branch, folder, createBranch, baseBranch } = payload;
-  // 校验：同一文件夹/同一"仓库+分支"不允许重复绑定
+  const { repoFullName, cloneUrl, branch, folder, createBranch, baseBranch, mode, defaultBranch } = payload;
+  const isRepo = mode === 'repo';
   for (const m of cfg.mappings) {
-    if (path.resolve(m.folder) === path.resolve(folder)) throw new Error('该文件夹已绑定其他同步任务');
-    if (m.repoFullName === repoFullName && m.branch === branch) throw new Error('该分支已绑定其他文件夹');
+    if (foldersOverlap(m.folder, folder)) throw new Error('该文件夹已绑定其他同步任务，或与现有任务目录重叠');
+    if (isRepo) {
+      if (m.repoFullName === repoFullName) throw new Error('该仓库已有同步任务，请先删除后再整仓同步');
+    } else {
+      if (m.mode === 'repo' && m.repoFullName === repoFullName) throw new Error('该仓库已在整仓同步中，无需再单独绑定分支');
+      if (m.repoFullName === repoFullName && m.branch === branch) throw new Error('该分支已绑定其他文件夹');
+    }
   }
-  const data = {
-    id: crypto.randomUUID(),
-    repoFullName, cloneUrl, branch, folder,
-    enabled: true,
-  };
-  const task = engine.addTask(data);
+  const data = isRepo
+    ? {
+      id: crypto.randomUUID(),
+      mode: 'repo',
+      repoFullName, cloneUrl, folder,
+      defaultBranch: defaultBranch || baseBranch || null,
+      enabled: true,
+      children: [],
+    }
+    : {
+      id: crypto.randomUUID(),
+      mode: 'branch',
+      repoFullName, cloneUrl, branch, folder,
+      enabled: true,
+    };
+  const task = engine.addFromConfig(data);
   broadcast();
   try {
-    await task.initialize({ createBranch, baseBranch });
+    await task.initialize(isRepo ? undefined : { createBranch, baseBranch });
   } catch (e) {
     engine.removeTask(data.id);
     broadcast();
     throw e;
   }
-  cfg.mappings.push(data);
-  store.save(cfg);
-  task.start();
+  persistMappings();
+  await task.start();
   broadcast();
   return task.view();
 });
 
 ipcMain.handle('remove-mapping', (_e, id) => {
   engine.removeTask(id);
-  cfg.mappings = cfg.mappings.filter(m => m.id !== id);
-  store.save(cfg);
+  persistMappings();
   log('已删除同步任务（本地文件不会被删除）');
   broadcast();
+});
+
+ipcMain.handle('delete-repo-branch', async (_e, childId) => {
+  for (const h of engine.hubs.values()) {
+    const child = h.childById(childId);
+    if (!child) continue;
+    await h.removeBranch(child.branch, { removeFolder: true });
+    persistMappings();
+    broadcast();
+    return true;
+  }
+  throw new Error('未找到该分支同步');
 });
 
 ipcMain.handle('toggle-mapping', (_e, id, enabled) => {
@@ -206,9 +257,15 @@ ipcMain.handle('toggle-mapping', (_e, id, enabled) => {
   if (!t) return;
   t.enabled = enabled;
   const saved = cfg.mappings.find(m => m.id === id);
-  if (saved) { saved.enabled = enabled; store.save(cfg); }
-  if (enabled) { t.setStatus('idle'); t.start(); }
-  else { t.stop(); t.setStatus('paused'); }
+  if (saved) { saved.enabled = enabled; }
+  persistMappings();
+  if (enabled) {
+    if (typeof t.setStatus === 'function') t.setStatus('idle');
+    t.start();
+  } else {
+    t.stop();
+    if (typeof t.setStatus === 'function') t.setStatus('paused');
+  }
   broadcast();
 });
 

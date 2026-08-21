@@ -38,7 +38,7 @@
       </div>
       <div id="task-list"></div>
       <div id="empty-hint" class="empty hidden">
-        还没有同步任务。点击右上角「新建同步」，选择仓库 → 分支 → 本地文件夹即可开始。
+        还没有同步任务。点击右上角「新建同步」：可同步整个仓库（每个分支一层文件夹），或只同步单个分支。
       </div>
     </main>
 
@@ -63,6 +63,11 @@
 
       <div id="wz-step2" class="wz-step hidden">
         <div class="chosen" id="chosen-repo"></div>
+        <div id="repo-mode-pick" class="pick-item featured">
+          <div class="name">整仓同步 · 全部分支</div>
+          <div class="desc">每个分支成为本地一层文件夹；删除某文件夹即删除 GitHub 上对应分支</div>
+        </div>
+        <div class="mode-split">或只同步单个分支</div>
         <div id="branch-list" class="pick-list"><div class="muted pad">加载中...</div></div>
         <div class="newbranch-row">
           <input id="new-branch-name" placeholder="或输入新分支名（将基于默认分支创建）" />
@@ -76,7 +81,7 @@
           <input id="folder-display" placeholder="尚未选择本地文件夹" readonly />
           <button id="btn-pick-folder" class="ghost">浏览...</button>
         </div>
-        <p class="muted tip">
+        <p class="muted tip" id="folder-tip">
           · 空文件夹：自动下载分支全部内容<br />
           · 非空文件夹：自动初始化并与分支内容合并（同名冲突以本地文件为准）<br />
           · 每个文件夹只能绑定一个分支

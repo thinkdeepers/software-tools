@@ -8,7 +8,8 @@ const FILE = () => path.join(app.getPath('userData'), 'config.json');
 const defaults = {
   tokenEnc: null,      // base64(加密后token)
   tokenPlain: null,    // 系统不支持加密时的降级存储
-  mappings: [],        // {id, repoFullName, cloneUrl, branch, folder, enabled}
+  mappings: [],        // 单分支: {id, mode:'branch', repoFullName, cloneUrl, branch, folder, enabled}
+                       // 整仓: {id, mode:'repo', repoFullName, cloneUrl, folder, enabled, defaultBranch, children:[{id, branch, folderName}]}
   settings: { pollIntervalSec: 30 },
 };
 
