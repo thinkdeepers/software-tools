@@ -106,7 +106,7 @@ function createTray() {
   tray.setToolTip('GitHub同步助手（后台自动同步中）');
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: '显示主界面', click: showWindow },
-    { label: '全部立即同步', click: () => { if (engine) for (const t of engine.tasks.values()) t.requestSync('托盘手动同步'); } },
+    { label: '全部立即同步', click: () => { if (engine) engine.syncAll('托盘手动同步'); } },
     { type: 'separator' },
     {
       label: '开机自动启动',
@@ -261,7 +261,10 @@ ipcMain.handle('toggle-mapping', (_e, id, enabled) => {
   persistMappings();
   if (enabled) {
     if (typeof t.setStatus === 'function') t.setStatus('idle');
-    t.start();
+    Promise.resolve(t.start()).catch(e => {
+      log(`启动失败: ${e.message}`);
+      if (typeof t.setStatus === 'function') t.setStatus('error', e.message);
+    });
   } else {
     t.stop();
     if (typeof t.setStatus === 'function') t.setStatus('paused');

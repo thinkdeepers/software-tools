@@ -23,6 +23,10 @@ class SyncTask {
     this._watcher = null;
     this._timer = null;
     this.hubId = data.hubId || null;
+    // 单分支任务：远程分支被删掉时自动重建（保持原有行为）
+    // 整仓子任务：由 RepoHub 接管，云端删了分支就删本地文件夹
+    this.allowCreateRemote = true;
+    this.onRemoteGone = null;
   }
 
   view() {
@@ -39,6 +43,22 @@ class SyncTask {
 
   opts() {
     return { cwd: this.folder, token: this.ctx.getToken(), identity: this.ctx.getIdentity() };
+  }
+
+  // 直接问远程仓库要答案：存在返回 true，确定不存在返回 false，网络/认证异常则抛错。
+  // 用来把「分支被删」和「网络不通」区分开，避免误删本地文件夹。
+  async remoteBranchExists() {
+    const r = await run(['ls-remote', '--exit-code', '--heads', 'origin', `refs/heads/${this.branch}`], this.opts());
+    if (r.code === 0) return true;
+    if (r.code === 2) return false;
+    throw new Error(`无法访问远程仓库: ${r.err || r.out}`);
+  }
+
+  // 本地领先于最后一次见到的远程分支的提交数（远程分支已被删时用来判断本地有没有独有内容）
+  async localOnlyCommits() {
+    const r = await run(['rev-list', '--count', `refs/remotes/origin/${this.branch}..HEAD`], this.opts());
+    if (r.code !== 0) return 1; // 判断不了时按「本地有独有内容」保守处理
+    return Number(r.out) || 0;
   }
 
   // ---------- 初始化：把本地文件夹和远程分支关联起来 ----------
@@ -114,6 +134,8 @@ class SyncTask {
 
   async _cycle(reason) {
     if (!this.enabled || this.status === 'conflict') return;
+    // 文件夹被删掉时 git 连 cwd 都进不去，先挡住，免得报一堆看不懂的错
+    if (this._bailIfFolderGone()) return;
     this.setStatus('syncing');
     try {
       // 1. 本地变动 → 提交
@@ -127,7 +149,12 @@ class SyncTask {
 
       // 2. 拉取远程
       const f = await run(['fetch', 'origin', `+refs/heads/${this.branch}:refs/remotes/origin/${this.branch}`], this.opts());
-      const remoteExists = f.code === 0;
+      let remoteExists = f.code === 0;
+      if (!remoteExists) {
+        // fetch 失败可能是分支没了，也可能是网络不通，问一次远程确认（网络问题会抛错）
+        remoteExists = await this.remoteBranchExists();
+        if (remoteExists) throw new Error(`拉取失败: ${f.err || f.out}`);
+      }
 
       if (remoteExists) {
         const cnt = await must(['rev-list', '--left-right', '--count', `HEAD...origin/${this.branch}`], this.opts(), '比较进度');
@@ -153,19 +180,35 @@ class SyncTask {
           if (p.code !== 0) throw new Error(`推送失败: ${p.err}`);
           this.log(`已推送 ${ahead} 个提交到云端`);
         }
-      } else {
+      } else if (this.allowCreateRemote) {
         // 远程分支不存在（可能被删）：重新推送创建
         const p = await run(['push', '-u', 'origin', this.branch], this.opts());
         if (p.code !== 0) throw new Error(`推送失败: ${p.err}`);
         this.log('远程分支不存在，已重新创建并推送');
+      } else {
+        // 整仓模式：云端删了分支就是要删这个分支，交给 RepoHub 清理本地文件夹
+        this.log('云端已找不到该分支');
+        this.setStatus('idle');
+        if (this.onRemoteGone) this.onRemoteGone();
+        return;
       }
 
       this.lastSync = new Date().toISOString();
       this.setStatus('ok');
     } catch (e) {
+      // 同步途中文件夹被删（比如整仓模式下云端删了分支），不算出错
+      if (this._bailIfFolderGone()) return;
       this.log(`同步出错: ${e.message}`);
       this.setStatus('error', e.message);
     }
+  }
+
+  _bailIfFolderGone() {
+    if (fs.existsSync(this.folder)) return false;
+    this.stop();
+    this.log('本地文件夹已不存在，暂停该分支同步');
+    this.setStatus(this.hubId ? 'idle' : 'error', this.hubId ? null : '本地文件夹不存在');
+    return true;
   }
 
   // ---------- 冲突处理 ----------
@@ -285,6 +328,11 @@ class SyncEngine {
 
   persist() { if (this.ctx.onPersist) this.ctx.onPersist(); }
 
+  syncAll(reason) {
+    for (const h of this.hubs.values()) if (h.enabled) h.requestSync(reason);
+    for (const t of this.tasks.values()) if (t.enabled) t.requestSync(reason);
+  }
+
   stopAll() {
     for (const h of this.hubs.values()) h.stop();
     for (const t of this.tasks.values()) t.stop();
@@ -309,6 +357,19 @@ function folderNameForBranch(branch, taken) {
   let n = 2;
   while (lower.has(name.toLowerCase())) name = `${base}_${n++}`;
   return name;
+}
+
+// 云端分支被删、但本地还有没推上去的内容时，文件夹保留成这个后缀，避免误删用户数据
+const ARCHIVE_SUFFIX = '__云端已删除';
+
+// 文件夹名要变成分支名，得先满足 git 的分支命名规则
+function isValidBranchName(name) {
+  if (!name || name === '@') return false;
+  if (/[\s~^:?*[\\]/.test(name)) return false;
+  if (name.includes('..') || name.includes('@{')) return false;
+  if (name.startsWith('/') || name.startsWith('-') || name.startsWith('.')) return false;
+  if (name.endsWith('/') || name.endsWith('.') || name.endsWith('.lock')) return false;
+  return true;
 }
 
 function samePath(a, b) {
@@ -340,7 +401,11 @@ class RepoHub {
     this._rootWatcher = null;
     this._timer = null;
     this._pendingDeletes = new Map();
+    this._pendingAdds = new Map();
     this._ignore = new Set();
+    this._creating = new Set();
+    this._goneHandling = new Set();
+    this._reconciling = false;
     this._starting = false;
     if (Array.isArray(data.children)) {
       for (const c of data.children) this._attachChild(c);
@@ -367,6 +432,8 @@ class RepoHub {
       enabled: this.enabled,
       hubId: this.id,
     }, this.ctx);
+    task.allowCreateRemote = false;
+    task.onRemoteGone = () => { this.handleRemoteBranchGone(c.branch); };
     this.children.set(c.branch, task);
     return task;
   }
@@ -421,6 +488,13 @@ class RepoHub {
 
   requestSync(reason) {
     for (const t of this.children.values()) t.requestSync(reason);
+    // 整仓同步不止同步文件，还要同步「有哪些分支」
+    if (this.enabled && !this._reconciling) {
+      this._reconciling = true;
+      Promise.resolve(this.reconcile())
+        .catch(e => this.log(`检查远程分支失败: ${e.message}`))
+        .finally(() => { this._reconciling = false; });
+    }
   }
 
   resolveConflict() { return Promise.resolve(); }
@@ -449,7 +523,7 @@ class RepoHub {
     }
   }
 
-  async ensureBranch(branch, { initialize = false } = {}) {
+  async ensureBranch(branch, { initialize = false, folderName = null, createBranch = false } = {}) {
     if (this.children.has(branch)) {
       const t = this.children.get(branch);
       if (!fs.existsSync(path.join(t.folder, '.git'))) {
@@ -459,21 +533,26 @@ class RepoHub {
       if (this.enabled && this._rootWatcher) t.start();
       return t;
     }
-    const folderName = folderNameForBranch(branch, this.takenFolderNames());
-    const folder = path.join(this.folder, folderName);
+    const name = folderName || folderNameForBranch(branch, this.takenFolderNames());
+    const folder = path.join(this.folder, name);
     this._ignore.add(path.resolve(folder));
     const task = this._attachChild({
       id: crypto.randomUUID(),
       branch,
-      folderName,
+      folderName: name,
     });
     try {
       if (initialize || !fs.existsSync(folder) || !fs.existsSync(path.join(folder, '.git'))) {
         fs.mkdirSync(folder, { recursive: true });
-        await task.initialize();
+        if (createBranch) {
+          if (!this.defaultBranch) throw new Error('仓库还没有任何分支，无法基于默认分支创建');
+          await task.initialize({ createBranch: true, baseBranch: this.defaultBranch });
+        } else {
+          await task.initialize();
+        }
       }
       if (this.enabled && this._rootWatcher) task.start();
-      this.log(`已加入分支 ${branch} → 文件夹 ${folderName}`);
+      this.log(`已加入分支 ${branch} → 文件夹 ${name}`);
       this.ctx.onPersist && this.ctx.onPersist();
       this.ctx.onUpdate();
       return task;
@@ -482,7 +561,93 @@ class RepoHub {
       this.children.delete(branch);
       throw e;
     } finally {
-      setTimeout(() => this._ignore.delete(path.resolve(folder)), 8000);
+      setTimeout(() => this._ignore.delete(path.resolve(folder)), 15000);
+    }
+  }
+
+  // 云端删了分支 → 本地对应文件夹也要消失，保持「一个分支 = 一层文件夹」
+  async handleRemoteBranchGone(branch) {
+    const task = this.children.get(branch);
+    if (!task || this._goneHandling.has(branch)) return;
+    if (task.status === 'init' || this._creating.has(path.basename(task.folder))) return;
+    this._goneHandling.add(branch);
+    try {
+      // GitHub 接口有缓存，删本地文件夹前一定要向远程仓库再确认一次
+      let exists;
+      try {
+        exists = await task.remoteBranchExists();
+      } catch (e) {
+        this.log(`确认分支 ${branch} 是否存在失败，暂不处理: ${e.message}`);
+        return;
+      }
+      if (exists) return;
+
+      const folder = task.folder;
+      const name = path.basename(folder);
+      const localOnly = await task.localOnlyCommits();
+      task.stop();
+      this.children.delete(branch);
+      this._ignore.add(path.resolve(folder));
+      if (localOnly > 0) {
+        const kept = this._archiveFolder(folder);
+        this.log(`云端分支 ${branch} 已被删除；本地还有 ${localOnly} 个未推送的提交，文件夹保留为 ${kept}`);
+      } else if (fs.existsSync(folder)) {
+        fs.rmSync(folder, { recursive: true, force: true });
+        this.log(`云端分支 ${branch} 已被删除，已同步移除本地文件夹 ${name}`);
+      }
+      this.ctx.onPersist && this.ctx.onPersist();
+      this.ctx.onUpdate();
+      setTimeout(() => this._ignore.delete(path.resolve(folder)), 15000);
+    } finally {
+      this._goneHandling.delete(branch);
+    }
+  }
+
+  _archiveFolder(folder) {
+    const dir = path.dirname(folder);
+    let target = `${folder}${ARCHIVE_SUFFIX}`;
+    let n = 2;
+    while (fs.existsSync(target)) target = `${folder}${ARCHIVE_SUFFIX}_${n++}`;
+    this._ignore.add(path.resolve(target));
+    try {
+      fs.renameSync(folder, target);
+    } catch {
+      return path.basename(folder); // 改名失败就原样留着
+    }
+    setTimeout(() => this._ignore.delete(path.resolve(target)), 15000);
+    return path.basename(target);
+  }
+
+  // 用户在根目录新建了一层文件夹 → 在 GitHub 上开一个同名分支并接管同步
+  async _onFolderAdded(name) {
+    if (!this.enabled) return;
+    const folder = path.join(this.folder, name);
+    if (!fs.existsSync(folder)) return;
+    if (this._ignore.has(path.resolve(folder))) return;
+    if (name.includes(ARCHIVE_SUFFIX)) return;
+    if (this._creating.has(name)) return;
+    if ([...this.children.values()].some(t => samePath(t.folder, folder))) return;
+    if (!isValidBranchName(name)) {
+      this.log(`文件夹「${name}」不能作为分支名（不能含空格和 ~ ^ : ? * [ \\ 等字符），已忽略`);
+      return;
+    }
+    this._creating.add(name);
+    this._ignore.add(path.resolve(folder));
+    try {
+      let remote = [];
+      try { remote = await this.ctx.listBranches(this.repoFullName); } catch { /* 拿不到就当没有 */ }
+      const existsRemote = remote.includes(name);
+      this.log(existsRemote
+        ? `检测到新文件夹 ${name}，云端已有同名分支，直接关联`
+        : `检测到新文件夹 ${name}，将在 GitHub 新建分支 ${name}`);
+      await this.ensureBranch(name, { initialize: true, folderName: name, createBranch: !existsRemote });
+      this.setStatus('ok');
+    } catch (e) {
+      this.log(`根据文件夹 ${name} 创建分支失败: ${e.message}`);
+      this.setStatus('error', e.message);
+    } finally {
+      this._creating.delete(name);
+      setTimeout(() => this._ignore.delete(path.resolve(folder)), 15000);
     }
   }
 
@@ -554,14 +719,17 @@ class RepoHub {
       }
       const remote = await this.ctx.listBranches(this.repoFullName);
       const remoteSet = new Set(remote);
+      // 云端多出来的分支 → 本地补一层文件夹
       for (const branch of remote) {
         if (!this.children.has(branch)) {
           try { await this.ensureBranch(branch, { initialize: true }); }
           catch (e) { this.log(`同步新分支 ${branch} 失败: ${e.message}`); }
         }
       }
-      // 本地文件夹还在、但启动时已处理过「文件夹被删」；这里不因远程少了分支而删本地
-      void remoteSet;
+      // 云端已经没有的分支 → 本地那层文件夹也去掉
+      for (const branch of [...this.children.keys()]) {
+        if (!remoteSet.has(branch)) await this.handleRemoteBranchGone(branch);
+      }
     } catch (e) {
       this.log(`检查远程分支失败: ${e.message}`);
     }
@@ -594,12 +762,9 @@ class RepoHub {
     }
     this._watchRoot();
     const interval = Math.max(5, this.ctx.getPollInterval()) * 1000;
-    this._timer = setInterval(() => {
-      this.reconcile();
-      this.requestSync('定时检查云端');
-    }, interval);
+    this._timer = setInterval(() => this.requestSync('定时检查云端'), interval);
     this._starting = false;
-    this.log('整仓同步已启动：一层文件夹 = 一个分支；删除文件夹即删除该分支');
+    this.log('整仓同步已启动：一层文件夹 = 一个分支，直接在文件夹里改就行；新建文件夹＝新建分支，删除文件夹＝删除分支');
     this.setStatus('ok');
   }
 
@@ -622,6 +787,11 @@ class RepoHub {
       const name = path.basename(p);
       clearTimeout(this._pendingDeletes.get(name));
       this._pendingDeletes.delete(name);
+      if (this._ignore.has(path.resolve(p))) return;
+      if ([...this.children.values()].some(t => samePath(t.folder, p))) return;
+      // 等文件夹稳定下来（比如用户还在往里拖文件、或刚重命名完）再建分支
+      clearTimeout(this._pendingAdds.get(name));
+      this._pendingAdds.set(name, setTimeout(() => this._onFolderAdded(name), 4000));
     });
   }
 
@@ -630,9 +800,11 @@ class RepoHub {
     if (this._timer) { clearInterval(this._timer); this._timer = null; }
     for (const t of this._pendingDeletes.values()) clearTimeout(t);
     this._pendingDeletes.clear();
+    for (const t of this._pendingAdds.values()) clearTimeout(t);
+    this._pendingAdds.clear();
     for (const t of this.children.values()) t.stop();
   }
 }
 
-module.exports = { SyncEngine, folderNameForBranch };
+module.exports = { SyncEngine, folderNameForBranch, isValidBranchName };
 

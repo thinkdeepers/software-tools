@@ -3,6 +3,7 @@ const $ = (id) => document.getElementById(id);
 let state = { user: null, mappings: [], logs: [], settings: {} };
 let repos = [];
 let wizard = { repo: null, branch: null, createBranch: false, folder: null, mode: 'branch' };
+const collapsed = new Set(); // 折叠起来的整仓任务 id
 
 // ---------------- 渲染 ----------------
 const STATUS_TEXT = {
@@ -26,7 +27,9 @@ function render() {
   for (const m of state.mappings) {
     if (m.mode === 'repo') {
       list.appendChild(renderRepoTask(m));
-      for (const b of m.branches || []) list.appendChild(renderBranchTask(b, true));
+      if (!collapsed.has(m.id)) {
+        for (const b of m.branches || []) list.appendChild(renderBranchTask(b, true));
+      }
     } else {
       list.appendChild(renderBranchTask(m, false));
     }
@@ -55,12 +58,17 @@ function renderRepoTask(m) {
   const el = document.createElement('div');
   el.className = 'task repo-hub';
   const n = (m.branches || []).length;
+  const isCollapsed = collapsed.has(m.id);
   el.innerHTML = `
     <div class="info">
-      <div class="title">${esc(m.repoFullName)}<span class="branch-tag">整仓同步 · ${n} 个分支</span></div>
+      <div class="title">
+        <button class="fold" data-act="fold" data-id="${m.id}" title="${isCollapsed ? '展开分支' : '折叠分支'}">${isCollapsed ? '▸' : '▾'}</button>
+        ${esc(m.repoFullName)}<span class="branch-tag">整仓同步 · ${n} 个分支</span>
+      </div>
       <div class="path">📁 ${esc(m.folder)}</div>
       <div class="last">${lastLine(m)}</div>
-      <div class="hint">每个一层文件夹对应一个分支；删除某文件夹（或点「删除分支」）将删除 GitHub 上对应分支</div>
+      <div class="hint">一层文件夹 = 一个分支，直接在文件夹里改文件即可，不用另建分支。<br />
+      新建一层文件夹 → GitHub 上自动新建同名分支；删除文件夹 → 删除对应分支（默认分支除外）。</div>
     </div>
     <span class="badge ${m.status}">${STATUS_TEXT[m.status] || m.status}</span>
     <div class="ops">
@@ -119,6 +127,11 @@ $('task-list').addEventListener('click', async (e) => {
   const btn = e.target.closest('button[data-act]');
   if (!btn) return;
   const { act, id } = btn.dataset;
+  if (act === 'fold') {
+    if (collapsed.has(id)) collapsed.delete(id); else collapsed.add(id);
+    render();
+    return;
+  }
   if (act === 'sync') window.api.syncNow(id);
   if (act === 'open') window.api.openFolder(id);
   if (act === 'toggle') {
@@ -214,8 +227,9 @@ function pickRepoMode() {
   $('chosen-summary').textContent = `${wizard.repo.fullName} · 整仓同步（每个分支一层文件夹）`;
   $('folder-tip').innerHTML =
     '· 所选目录下，每个远程分支会成为一层文件夹（分支名中的 / 等特殊字符会换成 _）<br />' +
-    '· 之后双向自动同步每个分支<br />' +
-    '· 删除某个分支文件夹，将同时删除 GitHub 上对应分支（默认分支除外）';
+    '· 直接在某个分支文件夹里改文件即可，改动自动提交推送到该分支，不需要另外新建分支<br />' +
+    '· 云端新增分支 → 本地自动多一层文件夹；云端删除分支 → 本地对应文件夹自动移除<br />' +
+    '· 本地新建一层文件夹 → GitHub 上自动新建同名分支；删除文件夹 → 删除对应分支（默认分支除外）';
 }
 
 function pickBranch(branch, isNew) {
