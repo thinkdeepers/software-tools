@@ -96,8 +96,19 @@ async function main() {
   await startMock();
 
   const github = require('../src/github');
-  const { SyncEngine } = require('../src/syncengine');
+  const { SyncEngine, isRemoteRefMissing } = require('../src/syncengine');
   const TOKEN = 'test-token';
+
+  step('0. 识别「远程分支已不存在」的 git 报错');
+  isRemoteRefMissing("fatal: couldn't find remote ref refs/heads/dev")
+    ? ok('fetch 失败文案能识别成分支没了')
+    : fail('没认出 fetch 的「找不到远程分支」');
+  isRemoteRefMissing('error: unable to delete \'dev\': remote ref does not exist')
+    ? ok('push --delete 失败文案能识别成分支没了')
+    : fail('没认出 push --delete 的「分支不存在」');
+  isRemoteRefMissing('fatal: unable to access https://github.com: Could not resolve host')
+    ? fail('把网络错误误判成分支没了')
+    : ok('网络错误不会被当成分支已删除');
 
   const engine = new SyncEngine({
     getToken: () => TOKEN,
@@ -165,13 +176,24 @@ async function main() {
   await waitFor('本地出现 release 文件夹且内容正确', () =>
     fs.readFileSync(path.join(WORK, 'release', 'who.txt'), 'utf8').trim() === 'release');
 
-  step('5. 云端删除分支 → 本地对应文件夹自动移除（不会被推回去）');
+  step('5. 云端删除分支 → 本地对应文件夹自动移除（本地有未推送改动也要删，不能报错卡住）');
+  fs.writeFileSync(path.join(WORK, 'feature_x', 'dirty.txt'), '还没推上去的本地改动\n');
   git(BARE, 'update-ref', '-d', 'refs/heads/feature/x');
   await waitFor('本地 feature_x 文件夹已移除', () => !fs.existsSync(path.join(WORK, 'feature_x')));
-  await sleep(7000);
+  localFolders().some(n => n.includes('云端已删除'))
+    ? fail('本地文件夹被改名保留了，应该直接删除')
+    : ok('未推送的本地改动没有挡住删除');
+  await sleep(4000);
   remoteBranches().includes('feature/x')
     ? fail('已删除的分支不应该被本地重新推回云端')
     : ok('已删除的分支没有被重新推回云端');
+  const hubView = hub.view();
+  hubView.branches.some(b => b.branch === 'feature/x')
+    ? fail('界面任务列表里还留着已删分支')
+    : ok('整仓任务里已经去掉该分支');
+  hubView.status === 'error'
+    ? fail(`整仓任务卡在出错状态: ${hubView.error}`)
+    : ok('整仓任务没有因为删分支而报错');
 
   step('6. 本地新建一层文件夹 → GitHub 上自动新建同名分支');
   const NEW = path.join(WORK, 'hotfix');
@@ -193,7 +215,7 @@ async function main() {
     : fail('默认分支被误删了');
 
   step('9. 只同步单个分支的老用法没被破坏');
-  hub.stop();
+  await hub.stop();
   const SOLO = path.join(ROOT, 'solo');
   const solo = engine.addFromConfig({
     id: crypto.randomUUID(),
@@ -208,10 +230,42 @@ async function main() {
   fs.existsSync(path.join(SOLO, 'note.txt'))
     ? ok('单分支任务把 dev 分支下载到了指定文件夹')
     : fail('单分支任务没有下载到内容');
-  solo.start();
+  await solo.start();
   fs.writeFileSync(path.join(SOLO, 'solo.txt'), '单分支模式\n');
   await waitFor('单分支任务的本地改动推送成功', () =>
     git(BARE, 'ls-tree', '--name-only', 'dev').split('\n').includes('solo.txt'));
+
+  step('10. 单分支：云端删除分支 → 本地文件夹和任务一起删掉，不能报错卡住');
+  git(BARE, 'update-ref', '-d', 'refs/heads/dev');
+  await waitFor('单分支本地文件夹已移除', () => !fs.existsSync(SOLO));
+  engine.tasks.has(solo.id)
+    ? fail('单分支任务还留在引擎里')
+    : ok('单分支任务已从列表移除');
+
+  step('11. 单分支：删除本地文件夹 → 云端对应分支也删除');
+  git(SEED, 'checkout', '-b', 'solo-del', 'main');
+  fs.writeFileSync(path.join(SEED, 'who.txt'), 'solo-del\n');
+  git(SEED, 'add', '-A');
+  git(SEED, 'commit', '-m', 'solo-del 初始');
+  git(SEED, 'push', '-u', 'origin', 'solo-del');
+  git(SEED, 'checkout', 'main');
+  const SOLO2 = path.join(ROOT, 'solo2');
+  const solo2 = engine.addFromConfig({
+    id: crypto.randomUUID(),
+    mode: 'branch',
+    repoFullName: 'testuser/AI-pet-demo',
+    cloneUrl: `file://${BARE}`,
+    branch: 'solo-del',
+    folder: SOLO2,
+    enabled: true,
+  });
+  await solo2.initialize({ createBranch: false, baseBranch: 'main' });
+  await solo2.start();
+  fs.rmSync(SOLO2, { recursive: true, force: true });
+  await waitFor('云端 solo-del 分支已删除', () => !remoteBranches().includes('solo-del'));
+  engine.tasks.has(solo2.id)
+    ? fail('删除文件夹后单分支任务还留着')
+    : ok('删除文件夹后单分支任务已移除');
 
   step(`结果：${failures === 0 ? '全部通过' : failures + ' 项失败'}`);
   console.log(`  云端分支: ${remoteBranches().join(', ')}`);

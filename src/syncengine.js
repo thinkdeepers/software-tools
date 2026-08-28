@@ -4,11 +4,69 @@
 // 冲突：中止合并，任务进入"冲突"状态等用户选择（以本地为准 / 以云端为准）
 const chokidar = require('chokidar');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { run, must, authUrl } = require('./gitops');
 
 const GIT_DIR_RE = /(^|[/\\])\.git([/\\]|$)/;
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// fetch / ls-remote / push --delete 在「分支已经不存在」时的典型报错
+function isRemoteRefMissing(err, out = '') {
+  const s = `${err || ''} ${out || ''}`;
+  return /couldn't find remote ref|remote ref does not exist|unresolvable reference/i.test(s);
+}
+
+function isProtectedBranchError(err) {
+  const s = String(err || '');
+  return /default branch|refusing to delete|cannot delete the default branch|protected branch/i.test(s)
+    || err?.status === 403 || err?.status === 422 || err?.code === 'PROTECTED';
+}
+
+function chmodTreeWritable(root) {
+  if (!fs.existsSync(root)) return;
+  try { fs.chmodSync(root, 0o700); } catch { /* ignore */ }
+  let entries = [];
+  try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch { return; }
+  for (const e of entries) {
+    const p = path.join(root, e.name);
+    try { fs.chmodSync(p, e.isDirectory() ? 0o700 : 0o600); } catch { /* ignore */ }
+    if (e.isDirectory()) chmodTreeWritable(p);
+  }
+}
+
+// Windows 上 chokidar / git 句柄没释放完时 rm 会 EBUSY/EPERM，多试几次
+async function removeDirRetry(dir, attempts = 8) {
+  if (!dir || !fs.existsSync(dir)) return;
+  let last;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 150 });
+      if (!fs.existsSync(dir)) return;
+    } catch (e) { last = e; }
+    if (i === 2 || i === 5) {
+      try { chmodTreeWritable(dir); } catch { /* ignore */ }
+    }
+    await sleep(150 * (i + 1));
+  }
+  if (fs.existsSync(dir)) throw last || new Error(`无法删除文件夹 ${dir}`);
+}
+
+async function deleteRemoteBranchViaGit(cloneUrl, branch, opts = {}) {
+  const url = authUrl(cloneUrl);
+  const cwd = opts.cwd && fs.existsSync(opts.cwd) ? opts.cwd : os.tmpdir();
+  const r = await run(['push', url, '--delete', branch], { ...opts, cwd });
+  if (r.code === 0) return;
+  if (isRemoteRefMissing(r.err, r.out)) return;
+  if (isProtectedBranchError(r.err) || isProtectedBranchError(r.out)) {
+    const e = new Error(r.err || r.out || `GitHub 不允许删除分支 ${branch}`);
+    e.code = 'PROTECTED';
+    throw e;
+  }
+  throw new Error(`删除远程分支 ${branch} 失败: ${r.err || r.out}`);
+}
 
 class SyncTask {
   constructor(data, ctx) {
@@ -23,10 +81,11 @@ class SyncTask {
     this._watcher = null;
     this._timer = null;
     this.hubId = data.hubId || null;
-    // 单分支任务：远程分支被删掉时自动重建（保持原有行为）
-    // 整仓子任务：由 RepoHub 接管，云端删了分支就删本地文件夹
-    this.allowCreateRemote = true;
+    // 云端删了分支 → 删本地文件夹；本地文件夹没了 → 删远程分支
     this.onRemoteGone = null;
+    this.onLocalGone = null;
+    this._dropping = false;
+    this._localGoneNotified = false;
   }
 
   view() {
@@ -45,20 +104,16 @@ class SyncTask {
     return { cwd: this.folder, token: this.ctx.getToken(), identity: this.ctx.getIdentity() };
   }
 
-  // 直接问远程仓库要答案：存在返回 true，确定不存在返回 false，网络/认证异常则抛错。
-  // 用来把「分支被删」和「网络不通」区分开，避免误删本地文件夹。
+  // 直接问远程仓库：存在 true，确定不存在 false，网络/认证异常抛错。
+  // 用 clone URL 而不是 cwd 里的 origin，文件夹正在被删时也能问。
   async remoteBranchExists() {
-    const r = await run(['ls-remote', '--exit-code', '--heads', 'origin', `refs/heads/${this.branch}`], this.opts());
+    const url = authUrl(this.cloneUrl);
+    const cwd = this.folder && fs.existsSync(this.folder) ? this.folder : os.tmpdir();
+    const r = await run(['ls-remote', '--exit-code', '--heads', url, this.branch], { ...this.opts(), cwd });
     if (r.code === 0) return true;
-    if (r.code === 2) return false;
+    if (r.code === 1 || r.code === 2) return false;
+    if (isRemoteRefMissing(r.err, r.out)) return false;
     throw new Error(`无法访问远程仓库: ${r.err || r.out}`);
-  }
-
-  // 本地领先于最后一次见到的远程分支的提交数（远程分支已被删时用来判断本地有没有独有内容）
-  async localOnlyCommits() {
-    const r = await run(['rev-list', '--count', `refs/remotes/origin/${this.branch}..HEAD`], this.opts());
-    if (r.code !== 0) return 1; // 判断不了时按「本地有独有内容」保守处理
-    return Number(r.out) || 0;
   }
 
   // ---------- 初始化：把本地文件夹和远程分支关联起来 ----------
@@ -127,18 +182,34 @@ class SyncTask {
 
   // ---------- 同步循环（串行化，双向） ----------
   requestSync(reason) {
-    if (!this.enabled || this.status === 'conflict' || this.status === 'init') return;
+    if (!this.enabled || this._dropping || this.status === 'conflict' || this.status === 'init') return;
     this._chain = this._chain.then(() => this._cycle(reason)).catch(() => {});
     return this._chain;
   }
 
   async _cycle(reason) {
-    if (!this.enabled || this.status === 'conflict') return;
-    // 文件夹被删掉时 git 连 cwd 都进不去，先挡住，免得报一堆看不懂的错
+    if (!this.enabled || this._dropping || this.status === 'conflict') return;
     if (this._bailIfFolderGone()) return;
     this.setStatus('syncing');
     try {
-      // 1. 本地变动 → 提交
+      // 先问云端还在不在。分支没了就删本地，不要先 commit，否则未推送提交会挡住删除。
+      const f = await run(['fetch', 'origin', `+refs/heads/${this.branch}:refs/remotes/origin/${this.branch}`], this.opts());
+      let remoteExists = f.code === 0;
+      if (!remoteExists) {
+        if (isRemoteRefMissing(f.err, f.out)) {
+          remoteExists = false;
+        } else {
+          remoteExists = await this.remoteBranchExists();
+          if (remoteExists) throw new Error(`拉取失败: ${f.err || f.out}`);
+        }
+      }
+
+      if (!remoteExists) {
+        await this._handleRemoteGone();
+        return;
+      }
+
+      // 本地变动 → 提交
       await run(['add', '-A'], this.opts());
       const staged = await run(['diff', '--cached', '--quiet'], this.opts());
       if (staged.code === 1) {
@@ -147,67 +218,78 @@ class SyncTask {
         this.log(`已提交本地变动（${reason}）`);
       }
 
-      // 2. 拉取远程
-      const f = await run(['fetch', 'origin', `+refs/heads/${this.branch}:refs/remotes/origin/${this.branch}`], this.opts());
-      let remoteExists = f.code === 0;
-      if (!remoteExists) {
-        // fetch 失败可能是分支没了，也可能是网络不通，问一次远程确认（网络问题会抛错）
-        remoteExists = await this.remoteBranchExists();
-        if (remoteExists) throw new Error(`拉取失败: ${f.err || f.out}`);
+      const cnt = await must(['rev-list', '--left-right', '--count', `HEAD...origin/${this.branch}`], this.opts(), '比较进度');
+      let [ahead, behind] = cnt.out.split(/\s+/).map(Number);
+
+      if (behind > 0) {
+        const m = await run(['merge', `origin/${this.branch}`, '--no-edit'], this.opts());
+        if (m.code !== 0) {
+          await run(['merge', '--abort'], this.opts());
+          this.log('本地与云端修改了同一文件，产生冲突，请在界面上选择保留哪边');
+          this.setStatus('conflict', '本地与云端修改冲突');
+          return;
+        }
+        this.log(`已拉取云端 ${behind} 个新提交到本地`);
+        const cnt2 = await must(['rev-list', '--left-right', '--count', `HEAD...origin/${this.branch}`], this.opts(), '比较进度');
+        [ahead] = cnt2.out.split(/\s+/).map(Number);
       }
 
-      if (remoteExists) {
-        const cnt = await must(['rev-list', '--left-right', '--count', `HEAD...origin/${this.branch}`], this.opts(), '比较进度');
-        let [ahead, behind] = cnt.out.split(/\s+/).map(Number);
-
-        // 3. 云端有新提交 → 合并到本地
-        if (behind > 0) {
-          const m = await run(['merge', `origin/${this.branch}`, '--no-edit'], this.opts());
-          if (m.code !== 0) {
-            await run(['merge', '--abort'], this.opts());
-            this.log('本地与云端修改了同一文件，产生冲突，请在界面上选择保留哪边');
-            this.setStatus('conflict', '本地与云端修改冲突');
+      if (ahead > 0) {
+        const p = await run(['push', 'origin', `HEAD:${this.branch}`], this.opts());
+        if (p.code !== 0) {
+          if (isRemoteRefMissing(p.err, p.out)) {
+            await this._handleRemoteGone();
             return;
           }
-          this.log(`已拉取云端 ${behind} 个新提交到本地`);
-          const cnt2 = await must(['rev-list', '--left-right', '--count', `HEAD...origin/${this.branch}`], this.opts(), '比较进度');
-          [ahead] = cnt2.out.split(/\s+/).map(Number);
+          throw new Error(`推送失败: ${p.err}`);
         }
-
-        // 4. 本地领先 → 推送
-        if (ahead > 0) {
-          const p = await run(['push', 'origin', `HEAD:${this.branch}`], this.opts());
-          if (p.code !== 0) throw new Error(`推送失败: ${p.err}`);
-          this.log(`已推送 ${ahead} 个提交到云端`);
-        }
-      } else if (this.allowCreateRemote) {
-        // 远程分支不存在（可能被删）：重新推送创建
-        const p = await run(['push', '-u', 'origin', this.branch], this.opts());
-        if (p.code !== 0) throw new Error(`推送失败: ${p.err}`);
-        this.log('远程分支不存在，已重新创建并推送');
-      } else {
-        // 整仓模式：云端删了分支就是要删这个分支，交给 RepoHub 清理本地文件夹
-        this.log('云端已找不到该分支');
-        this.setStatus('idle');
-        if (this.onRemoteGone) this.onRemoteGone();
-        return;
+        this.log(`已推送 ${ahead} 个提交到云端`);
       }
 
       this.lastSync = new Date().toISOString();
       this.setStatus('ok');
     } catch (e) {
-      // 同步途中文件夹被删（比如整仓模式下云端删了分支），不算出错
-      if (this._bailIfFolderGone()) return;
+      if (this._dropping || this._bailIfFolderGone()) return;
+      if (isRemoteRefMissing(e.message)) {
+        await this._handleRemoteGone();
+        return;
+      }
       this.log(`同步出错: ${e.message}`);
       this.setStatus('error', e.message);
     }
   }
 
+  async _handleRemoteGone() {
+    if (this._dropping) return;
+    this.log('云端已找不到该分支，正在删除本地对应文件夹');
+    this.setStatus('idle');
+    if (this.onRemoteGone) {
+      await Promise.resolve(this.onRemoteGone());
+      return;
+    }
+    await this.dropLocal();
+  }
+
+  async dropLocal() {
+    this._dropping = true;
+    this.enabled = false;
+    await this.stop();
+    await removeDirRetry(this.folder);
+  }
+
   _bailIfFolderGone() {
+    if (this._dropping) return true;
     if (fs.existsSync(this.folder)) return false;
     this.stop();
-    this.log('本地文件夹已不存在，暂停该分支同步');
-    this.setStatus(this.hubId ? 'idle' : 'error', this.hubId ? null : '本地文件夹不存在');
+    this.log('本地文件夹已不存在');
+    this.setStatus('idle');
+    if (!this._localGoneNotified && this.onLocalGone) {
+      this._localGoneNotified = true;
+      Promise.resolve(this.onLocalGone()).catch((e) => {
+        this.log(`删除远程分支失败: ${e.message}`);
+        this.setStatus('error', e.message);
+      });
+    }
     return true;
   }
 
@@ -232,33 +314,45 @@ class SyncTask {
   }
 
   // ---------- 监听与定时 ----------
-  start() {
-    if (!this.enabled) return;
+  async start() {
+    if (!this.enabled || this._dropping) return;
     if (!fs.existsSync(this.folder)) {
-      this.log('本地文件夹不存在，已停止');
-      this.setStatus('error', '本地文件夹不存在');
+      this.log('本地文件夹不存在');
+      if (!this.hubId && this.onLocalGone && !this._localGoneNotified) {
+        this._localGoneNotified = true;
+        await Promise.resolve(this.onLocalGone());
+      } else {
+        this.setStatus(this.hubId ? 'idle' : 'error', this.hubId ? null : '本地文件夹不存在');
+      }
       return;
     }
-    this.stop();
+    await this.stop();
     this._watcher = chokidar.watch(this.folder, {
       ignored: GIT_DIR_RE,
       ignoreInitial: true,
       awaitWriteFinish: { stabilityThreshold: 800, pollInterval: 200 },
     });
     this._watcher.on('all', () => {
+      if (this._dropping) return;
       clearTimeout(this._debounce);
       this._debounce = setTimeout(() => this.requestSync('本地文件变动'), 2500);
     });
+    this._watcher.on('unlinkDir', () => { this._bailIfFolderGone(); });
+    this._watcher.on('error', () => { this._bailIfFolderGone(); });
     const interval = Math.max(5, this.ctx.getPollInterval()) * 1000;
     this._timer = setInterval(() => this.requestSync('定时检查云端'), interval);
     this.log('同步已启动（监听本地变动 + 定时检查云端）');
     this.requestSync('启动检查');
   }
 
-  stop() {
-    if (this._watcher) { this._watcher.close(); this._watcher = null; }
+  async stop() {
+    const w = this._watcher;
+    this._watcher = null;
     if (this._timer) { clearInterval(this._timer); this._timer = null; }
     clearTimeout(this._debounce);
+    if (w) {
+      try { await w.close(); } catch { /* ignore */ }
+    }
   }
 }
 
@@ -271,8 +365,86 @@ class SyncEngine {
 
   addTask(data) {
     const task = new SyncTask(data, this.ctx);
+    task.onRemoteGone = () => this._handleStandaloneRemoteGone(task);
+    task.onLocalGone = () => this._handleStandaloneLocalGone(task);
     this.tasks.set(data.id, task);
     return task;
+  }
+
+  async _deleteRemote(task) {
+    try {
+      if (this.ctx.getDefaultBranch) {
+        const def = await this.ctx.getDefaultBranch(task.repoFullName);
+        if (def && def === task.branch) {
+          const e = new Error(`「${task.branch}」是默认分支，GitHub 不允许删除`);
+          e.code = 'PROTECTED';
+          throw e;
+        }
+      }
+    } catch (e) {
+      if (e.code === 'PROTECTED') throw e;
+      /* 拿不到默认分支名就继续试删 */
+    }
+    try {
+      if (this.ctx.deleteBranch) {
+        await this.ctx.deleteBranch(task.repoFullName, task.branch);
+        return;
+      }
+    } catch (e) {
+      if (e.status === 404) return;
+      if (isProtectedBranchError(e)) throw e;
+      this.ctx.log(`[${task.repoFullName}#${task.branch}] GitHub API 删除失败，改用 git push --delete: ${e.message}`);
+    }
+    await deleteRemoteBranchViaGit(task.cloneUrl, task.branch, {
+      token: this.ctx.getToken(),
+      identity: this.ctx.getIdentity(),
+      cwd: task.folder,
+    });
+  }
+
+  async _handleStandaloneRemoteGone(task) {
+    if (!this.tasks.has(task.id)) return;
+    this.ctx.log(`[${task.repoFullName}#${task.branch}] 云端分支已删除，正在删除本地文件夹`);
+    try {
+      await task.dropLocal();
+      this.tasks.delete(task.id);
+      this.ctx.onPersist && this.ctx.onPersist();
+      this.ctx.onUpdate();
+      this.ctx.log(`[${task.repoFullName}#${task.branch}] 已删除本地文件夹`);
+    } catch (e) {
+      this.ctx.log(`[${task.repoFullName}#${task.branch}] 删除本地文件夹失败: ${e.message}`);
+      task.setStatus('error', e.message);
+    }
+  }
+
+  async _handleStandaloneLocalGone(task) {
+    if (!this.tasks.has(task.id)) return;
+    try {
+      await this._deleteRemote(task);
+      this.ctx.log(`[${task.repoFullName}#${task.branch}] 本地文件夹已删除，已删除远程分支`);
+    } catch (e) {
+      this.ctx.log(`[${task.repoFullName}#${task.branch}] 删除远程分支失败: ${e.message}`);
+      if (isProtectedBranchError(e)) {
+        try {
+          fs.mkdirSync(task.folder, { recursive: true });
+          task._dropping = false;
+          task._localGoneNotified = false;
+          task.enabled = true;
+          await task.initialize();
+          await task.start();
+        } catch (e2) {
+          task.setStatus('error', e2.message);
+        }
+        this.ctx.onUpdate();
+        return;
+      }
+      task.setStatus('error', e.message);
+      this.ctx.onUpdate();
+      return;
+    }
+    this.tasks.delete(task.id);
+    this.ctx.onPersist && this.ctx.onPersist();
+    this.ctx.onUpdate();
   }
 
   addHub(data) {
@@ -287,9 +459,9 @@ class SyncEngine {
 
   removeTask(id) {
     const t = this.tasks.get(id);
-    if (t) { t.stop(); this.tasks.delete(id); return; }
+    if (t) { Promise.resolve(t.stop()); this.tasks.delete(id); return; }
     const h = this.hubs.get(id);
-    if (h) { h.stop(); this.hubs.delete(id); }
+    if (h) { Promise.resolve(h.stop()); this.hubs.delete(id); }
   }
 
   get(id) {
@@ -334,15 +506,15 @@ class SyncEngine {
   }
 
   stopAll() {
-    for (const h of this.hubs.values()) h.stop();
-    for (const t of this.tasks.values()) t.stop();
+    for (const h of this.hubs.values()) Promise.resolve(h.stop());
+    for (const t of this.tasks.values()) Promise.resolve(t.stop());
   }
 
   restartAll() {
     for (const h of this.hubs.values()) {
       if (h.enabled) Promise.resolve(h.start()).catch(e => this.ctx.log(`整仓启动失败: ${e.message}`));
     }
-    for (const t of this.tasks.values()) if (t.enabled) t.start();
+    for (const t of this.tasks.values()) if (t.enabled) Promise.resolve(t.start()).catch(e => this.ctx.log(`启动失败: ${e.message}`));
   }
 }
 
@@ -432,8 +604,8 @@ class RepoHub {
       enabled: this.enabled,
       hubId: this.id,
     }, this.ctx);
-    task.allowCreateRemote = false;
-    task.onRemoteGone = () => { this.handleRemoteBranchGone(c.branch); };
+    task.onRemoteGone = () => this.handleRemoteBranchGone(c.branch);
+    task.onLocalGone = () => this._onFolderRemoved(path.basename(folder));
     this.children.set(c.branch, task);
     return task;
   }
@@ -530,7 +702,7 @@ class RepoHub {
         fs.mkdirSync(t.folder, { recursive: true });
         await t.initialize();
       }
-      if (this.enabled && this._rootWatcher) t.start();
+      if (this.enabled && this._rootWatcher) await t.start();
       return t;
     }
     const name = folderName || folderNameForBranch(branch, this.takenFolderNames());
@@ -551,7 +723,7 @@ class RepoHub {
           await task.initialize();
         }
       }
-      if (this.enabled && this._rootWatcher) task.start();
+      if (this.enabled && this._rootWatcher) await task.start();
       this.log(`已加入分支 ${branch} → 文件夹 ${name}`);
       this.ctx.onPersist && this.ctx.onPersist();
       this.ctx.onUpdate();
@@ -566,56 +738,45 @@ class RepoHub {
   }
 
   // 云端删了分支 → 本地对应文件夹也要消失，保持「一个分支 = 一层文件夹」
-  async handleRemoteBranchGone(branch) {
+  async handleRemoteBranchGone(branch, { confirmedGone = false } = {}) {
     const task = this.children.get(branch);
-    if (!task || this._goneHandling.has(branch)) return;
+    if (!task || this._goneHandling.has(branch) || task._dropping) return;
     if (task.status === 'init' || this._creating.has(path.basename(task.folder))) return;
     this._goneHandling.add(branch);
+    const folder = task.folder;
+    const name = path.basename(folder);
     try {
-      // GitHub 接口有缓存，删本地文件夹前一定要向远程仓库再确认一次
-      let exists;
+      // GitHub 列表说没了，再问一次 git：明确还在就等下一轮（接口延迟）；
+      // 问不出来或确定没了，就删本地，不再因为 ls-remote 报错而卡住。
       try {
-        exists = await task.remoteBranchExists();
+        const exists = await task.remoteBranchExists();
+        if (exists) {
+          if (confirmedGone) this.log(`GitHub 列表里没有 ${branch}，但 git 还能看到，等下一轮再确认`);
+          return;
+        }
       } catch (e) {
-        this.log(`确认分支 ${branch} 是否存在失败，暂不处理: ${e.message}`);
+        this.log(`确认分支 ${branch} 时出错（${e.message}），按云端已删除处理`);
+      }
+
+      this._ignore.add(path.resolve(folder));
+      try {
+        await task.dropLocal();
+      } catch (e) {
+        this.log(`删除本地文件夹 ${name} 失败: ${e.message}，将重试`);
+        this.setStatus('error', e.message);
+        task._dropping = false;
+        task.enabled = this.enabled;
+        if (this.enabled && fs.existsSync(folder)) await task.start();
         return;
       }
-      if (exists) return;
-
-      const folder = task.folder;
-      const name = path.basename(folder);
-      const localOnly = await task.localOnlyCommits();
-      task.stop();
       this.children.delete(branch);
-      this._ignore.add(path.resolve(folder));
-      if (localOnly > 0) {
-        const kept = this._archiveFolder(folder);
-        this.log(`云端分支 ${branch} 已被删除；本地还有 ${localOnly} 个未推送的提交，文件夹保留为 ${kept}`);
-      } else if (fs.existsSync(folder)) {
-        fs.rmSync(folder, { recursive: true, force: true });
-        this.log(`云端分支 ${branch} 已被删除，已同步移除本地文件夹 ${name}`);
-      }
+      this.log(`云端分支 ${branch} 已被删除，已同步移除本地文件夹 ${name}`);
       this.ctx.onPersist && this.ctx.onPersist();
       this.ctx.onUpdate();
       setTimeout(() => this._ignore.delete(path.resolve(folder)), 15000);
     } finally {
       this._goneHandling.delete(branch);
     }
-  }
-
-  _archiveFolder(folder) {
-    const dir = path.dirname(folder);
-    let target = `${folder}${ARCHIVE_SUFFIX}`;
-    let n = 2;
-    while (fs.existsSync(target)) target = `${folder}${ARCHIVE_SUFFIX}_${n++}`;
-    this._ignore.add(path.resolve(target));
-    try {
-      fs.renameSync(folder, target);
-    } catch {
-      return path.basename(folder); // 改名失败就原样留着
-    }
-    setTimeout(() => this._ignore.delete(path.resolve(target)), 15000);
-    return path.basename(target);
   }
 
   // 用户在根目录新建了一层文件夹 → 在 GitHub 上开一个同名分支并接管同步
@@ -651,15 +812,30 @@ class RepoHub {
     }
   }
 
-  async _deleteRemoteBranch(branch) {
+  async _deleteRemoteBranch(branch, task) {
     if (this.defaultBranch && branch === this.defaultBranch) {
-      throw new Error(`「${branch}」是默认分支，GitHub 不允许删除`);
+      const e = new Error(`「${branch}」是默认分支，GitHub 不允许删除`);
+      e.code = 'PROTECTED';
+      throw e;
     }
-    if (this.ctx.deleteBranch) {
-      await this.ctx.deleteBranch(this.repoFullName, branch);
-    } else {
-      throw new Error('当前环境无法删除远程分支');
+    try {
+      if (this.ctx.deleteBranch) {
+        await this.ctx.deleteBranch(this.repoFullName, branch);
+        return;
+      }
+    } catch (e) {
+      if (e.status === 404) return;
+      if (isProtectedBranchError(e)) {
+        e.code = 'PROTECTED';
+        throw e;
+      }
+      this.log(`GitHub API 删除分支 ${branch} 失败，改用 git push --delete: ${e.message}`);
     }
+    await deleteRemoteBranchViaGit(this.cloneUrl, branch, {
+      token: this.ctx.getToken(),
+      identity: this.ctx.getIdentity(),
+      cwd: task && fs.existsSync(task.folder) ? task.folder : os.tmpdir(),
+    });
   }
 
   async removeBranch(branch, { removeFolder = true } = {}) {
@@ -667,31 +843,38 @@ class RepoHub {
     if (!task) return;
     const folder = task.folder;
     this._ignore.add(path.resolve(folder));
-    task.stop();
+    await task.stop();
+    task.enabled = false;
     try {
-      await this._deleteRemoteBranch(branch);
+      await this._deleteRemoteBranch(branch, task);
       this.log(`已删除远程分支 ${branch}`);
     } catch (e) {
       this.log(`删除远程分支 ${branch} 失败: ${e.message}`);
-      // 默认分支等删不掉：把本地文件夹再拉回来
+      // 默认分支 / 受保护分支删不掉：把本地文件夹再拉回来
       if (!fs.existsSync(folder)) {
         try {
           fs.mkdirSync(folder, { recursive: true });
+          task._dropping = false;
+          task._localGoneNotified = false;
+          task.enabled = this.enabled;
           await task.initialize();
-          if (this.enabled) task.start();
+          if (this.enabled) await task.start();
         } catch (e2) {
           this.log(`恢复默认分支文件夹失败: ${e2.message}`);
         }
       } else if (this.enabled) {
-        task.start();
+        task._dropping = false;
+        task.enabled = true;
+        await task.start();
       }
       this.ctx.onUpdate();
       setTimeout(() => this._ignore.delete(path.resolve(folder)), 8000);
       throw e;
     }
     this.children.delete(branch);
-    if (removeFolder && fs.existsSync(folder)) {
-      fs.rmSync(folder, { recursive: true, force: true });
+    if (removeFolder) {
+      try { await removeDirRetry(folder); }
+      catch (e) { this.log(`删除本地文件夹 ${path.basename(folder)} 失败: ${e.message}`); }
     }
     this.ctx.onPersist && this.ctx.onPersist();
     this.ctx.onUpdate();
@@ -719,6 +902,14 @@ class RepoHub {
       }
       const remote = await this.ctx.listBranches(this.repoFullName);
       const remoteSet = new Set(remote);
+      // 本地文件夹没了（watcher 可能漏事件）→ 删对应远程分支
+      for (const [branch, task] of [...this.children]) {
+        if (!fs.existsSync(task.folder) && !task._dropping) {
+          this.log(`检查时发现 ${path.basename(task.folder)} 已不存在，删除远程分支 ${branch}`);
+          try { await this.removeBranch(branch, { removeFolder: false }); }
+          catch { /* removeBranch 会恢复默认分支 */ }
+        }
+      }
       // 云端多出来的分支 → 本地补一层文件夹
       for (const branch of remote) {
         if (!this.children.has(branch)) {
@@ -728,7 +919,7 @@ class RepoHub {
       }
       // 云端已经没有的分支 → 本地那层文件夹也去掉
       for (const branch of [...this.children.keys()]) {
-        if (!remoteSet.has(branch)) await this.handleRemoteBranchGone(branch);
+        if (!remoteSet.has(branch)) await this.handleRemoteBranchGone(branch, { confirmedGone: true });
       }
     } catch (e) {
       this.log(`检查远程分支失败: ${e.message}`);
@@ -737,7 +928,7 @@ class RepoHub {
 
   async start() {
     if (!this.enabled) return;
-    this.stop();
+    await this.stop();
     this._starting = true;
     fs.mkdirSync(this.folder, { recursive: true });
 
@@ -757,7 +948,7 @@ class RepoHub {
     for (const task of this.children.values()) {
       if (fs.existsSync(task.folder)) {
         task.enabled = true;
-        task.start();
+        await task.start();
       }
     }
     this._watchRoot();
@@ -795,16 +986,27 @@ class RepoHub {
     });
   }
 
-  stop() {
-    if (this._rootWatcher) { this._rootWatcher.close(); this._rootWatcher = null; }
+  async stop() {
+    const w = this._rootWatcher;
+    this._rootWatcher = null;
+    if (w) {
+      try { await w.close(); } catch { /* ignore */ }
+    }
     if (this._timer) { clearInterval(this._timer); this._timer = null; }
     for (const t of this._pendingDeletes.values()) clearTimeout(t);
     this._pendingDeletes.clear();
     for (const t of this._pendingAdds.values()) clearTimeout(t);
     this._pendingAdds.clear();
-    for (const t of this.children.values()) t.stop();
+    await Promise.all([...this.children.values()].map(t => Promise.resolve(t.stop())));
   }
 }
 
-module.exports = { SyncEngine, folderNameForBranch, isValidBranchName };
+module.exports = {
+  SyncEngine,
+  folderNameForBranch,
+  isValidBranchName,
+  isRemoteRefMissing,
+  isProtectedBranchError,
+  removeDirRetry,
+};
 
