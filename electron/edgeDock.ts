@@ -432,7 +432,7 @@ export class EdgeDockManager {
     }, FAN_COLLAPSE_MS)
   }
 
-  private ensureDock(): BrowserWindow {
+  private ensureDock(bounds: Rectangle): BrowserWindow {
     const axis = this.edge === 'top' || this.edge === 'bottom' ? 'h' : 'v'
     if (this.dock && !this.dock.isDestroyed() && this.dockAxis === axis) {
       return this.dock
@@ -442,8 +442,10 @@ export class EdgeDockManager {
     this.dockReady = false
 
     this.dock = new BrowserWindow({
-      width: 180,
-      height: 220,
+      x: bounds.x,
+      y: bounds.y,
+      width: bounds.width,
+      height: bounds.height,
       minWidth: 1,
       minHeight: 1,
       frame: false,
@@ -459,18 +461,22 @@ export class EdgeDockManager {
       focusable: true,
       hasShadow: false,
       thickFrame: false,
+      fullscreenable: false,
       show: false,
+      type: process.platform === 'linux' ? 'notification' : undefined,
       webPreferences: {
         preload: this.hooks.preloadPath,
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: false,
+        backgroundThrottling: false,
       },
     })
 
     this.dock.setMenu(null)
     this.dock.setMinimumSize(1, 1)
     this.dock.setAlwaysOnTop(true, 'screen-saver')
+    this.dock.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
     this.hooks.loadDock(this.dock)
 
     this.dock.on('closed', () => {
@@ -506,8 +512,9 @@ export class EdgeDockManager {
     return fanned ? fanVisualSize(this.plans.length) : sleepVisualSize(this.plans.length)
   }
 
-  private desiredDockBounds(edge: DockEdge, workArea: Rectangle, expanded: Rectangle): Rectangle {
-    const { across, along } = this.dockVisualFor(this.fanned)
+  /** Window stays fan-sized so the WM does not recenter a shrinking 16px strip. */
+  private dockWindowBounds(edge: DockEdge, workArea: Rectangle, expanded: Rectangle): Rectangle {
+    const { across, along } = fanVisualSize(this.plans.length)
     const vertical = edge === 'left' || edge === 'right'
     const width = vertical ? across : along
     const height = vertical ? along : across
@@ -523,19 +530,49 @@ export class EdgeDockManager {
     return clampStripIntoWorkArea({ x, y, width, height }, workArea)
   }
 
-  private visualInWindow(edge: DockEdge, actual: Rectangle, desired: Rectangle): Rectangle {
-    const width = Math.min(desired.width, actual.width)
-    const height = Math.min(desired.height, actual.height)
+  private pinToEdge(bounds: Rectangle, edge: DockEdge, workArea: Rectangle): Rectangle {
+    const next = { ...bounds }
+    if (edge === 'right') next.x = workArea.x + workArea.width - next.width
+    if (edge === 'left') next.x = workArea.x
+    if (edge === 'top') next.y = workArea.y
+    if (edge === 'bottom') next.y = workArea.y + workArea.height - next.height
+    return clampStripIntoWorkArea(next, workArea)
+  }
+
+  private visualInWindow(edge: DockEdge, actual: Rectangle): Rectangle {
+    const { across, along } = this.dockVisualFor(this.fanned)
+    const vertical = edge === 'left' || edge === 'right'
+    const width = Math.min(vertical ? across : along, actual.width)
+    const height = Math.min(vertical ? along : across, actual.height)
     let x = 0
     let y = 0
     if (edge === 'right') x = Math.max(0, actual.width - width)
     if (edge === 'bottom') y = Math.max(0, actual.height - height)
-    if (edge === 'left' || edge === 'right') {
-      y = Math.max(0, Math.min(desired.y - actual.y, actual.height - height))
-    } else {
-      x = Math.max(0, Math.min(desired.x - actual.x, actual.width - width))
-    }
     return { x, y, width, height }
+  }
+
+  private applyDockPlacement(dock: BrowserWindow, pinned: Rectangle, edge: DockEdge) {
+    dock.setMinimumSize(1, 1)
+    dock.setBounds(pinned, false)
+    dock.setPosition(pinned.x, pinned.y, false)
+    const { workArea } = this.resolveWorkArea(pinned)
+    let actual = this.pinToEdge(dock.getBounds(), edge, workArea)
+    const now = dock.getBounds()
+    if (actual.x !== now.x || actual.y !== now.y) {
+      dock.setBounds(actual, false)
+    }
+    actual = dock.getBounds()
+    const visual = this.visualInWindow(edge, actual)
+    this.lastLayout = {
+      windowSize: { width: actual.width, height: actual.height },
+      visual,
+    }
+    try {
+      dock.setShape([visual])
+    } catch {
+      // setShape 不可用时仍靠透明窗口露出胶囊
+    }
+    dock.setAlwaysOnTop(true, 'screen-saver')
   }
 
   private placeDock() {
@@ -556,34 +593,30 @@ export class EdgeDockManager {
         : detectDockEdge(this.savedBounds ?? fallback, workArea)
     this.edge = edge
 
-    const dock = this.ensureDock()
-    const desired = this.desiredDockBounds(edge, workArea, this.savedBounds ?? fallback)
-
-    dock.setMinimumSize(1, 1)
-    dock.setBounds(desired, false)
-    dock.setSize(desired.width, desired.height)
-
-    let actual = dock.getBounds()
-    if (edge === 'right') actual.x = workArea.x + workArea.width - actual.width
-    if (edge === 'left') actual.x = workArea.x
-    if (edge === 'top') actual.y = workArea.y
-    if (edge === 'bottom') actual.y = workArea.y + workArea.height - actual.height
-    actual = clampStripIntoWorkArea(actual, workArea)
-    dock.setBounds(actual, false)
-
-    const visual = this.visualInWindow(edge, actual, desired)
-    this.lastLayout = {
-      windowSize: { width: actual.width, height: actual.height },
-      visual,
-    }
-    try {
-      dock.setShape([visual])
-    } catch {
-      // setShape 不可用时仍靠透明窗口露出胶囊
-    }
-    dock.setAlwaysOnTop(true, 'screen-saver')
+    const desired = this.dockWindowBounds(edge, workArea, this.savedBounds ?? fallback)
+    const dock = this.ensureDock(desired)
+    const pinned = this.pinToEdge(desired, edge, workArea)
+    this.applyDockPlacement(dock, pinned, edge)
     if (!dock.isVisible()) dock.showInactive()
+    this.applyDockPlacement(dock, this.pinToEdge(dock.getBounds(), edge, workArea), edge)
     this.sendDockState()
+  }
+
+  private snapDockIfDrifted() {
+    if (!this.enabled || !this.edge) return
+    const dock = this.dock
+    if (!dock || dock.isDestroyed() || !dock.isVisible()) return
+    const fallback = this.savedBounds ?? this.win?.getBounds() ?? dock.getBounds()
+    const { workArea } = this.resolveWorkArea(fallback)
+    const desired = this.dockWindowBounds(this.edge, workArea, fallback)
+    const pinned = this.pinToEdge(desired, this.edge, workArea)
+    const actual = dock.getBounds()
+    const drifted =
+      Math.abs(actual.x - pinned.x) > 4 ||
+      Math.abs(actual.y - pinned.y) > 4 ||
+      Math.abs(actual.width - pinned.width) > 12 ||
+      Math.abs(actual.height - pinned.height) > 12
+    if (drifted) this.applyDockPlacement(dock, pinned, this.edge)
   }
 
   private sendDockState() {
@@ -804,6 +837,7 @@ export class EdgeDockManager {
 
   private pollCursor() {
     if (!this.enabled || this.dragging || this.animating) return
+    this.snapDockIfDrifted()
     const win = this.win
     if (!win || win.isDestroyed()) return
 
