@@ -38,13 +38,12 @@ export function DockApp() {
   const openId = state.fanned ? hoverId : null
   const vertical = state.edge === 'left' || state.edge === 'right'
   const along = vertical ? state.windowSize.height : state.windowSize.width
+  const peek = 68
   const tabLen = Math.max(
-    96,
+    140,
     Math.min(
-      200,
-      plans.length > 0
-        ? Math.floor((along - 16 - Math.max(0, plans.length - 1) * 6) / plans.length)
-        : 200,
+      220,
+      plans.length > 0 ? along - 16 - Math.max(0, plans.length - 1) * peek : 200,
     ),
   )
   const box = state.fanned
@@ -54,6 +53,7 @@ export function DockApp() {
         width: state.windowSize.width,
         height: state.windowSize.height,
         ['--tab-len' as string]: `${tabLen}px`,
+        ['--tab-peek' as string]: `${peek}px`,
       }
     : {
         left: state.visual.x,
@@ -111,8 +111,11 @@ export function DockApp() {
               <div
                 key={plan.id}
                 data-plan-id={plan.id}
-                className={`tab-wrap color-${color}${open ? ' open' : ''}${state.selectedId === plan.id ? ' selected' : ''}`}
-                style={{ animationDelay: state.fanned ? `${index * 40}ms` : '0ms' }}
+                className={`tab-wrap color-${color}${open ? ' open' : ''}${openId && !open ? ' folded' : ''}${state.selectedId === plan.id ? ' selected' : ''}`}
+                style={{
+                  animationDelay: state.fanned ? `${index * 40}ms` : '0ms',
+                  zIndex: open ? 40 : index + 1,
+                }}
                 onMouseEnter={() => {
                   if (state.fanned) hoverPlan(plan.id)
                 }}

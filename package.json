@@ -1,6 +1,6 @@
 {
   "name": "todothings",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "description": "本地桌面待办 — 计划、子任务、优先级与可选提醒",
   "main": "dist-electron/main.js",
   "author": "todothings",

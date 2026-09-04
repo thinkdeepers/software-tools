@@ -69,9 +69,9 @@ html.dock-root body {
 .deck.fanned.edge-right .tab-stack,
 .deck.fanned.edge-left .tab-stack {
   flex-direction: column;
-  gap: 6px;
+  gap: 0;
   padding: 8px 0;
-  overflow: auto;
+  overflow: visible;
   scrollbar-width: none;
 }
 
@@ -95,9 +95,9 @@ html.dock-root body {
 .deck.fanned.edge-top .tab-stack,
 .deck.fanned.edge-bottom .tab-stack {
   flex-direction: row;
-  gap: 6px;
+  gap: 0;
   padding: 0 8px;
-  overflow: auto;
+  overflow: visible;
 }
 
 .deck.fanned.edge-top .tab-stack {
@@ -205,6 +205,27 @@ html.dock-root body {
 .deck.fanned .tab-wrap {
   animation: fan-slide 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+  transition:
+    box-shadow 200ms ease,
+    transform 200ms ease;
+}
+
+.deck.fanned.edge-right .tab-wrap + .tab-wrap,
+.deck.fanned.edge-left .tab-wrap + .tab-wrap {
+  margin-top: calc(var(--tab-peek, 68px) - var(--tab-len, 200px));
+}
+
+.deck.fanned.edge-top .tab-wrap + .tab-wrap,
+.deck.fanned.edge-bottom .tab-wrap + .tab-wrap {
+  margin-left: calc(var(--tab-peek, 68px) - var(--tab-len, 200px));
+}
+
+.deck.fanned .tab-wrap.folded {
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
+}
+
+.deck.fanned .tab-wrap.open {
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.24);
 }
 
 /* 右侧：收起时页签贴边；展开后名称在左侧竖脊，正文靠屏幕边缘 */
@@ -264,7 +285,7 @@ html.dock-root body {
 .deck.fanned.edge-right .label,
 .deck.fanned.edge-left .label {
   writing-mode: vertical-rl;
-  transform: rotate(180deg);
+  text-orientation: upright;
 }
 
 .spine {

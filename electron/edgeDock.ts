@@ -17,7 +17,7 @@ const DASH_GAP_PX = 3
 /** Fanned tab thickness (width on left/right, height on top/bottom) */
 const TAB_THICK_PX = 44
 const TAB_LEN_PX = 200
-const TAB_GAP_PX = 6
+const TAB_PEEK_PX = 68
 const NOTE_ACROSS_PX = 300
 const FAN_PAD_PX = 8
 const HOVER_SLACK_PX = 8
@@ -125,7 +125,7 @@ function fanVisualSize(planCount: number): { across: number; along: number } {
   const tabs = Math.max(1, planCount)
   return {
     across: FAN_PAD_PX + TAB_THICK_PX + NOTE_ACROSS_PX,
-    along: FAN_PAD_PX * 2 + tabs * TAB_LEN_PX + Math.max(0, tabs - 1) * TAB_GAP_PX,
+    along: FAN_PAD_PX * 2 + TAB_LEN_PX + Math.max(0, tabs - 1) * TAB_PEEK_PX,
   }
 }
 

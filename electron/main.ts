@@ -50,8 +50,22 @@ function loadDockWindow(win: BrowserWindow) {
   })
 }
 
-function dockPlansPayload() {
+let showCompleted = true
+
+function visibleDockTasks() {
   const tasks = listAllTasks()
+  if (showCompleted) return tasks
+  const hidden = new Set(tasks.filter((task) => task.completed).map((task) => task.id))
+  return tasks
+    .filter((task) => !task.completed)
+    .map((task) => ({
+      ...task,
+      parentId: task.parentId && hidden.has(task.parentId) ? null : task.parentId,
+    }))
+}
+
+function dockPlansPayload() {
+  const tasks = visibleDockTasks()
   return [...listPlans()]
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
     .map((plan) => ({
@@ -80,7 +94,6 @@ let isQuitting = false
 let alwaysOnTop = false
 let theme: ThemeId = 'white'
 let planFilter: PlanFilterId = 'all'
-let showCompleted = true
 let fontSize: FontSizeId = 'medium'
 let fontFamily: FontFamilyId = 'yahei'
 
@@ -474,6 +487,7 @@ function registerIpc() {
   ipcMain.handle('settings:setShowCompleted', (_e, enabled: boolean) => {
     showCompleted = enabled
     mainWindow?.webContents.send('ui:show-completed', enabled)
+    syncDockPlans()
     return currentSettings()
   })
   ipcMain.handle('settings:setFontSize', (_e, next: FontSizeId) => {
