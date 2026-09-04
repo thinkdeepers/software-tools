@@ -148,6 +148,7 @@ export class EdgeDockManager {
   private pollTimer: NodeJS.Timeout | null = null
   private dragging = false
   private animating = false
+  private animatingSince = 0
   private motionGen = 0
   private plans: DockPlan[] = []
   private selectedId: string | null = null
@@ -758,6 +759,7 @@ export class EdgeDockManager {
     this.edge = edge
     const gen = ++this.motionGen
     this.animating = true
+    this.animatingSince = Date.now()
     this.placeDock()
 
     const hide = () => {
@@ -790,6 +792,7 @@ export class EdgeDockManager {
 
     const gen = ++this.motionGen
     this.animating = true
+    this.animatingSince = Date.now()
     this.placeDock()
     win.setMinimumSize(MIN_WIDTH, MIN_HEIGHT)
     win.setAlwaysOnTop(true)
@@ -858,6 +861,9 @@ export class EdgeDockManager {
   }
 
   private pollCursor() {
+    if (this.animating && this.animatingSince && Date.now() - this.animatingSince > 2000) {
+      this.animating = false
+    }
     if (!this.enabled || this.dragging || this.animating) return
     this.snapDockIfDrifted()
     const win = this.win

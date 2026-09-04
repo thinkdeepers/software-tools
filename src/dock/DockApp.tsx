@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type MouseEvent } from 'react'
 import { normalizePlanColor } from '../planColors'
 import type { DockEdge } from '../types'
 
@@ -36,8 +36,25 @@ export function DockApp() {
 
   const plans = state.plans
   const openId = state.fanned ? hoverId : null
+  const vertical = state.edge === 'left' || state.edge === 'right'
+  const along = vertical ? state.windowSize.height : state.windowSize.width
+  const tabLen = Math.max(
+    96,
+    Math.min(
+      200,
+      plans.length > 0
+        ? Math.floor((along - 16 - Math.max(0, plans.length - 1) * 6) / plans.length)
+        : 200,
+    ),
+  )
   const box = state.fanned
-    ? { left: 0, top: 0, width: state.windowSize.width, height: state.windowSize.height }
+    ? {
+        left: 0,
+        top: 0,
+        width: state.windowSize.width,
+        height: state.windowSize.height,
+        ['--tab-len' as string]: `${tabLen}px`,
+      }
     : {
         left: state.visual.x,
         top: state.visual.y,
@@ -50,12 +67,20 @@ export function DockApp() {
     void window.todothings.dockHoverPlan(id)
   }
 
+  function hoverFromEvent(event: MouseEvent<HTMLElement>) {
+    if (!state.fanned) return
+    const wrap = (event.target as HTMLElement).closest('[data-plan-id]')
+    const id = wrap instanceof HTMLElement ? wrap.dataset.planId ?? null : null
+    if (id && id !== hoverId) hoverPlan(id)
+  }
+
   return (
     <div className="deck-stage">
       <div
         className={`deck edge-${state.edge} ${state.fanned ? 'fanned' : 'sleeping'}${openId ? ' previewing' : ''}`}
         style={box}
         onMouseEnter={() => window.todothings.dockPointer(true)}
+        onMouseMove={hoverFromEvent}
         onMouseLeave={() => {
           hoverPlan(null)
           window.todothings.dockPointer(false)
@@ -85,6 +110,7 @@ export function DockApp() {
             return (
               <div
                 key={plan.id}
+                data-plan-id={plan.id}
                 className={`tab-wrap color-${color}${open ? ' open' : ''}${state.selectedId === plan.id ? ' selected' : ''}`}
                 style={{ animationDelay: state.fanned ? `${index * 40}ms` : '0ms' }}
                 onMouseEnter={() => {

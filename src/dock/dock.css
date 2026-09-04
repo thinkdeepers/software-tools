@@ -212,40 +212,40 @@ html.dock-root body {
   flex-direction: row;
   align-items: stretch;
   border-radius: 18px 0 0 18px;
-  min-height: 200px;
+  height: var(--tab-len, 200px);
 }
 
 .deck.fanned.edge-left .tab-wrap {
   flex-direction: row-reverse;
   align-items: stretch;
   border-radius: 0 18px 18px 0;
-  min-height: 200px;
+  height: var(--tab-len, 200px);
 }
 
 .deck.fanned.edge-top .tab-wrap {
   flex-direction: column-reverse;
   align-items: stretch;
   border-radius: 0 0 18px 18px;
-  min-width: 200px;
+  width: var(--tab-len, 200px);
 }
 
 .deck.fanned.edge-bottom .tab-wrap {
   flex-direction: column;
   align-items: stretch;
   border-radius: 18px 18px 0 0;
-  min-width: 200px;
+  width: var(--tab-len, 200px);
 }
 
 .deck.fanned.edge-right .tab,
 .deck.fanned.edge-left .tab {
   width: 44px;
-  min-height: 200px;
+  height: var(--tab-len, 200px);
 }
 
 .deck.fanned.edge-top .tab,
 .deck.fanned.edge-bottom .tab {
   height: 44px;
-  min-width: 200px;
+  width: var(--tab-len, 200px);
 }
 
 .deck.fanned .label {
@@ -313,6 +313,8 @@ html.dock-root body {
 .deck.fanned.edge-right .note-card,
 .deck.fanned.edge-left .note-card {
   width: 0;
+  height: var(--tab-len, 200px);
+  max-height: var(--tab-len, 200px);
   transition:
     width 260ms cubic-bezier(0.22, 1, 0.36, 1),
     opacity 160ms ease,
@@ -364,7 +366,7 @@ html.dock-root body {
   padding: 0;
   list-style: none;
   overflow: auto;
-  max-height: 150px;
+  max-height: calc(var(--tab-len, 200px) - 52px);
   scrollbar-width: thin;
 }
 
