@@ -15,11 +15,11 @@ const PILL_PAD_PX = 5
 const DASH_MAIN_PX = 10
 const DASH_GAP_PX = 3
 /** Fanned tab thickness (width on left/right, height on top/bottom) */
-const TAB_THICK_PX = 40
-const TAB_LEN_PX = 128
-const TAB_GAP_PX = 8
-const NOTE_ACROSS_PX = 280
-const FAN_PAD_PX = 10
+const TAB_THICK_PX = 44
+const TAB_LEN_PX = 200
+const TAB_GAP_PX = 6
+const NOTE_ACROSS_PX = 300
+const FAN_PAD_PX = 8
 const HOVER_SLACK_PX = 8
 const COLLAPSE_DELAY_MS = 900
 const FAN_COLLAPSE_MS = 700
@@ -305,8 +305,11 @@ export class EdgeDockManager {
     if (id) {
       this.clearFanTimer()
       this.clearCollapseTimer()
-      this.setFanned(true)
+      if (!this.fanned) {
+        this.fanned = true
+      }
     }
+    // 扇开尺寸已含便签宽度，悬停只更新命中区域，避免整窗跳动
     this.placeDock()
   }
 
@@ -544,10 +547,9 @@ export class EdgeDockManager {
 
   private visualInWindow(edge: DockEdge, actual: Rectangle): Rectangle {
     const fanned = this.fanned
+    // 扇开后始终露出完整页签+便签区，悬停只需 CSS 滑出，不再改窗口形状
     const { across, along } = fanned
-      ? this.previewId
-        ? fanVisualSize(this.plans.length)
-        : { across: FAN_PAD_PX + TAB_THICK_PX, along: fanVisualSize(this.plans.length).along }
+      ? fanVisualSize(this.plans.length)
       : sleepVisualSize(this.plans.length)
     const vertical = edge === 'left' || edge === 'right'
     const width = Math.min(vertical ? across : along, actual.width)
@@ -833,7 +835,19 @@ export class EdgeDockManager {
     const dock = this.dock
     if (!dock || dock.isDestroyed() || !dock.isVisible()) return false
     const cursor = screen.getCursorScreenPoint()
-    return pointInRect(cursor.x, cursor.y, dock.getBounds(), HOVER_SLACK_PX)
+    const bounds = dock.getBounds()
+    const visual = this.lastLayout.visual
+    return pointInRect(
+      cursor.x,
+      cursor.y,
+      {
+        x: bounds.x + visual.x,
+        y: bounds.y + visual.y,
+        width: visual.width,
+        height: visual.height,
+      },
+      HOVER_SLACK_PX,
+    )
   }
 
   private pointerOverMain(): boolean {

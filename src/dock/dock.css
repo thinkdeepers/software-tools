@@ -69,9 +69,19 @@ html.dock-root body {
 .deck.fanned.edge-right .tab-stack,
 .deck.fanned.edge-left .tab-stack {
   flex-direction: column;
-  gap: 8px;
-  padding: 10px 0;
+  gap: 6px;
+  padding: 8px 0;
   overflow: auto;
+  scrollbar-width: none;
+}
+
+.deck.fanned.edge-right .tab-stack,
+.deck.fanned.edge-left .tab-stack {
+  -ms-overflow-style: none;
+}
+
+.deck.fanned .tab-stack::-webkit-scrollbar {
+  display: none;
 }
 
 .deck.fanned.edge-right .tab-stack {
@@ -85,8 +95,8 @@ html.dock-root body {
 .deck.fanned.edge-top .tab-stack,
 .deck.fanned.edge-bottom .tab-stack {
   flex-direction: row;
-  gap: 8px;
-  padding: 0 10px;
+  gap: 6px;
+  padding: 0 8px;
   overflow: auto;
 }
 
@@ -104,6 +114,7 @@ html.dock-root body {
   position: relative;
   display: flex;
   flex-shrink: 0;
+  overflow: hidden;
   background: var(--plan-color);
   color: var(--plan-ink);
 }
@@ -193,43 +204,48 @@ html.dock-root body {
 
 .deck.fanned .tab-wrap {
   animation: fan-slide 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.16);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
 }
 
+/* 右侧：收起时页签贴边；展开后名称在左侧竖脊，正文靠屏幕边缘 */
 .deck.fanned.edge-right .tab-wrap {
-  flex-direction: row-reverse;
-  border-radius: 16px 0 0 16px;
-  min-height: 128px;
+  flex-direction: row;
+  align-items: stretch;
+  border-radius: 18px 0 0 18px;
+  min-height: 200px;
 }
 
 .deck.fanned.edge-left .tab-wrap {
-  flex-direction: row;
-  border-radius: 0 16px 16px 0;
-  min-height: 128px;
+  flex-direction: row-reverse;
+  align-items: stretch;
+  border-radius: 0 18px 18px 0;
+  min-height: 200px;
 }
 
 .deck.fanned.edge-top .tab-wrap {
-  flex-direction: column;
-  border-radius: 0 0 16px 16px;
-  min-width: 128px;
+  flex-direction: column-reverse;
+  align-items: stretch;
+  border-radius: 0 0 18px 18px;
+  min-width: 200px;
 }
 
 .deck.fanned.edge-bottom .tab-wrap {
-  flex-direction: column-reverse;
-  border-radius: 16px 16px 0 0;
-  min-width: 128px;
+  flex-direction: column;
+  align-items: stretch;
+  border-radius: 18px 18px 0 0;
+  min-width: 200px;
 }
 
 .deck.fanned.edge-right .tab,
 .deck.fanned.edge-left .tab {
-  width: 40px;
-  min-height: 128px;
+  width: 44px;
+  min-height: 200px;
 }
 
 .deck.fanned.edge-top .tab,
 .deck.fanned.edge-bottom .tab {
-  height: 40px;
-  min-width: 128px;
+  height: 44px;
+  min-width: 200px;
 }
 
 .deck.fanned .label {
@@ -238,9 +254,10 @@ html.dock-root body {
   justify-content: center;
   width: 100%;
   height: 100%;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 700;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
   white-space: nowrap;
 }
 
@@ -256,31 +273,31 @@ html.dock-root body {
 }
 
 .deck.fanned.edge-right .spine {
-  top: 12px;
-  bottom: 12px;
-  right: 8px;
-  border-right: 1px dashed color-mix(in srgb, var(--plan-ink) 30%, transparent);
+  top: 14px;
+  bottom: 14px;
+  right: 7px;
+  border-right: 1px dashed color-mix(in srgb, var(--plan-ink) 32%, transparent);
 }
 
 .deck.fanned.edge-left .spine {
-  top: 12px;
-  bottom: 12px;
-  left: 8px;
-  border-left: 1px dashed color-mix(in srgb, var(--plan-ink) 30%, transparent);
+  top: 14px;
+  bottom: 14px;
+  left: 7px;
+  border-left: 1px dashed color-mix(in srgb, var(--plan-ink) 32%, transparent);
 }
 
 .deck.fanned.edge-top .spine {
-  left: 12px;
-  right: 12px;
-  top: 8px;
-  border-top: 1px dashed color-mix(in srgb, var(--plan-ink) 30%, transparent);
+  left: 14px;
+  right: 14px;
+  top: 7px;
+  border-top: 1px dashed color-mix(in srgb, var(--plan-ink) 32%, transparent);
 }
 
 .deck.fanned.edge-bottom .spine {
-  left: 12px;
-  right: 12px;
-  bottom: 8px;
-  border-bottom: 1px dashed color-mix(in srgb, var(--plan-ink) 30%, transparent);
+  left: 14px;
+  right: 14px;
+  bottom: 7px;
+  border-bottom: 1px dashed color-mix(in srgb, var(--plan-ink) 32%, transparent);
 }
 
 .note-card {
@@ -289,26 +306,26 @@ html.dock-root body {
   opacity: 0;
   color: inherit;
   pointer-events: none;
+  min-width: 0;
+  min-height: 0;
 }
 
 .deck.fanned.edge-right .note-card,
 .deck.fanned.edge-left .note-card {
   width: 0;
-  max-height: 240px;
   transition:
-    width 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    width 260ms cubic-bezier(0.22, 1, 0.36, 1),
     opacity 160ms ease,
-    padding 240ms ease;
+    padding 260ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .deck.fanned.edge-top .note-card,
 .deck.fanned.edge-bottom .note-card {
   height: 0;
-  max-width: 280px;
   transition:
-    height 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    height 260ms cubic-bezier(0.22, 1, 0.36, 1),
     opacity 160ms ease,
-    padding 240ms ease;
+    padding 260ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .tab-wrap.open .note-card {
@@ -318,20 +335,22 @@ html.dock-root body {
 
 .deck.fanned.edge-right .tab-wrap.open .note-card,
 .deck.fanned.edge-left .tab-wrap.open .note-card {
-  width: 268px;
-  padding: 14px 16px 12px;
+  width: 280px;
+  padding: 16px 18px 14px 12px;
 }
 
 .deck.fanned.edge-top .tab-wrap.open .note-card,
 .deck.fanned.edge-bottom .tab-wrap.open .note-card {
   height: 220px;
+  width: 280px;
   padding: 14px 16px 12px;
 }
 
 .note-card h4 {
   margin: 0 0 10px;
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 700;
+  line-height: 1.25;
 }
 
 .note-empty {
@@ -345,7 +364,8 @@ html.dock-root body {
   padding: 0;
   list-style: none;
   overflow: auto;
-  max-height: 180px;
+  max-height: 150px;
+  scrollbar-width: thin;
 }
 
 .note-list ul {
@@ -355,7 +375,7 @@ html.dock-root body {
 }
 
 .note-list li {
-  margin: 0 0 6px;
+  margin: 0 0 7px;
 }
 
 .note-list label {
@@ -378,12 +398,12 @@ html.dock-root body {
 }
 
 .deck.fanned.edge-right .tab-wrap {
-  --fan-x: 18px;
+  --fan-x: 20px;
   --fan-y: 0px;
 }
 
 .deck.fanned.edge-left .tab-wrap {
-  --fan-x: -18px;
+  --fan-x: -20px;
   --fan-y: 0px;
 }
 

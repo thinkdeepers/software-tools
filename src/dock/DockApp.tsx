@@ -17,13 +17,13 @@ type DockViewState = {
 
 export function DockApp() {
   const [state, setState] = useState<DockViewState | null>(null)
-  const [previewId, setPreviewId] = useState<string | null>(null)
+  const [hoverId, setHoverId] = useState<string | null>(null)
 
   useEffect(() => {
     document.documentElement.classList.add('dock-root')
     const off = window.todothings.onDockState((next) => {
       setState(next)
-      if (!next.fanned) setPreviewId(null)
+      if (!next.fanned) setHoverId(null)
     })
     void window.todothings.dockReady()
     return () => {
@@ -35,10 +35,18 @@ export function DockApp() {
   if (!state) return null
 
   const plans = state.plans
-  const openId = state.fanned ? previewId : null
+  const openId = state.fanned ? hoverId : null
+  const box = state.fanned
+    ? { left: 0, top: 0, width: state.windowSize.width, height: state.windowSize.height }
+    : {
+        left: state.visual.x,
+        top: state.visual.y,
+        width: state.visual.width,
+        height: state.visual.height,
+      }
 
   function hoverPlan(id: string | null) {
-    setPreviewId(id)
+    setHoverId(id)
     void window.todothings.dockHoverPlan(id)
   }
 
@@ -46,12 +54,7 @@ export function DockApp() {
     <div className="deck-stage">
       <div
         className={`deck edge-${state.edge} ${state.fanned ? 'fanned' : 'sleeping'}${openId ? ' previewing' : ''}`}
-        style={{
-          left: state.visual.x,
-          top: state.visual.y,
-          width: state.visual.width,
-          height: state.visual.height,
-        }}
+        style={box}
         onMouseEnter={() => window.todothings.dockPointer(true)}
         onMouseLeave={() => {
           hoverPlan(null)
@@ -83,7 +86,7 @@ export function DockApp() {
               <div
                 key={plan.id}
                 className={`tab-wrap color-${color}${open ? ' open' : ''}${state.selectedId === plan.id ? ' selected' : ''}`}
-                style={{ animationDelay: state.fanned ? `${index * 45}ms` : '0ms' }}
+                style={{ animationDelay: state.fanned ? `${index * 40}ms` : '0ms' }}
                 onMouseEnter={() => {
                   if (state.fanned) hoverPlan(plan.id)
                 }}
@@ -97,7 +100,7 @@ export function DockApp() {
                   <span className="spine" />
                   <span className="label">{plan.title}</span>
                 </button>
-                <div className="note-card" aria-hidden={!open}>
+                <div className="note-card">
                   <h4>{plan.title}</h4>
                   <NoteList
                     tasks={plan.tasks}
