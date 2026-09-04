@@ -4,10 +4,13 @@ export type PlanFilterId = 'all' | string
 export type FontSizeId = 'small' | 'medium' | 'large'
 export type FontFamilyId = 'yahei' | 'youyuan' | 'fangsong' | 'kaiti'
 
+export type DockEdge = 'left' | 'right' | 'top' | 'bottom'
+
 export interface Plan {
   id: string
   title: string
   notes: string
+  color: string
   createdAt: string
   updatedAt: string
 }
@@ -30,12 +33,38 @@ export interface Task {
 export interface CreatePlanInput {
   title: string
   notes?: string
+  color?: string
 }
 
 export interface UpdatePlanInput {
   id: string
   title?: string
   notes?: string
+  color?: string
+}
+
+export interface DockTask {
+  id: string
+  title: string
+  completed: boolean
+  parentId: string | null
+}
+
+export interface DockPlan {
+  id: string
+  title: string
+  color: string
+  tasks: DockTask[]
+}
+
+export interface DockViewState {
+  edge: DockEdge
+  fanned: boolean
+  previewId: string | null
+  plans: DockPlan[]
+  selectedId: string | null
+  windowSize: { width: number; height: number }
+  visual: { x: number; y: number; width: number; height: number }
 }
 
 export interface CreateTaskInput {
@@ -57,6 +86,12 @@ export interface UpdateTaskInput {
   remindedAt?: string | null
   sortOrder?: number
   parentId?: string | null
+}
+
+export interface EdgeDockUiState {
+  enabled: boolean
+  collapsed: boolean
+  edge: DockEdge | null
 }
 
 export interface AppSettings {

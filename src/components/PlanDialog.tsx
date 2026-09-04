@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { PLAN_COLOR_IDS, PLAN_COLOR_META, type PlanColorId } from '../planColors'
 
 interface Props {
   open: boolean
@@ -6,6 +7,8 @@ interface Props {
   label: string
   initialValue: string
   confirmText?: string
+  color?: PlanColorId
+  onColorChange?: (color: PlanColorId) => void
   onCancel: () => void
   onConfirm: (value: string) => void
 }
@@ -16,6 +19,8 @@ export function PlanDialog({
   label,
   initialValue,
   confirmText = '确定',
+  color,
+  onColorChange,
   onCancel,
   onConfirm,
 }: Props) {
@@ -56,6 +61,24 @@ export function PlanDialog({
             }}
           />
         </label>
+        {color && onColorChange && (
+          <div className="color-field">
+            <span>停靠颜色</span>
+            <div className="color-swatches" role="listbox" aria-label="计划颜色">
+              {PLAN_COLOR_IDS.map((id) => (
+                <button
+                  key={id}
+                  type="button"
+                  className={`color-swatch${color === id ? ' selected' : ''}`}
+                  style={{ background: PLAN_COLOR_META[id].hex }}
+                  title={PLAN_COLOR_META[id].label}
+                  aria-label={PLAN_COLOR_META[id].label}
+                  onClick={() => onColorChange(id)}
+                />
+              ))}
+            </div>
+          </div>
+        )}
         <div className="dialog-actions">
           <button type="button" className="btn ghost" onClick={onCancel}>
             取消

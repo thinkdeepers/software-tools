@@ -1,0 +1,452 @@
+html.dock-root,
+html.dock-root body,
+html.dock-root #root {
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: transparent !important;
+}
+
+html.dock-root body {
+  font-family: 'Microsoft YaHei', '微软雅黑', sans-serif;
+}
+
+.deck-stage {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.deck {
+  position: absolute;
+  display: flex;
+  box-sizing: border-box;
+}
+
+.tab-stack {
+  display: flex;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+}
+
+.deck.sleeping .tab-stack {
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 5px;
+  border-radius: 999px;
+  background: rgba(24, 26, 30, 0.58);
+  box-shadow: 0 2px 14px rgba(0, 0, 0, 0.28);
+}
+
+.deck.sleeping.edge-right .tab-stack {
+  flex-direction: column;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.deck.sleeping.edge-left .tab-stack {
+  flex-direction: column;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.deck.sleeping.edge-top .tab-stack {
+  flex-direction: row;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+.deck.sleeping.edge-bottom .tab-stack {
+  flex-direction: row;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.deck.fanned.edge-right .tab-stack,
+.deck.fanned.edge-left .tab-stack {
+  flex-direction: column;
+  gap: 0;
+  padding: 8px 0;
+  overflow: visible;
+  scrollbar-width: none;
+}
+
+.deck.fanned.edge-right .tab-stack,
+.deck.fanned.edge-left .tab-stack {
+  -ms-overflow-style: none;
+}
+
+.deck.fanned .tab-stack::-webkit-scrollbar {
+  display: none;
+}
+
+.deck.fanned.edge-right .tab-stack {
+  align-items: flex-end;
+}
+
+.deck.fanned.edge-left .tab-stack {
+  align-items: flex-start;
+}
+
+.deck.fanned.edge-top .tab-stack,
+.deck.fanned.edge-bottom .tab-stack {
+  flex-direction: row;
+  gap: 0;
+  padding: 0 8px;
+  overflow: visible;
+}
+
+.deck.fanned.edge-top .tab-stack {
+  align-items: flex-start;
+}
+
+.deck.fanned.edge-bottom .tab-stack {
+  align-items: flex-end;
+}
+
+.tab-wrap {
+  --plan-color: #f5d76e;
+  --plan-ink: #5c4a12;
+  position: relative;
+  display: flex;
+  flex-shrink: 0;
+  overflow: hidden;
+  background: var(--plan-color);
+  color: var(--plan-ink);
+}
+
+.tab-wrap.color-yellow {
+  --plan-color: #f3e07a;
+  --plan-ink: #5c4a12;
+}
+.tab-wrap.color-peach {
+  --plan-color: #f4b183;
+  --plan-ink: #6b3210;
+}
+.tab-wrap.color-pink {
+  --plan-color: #f4a7c3;
+  --plan-ink: #6b2040;
+}
+.tab-wrap.color-lavender {
+  --plan-color: #d2c2f2;
+  --plan-ink: #3d2a6b;
+}
+.tab-wrap.color-sky {
+  --plan-color: #9fd0f2;
+  --plan-ink: #1a3f5c;
+}
+.tab-wrap.color-mint {
+  --plan-color: #9fe0c4;
+  --plan-ink: #1a4a35;
+}
+.tab-wrap.color-lime {
+  --plan-color: #c5e07a;
+  --plan-ink: #3a4a14;
+}
+.tab-wrap.color-tangerine {
+  --plan-color: #f0a05a;
+  --plan-ink: #5c3a10;
+}
+.tab-wrap.color-paper {
+  --plan-color: #d9d3c5;
+  --plan-ink: #3d3a34;
+}
+
+.deck.sleeping .tab-wrap {
+  width: 6px;
+  height: 10px;
+  border-radius: 3px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+
+.deck.sleeping.edge-top .tab-wrap,
+.deck.sleeping.edge-bottom .tab-wrap {
+  width: 10px;
+  height: 6px;
+}
+
+.deck.sleeping .tab-wrap.selected {
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.45),
+    0 0 0 1px rgba(255, 255, 255, 0.25);
+}
+
+.deck.sleeping .tab {
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+
+.deck.sleeping .label,
+.deck.sleeping .spine,
+.deck.sleeping .note-card {
+  display: none;
+}
+
+.tab {
+  appearance: none;
+  border: none;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.deck.fanned .tab-wrap {
+  animation: fan-slide 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+  transition:
+    box-shadow 200ms ease,
+    transform 200ms ease;
+}
+
+.deck.fanned.edge-right .tab-wrap + .tab-wrap,
+.deck.fanned.edge-left .tab-wrap + .tab-wrap {
+  margin-top: calc(var(--tab-peek, 68px) - var(--tab-len, 200px));
+}
+
+.deck.fanned.edge-top .tab-wrap + .tab-wrap,
+.deck.fanned.edge-bottom .tab-wrap + .tab-wrap {
+  margin-left: calc(var(--tab-peek, 68px) - var(--tab-len, 200px));
+}
+
+.deck.fanned .tab-wrap.folded {
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
+}
+
+.deck.fanned .tab-wrap.open {
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.24);
+}
+
+/* 右侧：收起时页签贴边；展开后名称在左侧竖脊，正文靠屏幕边缘 */
+.deck.fanned.edge-right .tab-wrap {
+  flex-direction: row;
+  align-items: stretch;
+  border-radius: 18px 0 0 18px;
+  height: var(--tab-len, 200px);
+}
+
+.deck.fanned.edge-left .tab-wrap {
+  flex-direction: row-reverse;
+  align-items: stretch;
+  border-radius: 0 18px 18px 0;
+  height: var(--tab-len, 200px);
+}
+
+.deck.fanned.edge-top .tab-wrap {
+  flex-direction: column-reverse;
+  align-items: stretch;
+  border-radius: 0 0 18px 18px;
+  width: var(--tab-len, 200px);
+}
+
+.deck.fanned.edge-bottom .tab-wrap {
+  flex-direction: column;
+  align-items: stretch;
+  border-radius: 18px 18px 0 0;
+  width: var(--tab-len, 200px);
+}
+
+.deck.fanned.edge-right .tab,
+.deck.fanned.edge-left .tab {
+  width: 44px;
+  height: var(--tab-len, 200px);
+}
+
+.deck.fanned.edge-top .tab,
+.deck.fanned.edge-bottom .tab {
+  height: 44px;
+  width: var(--tab-len, 200px);
+}
+
+.deck.fanned .label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.deck.fanned.edge-right .label,
+.deck.fanned.edge-left .label {
+  writing-mode: vertical-rl;
+  text-orientation: upright;
+}
+
+.spine {
+  pointer-events: none;
+  position: absolute;
+}
+
+.deck.fanned.edge-right .spine {
+  top: 14px;
+  bottom: 14px;
+  right: 7px;
+  border-right: 1px dashed color-mix(in srgb, var(--plan-ink) 32%, transparent);
+}
+
+.deck.fanned.edge-left .spine {
+  top: 14px;
+  bottom: 14px;
+  left: 7px;
+  border-left: 1px dashed color-mix(in srgb, var(--plan-ink) 32%, transparent);
+}
+
+.deck.fanned.edge-top .spine {
+  left: 14px;
+  right: 14px;
+  top: 7px;
+  border-top: 1px dashed color-mix(in srgb, var(--plan-ink) 32%, transparent);
+}
+
+.deck.fanned.edge-bottom .spine {
+  left: 14px;
+  right: 14px;
+  bottom: 7px;
+  border-bottom: 1px dashed color-mix(in srgb, var(--plan-ink) 32%, transparent);
+}
+
+.note-card {
+  box-sizing: border-box;
+  overflow: hidden;
+  opacity: 0;
+  color: inherit;
+  pointer-events: none;
+  min-width: 0;
+  min-height: 0;
+}
+
+.deck.fanned.edge-right .note-card,
+.deck.fanned.edge-left .note-card {
+  width: 0;
+  height: var(--tab-len, 200px);
+  max-height: var(--tab-len, 200px);
+  transition:
+    width 260ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 160ms ease,
+    padding 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.deck.fanned.edge-top .note-card,
+.deck.fanned.edge-bottom .note-card {
+  height: 0;
+  transition:
+    height 260ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 160ms ease,
+    padding 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.tab-wrap.open .note-card {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.deck.fanned.edge-right .tab-wrap.open .note-card,
+.deck.fanned.edge-left .tab-wrap.open .note-card {
+  width: 280px;
+  padding: 16px 18px 14px 12px;
+}
+
+.deck.fanned.edge-top .tab-wrap.open .note-card,
+.deck.fanned.edge-bottom .tab-wrap.open .note-card {
+  height: 220px;
+  width: 280px;
+  padding: 14px 16px 12px;
+}
+
+.note-card h4 {
+  margin: 0 0 10px;
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.note-empty {
+  margin: 0;
+  font-size: 13px;
+  opacity: 0.7;
+}
+
+.note-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow: auto;
+  max-height: calc(var(--tab-len, 200px) - 52px);
+  scrollbar-width: thin;
+}
+
+.note-list ul {
+  margin: 4px 0 0;
+  padding: 0 0 0 16px;
+  list-style: none;
+}
+
+.note-list li {
+  margin: 0 0 7px;
+}
+
+.note-list label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.note-list input {
+  margin-top: 2px;
+  accent-color: var(--plan-ink);
+}
+
+.note-list .done span {
+  text-decoration: line-through;
+  opacity: 0.55;
+}
+
+.deck.fanned.edge-right .tab-wrap {
+  --fan-x: 20px;
+  --fan-y: 0px;
+}
+
+.deck.fanned.edge-left .tab-wrap {
+  --fan-x: -20px;
+  --fan-y: 0px;
+}
+
+.deck.fanned.edge-top .tab-wrap {
+  --fan-x: 0px;
+  --fan-y: -16px;
+}
+
+.deck.fanned.edge-bottom .tab-wrap {
+  --fan-x: 0px;
+  --fan-y: 16px;
+}
+
+@keyframes fan-slide {
+  from {
+    transform: translate(var(--fan-x, 16px), var(--fan-y, 0px));
+    opacity: 0;
+  }
+  to {
+    transform: translate(0, 0);
+    opacity: 1;
+  }
+}

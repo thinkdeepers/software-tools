@@ -1,26 +1,48 @@
 import {
   BrowserWindow,
+  Menu,
   screen,
   type Display,
   type Rectangle,
 } from 'electron'
+import type { DockEdge, DockPlan, DockViewState, PlanFilterId } from './types'
 
-export type DockEdge = 'left' | 'right' | 'top' | 'bottom'
+export type { DockEdge }
 
-/** 可见半透明细线厚度（经 setShape 裁剪，不受 Windows 最小窗口限制） */
-const DOCK_LINE_PX = 2
-/**
- * 实际窗口厚度：需不小于 Windows 最小窗口尺寸，避免被系统撑大后溢出到邻屏。
- * 窗口整体限制在当前屏 workArea 内，再用 setShape 只露出边缘细线。
- */
-const STRIP_HIT_PX = 48
-const HOVER_SLACK_PX = 6
+/** Hold My Notes: 12 pt pill, one coloured dash per plan */
+const PILL_THICK_PX = 16
+const PILL_PAD_PX = 5
+const DASH_MAIN_PX = 10
+const DASH_GAP_PX = 3
+/** Fanned tab thickness (width on left/right, height on top/bottom) */
+const TAB_THICK_PX = 44
+const TAB_LEN_PX = 200
+const TAB_PEEK_PX = 68
+const NOTE_ACROSS_PX = 300
+const FAN_PAD_PX = 8
+const HOVER_SLACK_PX = 8
 const COLLAPSE_DELAY_MS = 900
+const FAN_COLLAPSE_MS = 700
 const HOVER_POLL_MS = 80
 const COLLAPSE_AFTER_MOVE_MS = 1200
 const MIN_WIDTH = 280
 const MIN_HEIGHT = 240
-const STRIP_OPACITY = 0.45
+const SLIDE_MS = 180
+
+export type EdgeDockChangePayload = {
+  enabled: boolean
+  collapsed: boolean
+  edge: DockEdge | null
+}
+
+export type EdgeDockHooks = {
+  preloadPath: string
+  loadDock: (win: BrowserWindow) => void
+  onChange: (state: EdgeDockChangePayload) => void
+  onSelectPlan: (id: PlanFilterId) => void
+  onCreatePlan: () => void
+  onDisable: () => void
+}
 
 function pointInRect(x: number, y: number, rect: Rectangle, slack = 0): boolean {
   return (
@@ -36,7 +58,6 @@ function displayById(id: number | null): Display | null {
   return screen.getAllDisplays().find((d) => d.id === id) ?? null
 }
 
-/** 用窗口中心点定位显示器，避免贴边时误匹配到邻屏 */
 function displayForWindowBounds(bounds: Rectangle): Display {
   const cx = bounds.x + Math.floor(bounds.width / 2)
   const cy = bounds.y + Math.floor(bounds.height / 2)
@@ -49,7 +70,6 @@ function detectDockEdge(bounds: Rectangle, workArea: Rectangle): DockEdge {
   const distTop = Math.abs(bounds.y - workArea.y)
   const distBottom = Math.abs(workArea.y + workArea.height - (bounds.y + bounds.height))
 
-  // 优先认作“已贴边”的方向，便于主动拖到底部/左侧停靠
   const SNAP = 96
   const touching: { edge: DockEdge; dist: number }[] = []
   if (distLeft <= SNAP) touching.push({ edge: 'left', dist: distLeft })
@@ -61,11 +81,8 @@ function detectDockEdge(bounds: Rectangle, workArea: Rectangle): DockEdge {
     return touching[0]!.edge
   }
 
-  const min = Math.min(distLeft, distRight, distTop, distBottom)
-  if (min === distLeft) return 'left'
-  if (min === distRight) return 'right'
-  if (min === distTop) return 'top'
-  return 'bottom'
+  // Hold My Notes 默认停在右侧，未贴边时不改去顶/底
+  return 'right'
 }
 
 function clampExpandedBounds(bounds: Rectangle, workArea: Rectangle): Rectangle {
@@ -92,108 +109,58 @@ function clampStripIntoWorkArea(bounds: Rectangle, workArea: Rectangle): Rectang
   return { x, y, width, height }
 }
 
-/**
- * 感应条窗口矩形：完整落在当前屏 workArea 内（不会跨到邻屏）。
- * 可见细线再通过 setShape 裁到外边缘。
- */
-function stripWindowBounds(
-  edge: DockEdge,
-  expanded: Rectangle,
-  workArea: Rectangle,
-): Rectangle {
-  const hit = Math.min(STRIP_HIT_PX, workArea.width, workArea.height)
-  const height = Math.min(Math.max(expanded.height, hit), workArea.height)
-  const width = Math.min(Math.max(expanded.width, hit), workArea.width)
-  let y = expanded.y
-  let x = expanded.x
-  if (y < workArea.y) y = workArea.y
-  if (y + height > workArea.y + workArea.height) y = workArea.y + workArea.height - height
-  if (x < workArea.x) x = workArea.x
-  if (x + width > workArea.x + workArea.width) x = workArea.x + workArea.width - width
+function sleepDashCount(planCount: number): number {
+  return Math.max(1, planCount)
+}
 
-  switch (edge) {
-    case 'left':
-      return clampStripIntoWorkArea(
-        { x: workArea.x, y, width: hit, height },
-        workArea,
-      )
-    case 'right':
-      return clampStripIntoWorkArea(
-        { x: workArea.x + workArea.width - hit, y, width: hit, height },
-        workArea,
-      )
-    case 'top':
-      return clampStripIntoWorkArea(
-        { x, y: workArea.y, width, height: hit },
-        workArea,
-      )
-    case 'bottom':
-      return clampStripIntoWorkArea(
-        { x, y: workArea.y + workArea.height - hit, width, height: hit },
-        workArea,
-      )
+function sleepVisualSize(planCount: number): { across: number; along: number } {
+  const dashes = sleepDashCount(planCount)
+  return {
+    across: PILL_THICK_PX,
+    along: PILL_PAD_PX * 2 + dashes * DASH_MAIN_PX + Math.max(0, dashes - 1) * DASH_GAP_PX,
   }
 }
 
-function stripShape(edge: DockEdge, bounds: Rectangle): Rectangle {
-  const line = Math.min(DOCK_LINE_PX, bounds.width, bounds.height)
-  switch (edge) {
-    case 'left':
-      return { x: 0, y: 0, width: line, height: bounds.height }
-    case 'right':
-      return { x: Math.max(0, bounds.width - line), y: 0, width: line, height: bounds.height }
-    case 'top':
-      return { x: 0, y: 0, width: bounds.width, height: line }
-    case 'bottom':
-      return { x: 0, y: Math.max(0, bounds.height - line), width: bounds.width, height: line }
+function fanVisualSize(planCount: number): { across: number; along: number } {
+  const tabs = Math.max(1, planCount)
+  return {
+    across: FAN_PAD_PX + TAB_THICK_PX + NOTE_ACROSS_PX,
+    along: FAN_PAD_PX * 2 + TAB_LEN_PX + Math.max(0, tabs - 1) * TAB_PEEK_PX,
   }
 }
 
-function snapExpandedToEdge(
-  base: Rectangle,
-  edge: DockEdge,
-  workArea: Rectangle,
-): Rectangle {
-  let next = clampExpandedBounds(base, workArea)
-  switch (edge) {
-    case 'left':
-      next = { ...next, x: workArea.x }
-      break
-    case 'right':
-      next = { ...next, x: workArea.x + workArea.width - next.width }
-      break
-    case 'top':
-      next = { ...next, y: workArea.y }
-      break
-    case 'bottom':
-      next = { ...next, y: workArea.y + workArea.height - next.height }
-      break
-  }
-  return next
-}
-
-export type EdgeDockChangePayload = {
-  enabled: boolean
-  collapsed: boolean
-  edge: DockEdge | null
-}
+const EDGES: DockEdge[] = ['right', 'bottom', 'left', 'top']
 
 export class EdgeDockManager {
   private win: BrowserWindow | null = null
-  private strip: BrowserWindow | null = null
+  private dock: BrowserWindow | null = null
+  private dockAxis: 'h' | 'v' | null = null
+  private dockReady = false
   private enabled = false
   private collapsed = false
+  private fanned = false
   private edge: DockEdge | null = null
+  private edgePinned = false
   private savedBounds: Rectangle | null = null
   private displayId: number | null = null
   private collapseTimer: NodeJS.Timeout | null = null
+  private fanTimer: NodeJS.Timeout | null = null
   private pollTimer: NodeJS.Timeout | null = null
   private dragging = false
   private animating = false
-  private readonly onChange: (state: EdgeDockChangePayload) => void
+  private animatingSince = 0
+  private motionGen = 0
+  private plans: DockPlan[] = []
+  private selectedId: string | null = null
+  private previewId: string | null = null
+  private lastLayout = {
+    windowSize: { width: PILL_THICK_PX, height: 48 },
+    visual: { x: 0, y: 0, width: PILL_THICK_PX, height: 48 },
+  }
+  private readonly hooks: EdgeDockHooks
 
-  constructor(onChange: (state: EdgeDockChangePayload) => void) {
-    this.onChange = onChange
+  constructor(hooks: EdgeDockHooks) {
+    this.hooks = hooks
   }
 
   isEnabled() {
@@ -241,8 +208,9 @@ export class EdgeDockManager {
       win.removeListener('leave-full-screen', this.handleRestore)
     }
     this.clearCollapseTimer()
+    this.clearFanTimer()
     this.stopPolling()
-    this.destroyStrip()
+    this.destroyDock()
     this.win = null
   }
 
@@ -253,6 +221,7 @@ export class EdgeDockManager {
     this.detach()
     this.enabled = false
     this.collapsed = false
+    this.fanned = false
     this.edge = null
     this.savedBounds = null
     this.displayId = null
@@ -266,11 +235,14 @@ export class EdgeDockManager {
     this.enabled = enabled
     if (!enabled) {
       this.clearCollapseTimer()
+      this.clearFanTimer()
       this.stopPolling()
+      this.fanned = false
       if (this.collapsed) this.expandImmediate()
-      this.destroyStrip()
+      this.destroyDock()
       this.collapsed = false
       this.edge = null
+      this.edgePinned = false
       this.savedBounds = null
       this.displayId = null
       const win = this.win
@@ -287,27 +259,118 @@ export class EdgeDockManager {
       if (win.isMinimized()) win.restore()
       if (!win.isVisible()) win.show()
       win.setAlwaysOnTop(true)
-      // 开启侧边停靠后不在任务栏显示应用按钮，仅保留托盘入口
       win.setSkipTaskbar(true)
       this.savedBounds = win.getBounds()
       this.displayId = displayForWindowBounds(this.savedBounds).id
+      const { workArea } = this.resolveWorkArea(this.savedBounds)
+      this.edge = detectDockEdge(this.savedBounds, workArea)
     }
     this.startPolling()
+    this.placeDock()
     this.scheduleCollapse(200)
     this.emit()
   }
 
-  /** Expand if collapsed (e.g. tray open / show window). */
+  setPlans(plans: DockPlan[], selectedId: string | null) {
+    this.plans = plans
+    this.selectedId = selectedId
+    if (this.previewId && !plans.some((p) => p.id === this.previewId)) {
+      this.previewId = null
+    }
+    if (this.enabled) this.placeDock()
+    else this.sendDockState()
+  }
+
+  markDockReady() {
+    this.dockReady = true
+    this.sendDockState()
+  }
+
+  setPointerInside(inside: boolean) {
+    if (!this.enabled) return
+    if (inside) {
+      this.clearFanTimer()
+      this.clearCollapseTimer()
+      this.setFanned(true)
+      return
+    }
+    this.previewId = null
+    this.scheduleFanClose()
+    if (!this.collapsed) this.scheduleCollapse()
+  }
+
+  hoverPlan(id: string | null) {
+    if (!this.enabled) return
+    if (this.previewId === id) return
+    this.previewId = id
+    if (id) {
+      this.clearFanTimer()
+      this.clearCollapseTimer()
+      if (!this.fanned) {
+        this.fanned = true
+      }
+    }
+    // 扇开尺寸已含便签宽度，悬停只更新命中区域，避免整窗跳动
+    this.placeDock()
+  }
+
+  selectFromDock(id: PlanFilterId) {
+    if (!this.enabled) return
+    this.selectedId = id === 'all' ? null : id
+    this.setFanned(false)
+    this.hooks.onSelectPlan(id)
+    this.expandImmediate()
+  }
+
+  createFromDock() {
+    if (!this.enabled) return
+    this.setFanned(false)
+    this.expandImmediate()
+    this.hooks.onCreatePlan()
+  }
+
+  cycleEdge() {
+    if (!this.enabled) return
+    const current = this.edge ?? 'right'
+    const next = EDGES[(EDGES.indexOf(current) + 1) % EDGES.length]!
+    this.edge = next
+    this.edgePinned = true
+    if (!this.collapsed) this.repositionExpanded()
+    this.placeDock()
+    this.emit()
+  }
+
+  showDockMenu() {
+    const menu = Menu.buildFromTemplate([
+      {
+        label: '打开所有计划',
+        click: () => this.selectFromDock('all'),
+      },
+      {
+        label: '新建计划',
+        click: () => this.createFromDock(),
+      },
+      { type: 'separator' },
+      {
+        label: '换边停靠',
+        click: () => this.cycleEdge(),
+      },
+      { type: 'separator' },
+      {
+        label: '退出侧边停靠',
+        click: () => this.hooks.onDisable(),
+      },
+    ])
+    menu.popup({ window: this.dock ?? this.win ?? undefined })
+  }
+
   ensureExpanded() {
     if (!this.enabled) return
     this.clearCollapseTimer()
+    this.setFanned(false)
     if (this.collapsed) this.expandImmediate()
   }
 
-  /**
-   * Force collapse to an edge line.
-   * Used when closing the window while edge-dock is enabled.
-   */
   collapseNow() {
     if (!this.enabled) return
     this.clearCollapseTimer()
@@ -319,17 +382,25 @@ export class EdgeDockManager {
       this.savedBounds = win.getBounds()
       this.displayId = displayForWindowBounds(this.savedBounds).id
     }
+    this.setFanned(false)
     this.collapseImmediate()
   }
 
   private emit() {
-    this.onChange(this.getState())
+    this.hooks.onChange(this.getState())
   }
 
   private clearCollapseTimer() {
     if (this.collapseTimer) {
       clearTimeout(this.collapseTimer)
       this.collapseTimer = null
+    }
+  }
+
+  private clearFanTimer() {
+    if (this.fanTimer) {
+      clearTimeout(this.fanTimer)
+      this.fanTimer = null
     }
   }
 
@@ -345,17 +416,47 @@ export class EdgeDockManager {
     }
   }
 
-  private ensureStrip(): BrowserWindow {
-    if (this.strip && !this.strip.isDestroyed()) return this.strip
+  private setFanned(fanned: boolean) {
+    if (this.fanned === fanned) {
+      if (!fanned && this.previewId) {
+        this.previewId = null
+        if (this.enabled) this.placeDock()
+      }
+      return
+    }
+    this.fanned = fanned
+    if (!fanned) this.previewId = null
+    if (this.enabled) this.placeDock()
+  }
 
-    this.strip = new BrowserWindow({
-      width: STRIP_HIT_PX,
-      height: STRIP_HIT_PX,
+  private scheduleFanClose() {
+    this.clearFanTimer()
+    this.fanTimer = setTimeout(() => {
+      this.fanTimer = null
+      if (this.pointerOverDock()) return
+      this.setFanned(false)
+    }, FAN_COLLAPSE_MS)
+  }
+
+  private ensureDock(bounds: Rectangle): BrowserWindow {
+    const axis = this.edge === 'top' || this.edge === 'bottom' ? 'h' : 'v'
+    if (this.dock && !this.dock.isDestroyed() && this.dockAxis === axis) {
+      return this.dock
+    }
+    this.destroyDock()
+    this.dockAxis = axis
+    this.dockReady = false
+
+    this.dock = new BrowserWindow({
+      x: bounds.x,
+      y: bounds.y,
+      width: bounds.width,
+      height: bounds.height,
       minWidth: 1,
       minHeight: 1,
       frame: false,
-      transparent: false,
-      backgroundColor: '#ffffff',
+      transparent: true,
+      backgroundColor: '#00000000',
       alwaysOnTop: true,
       skipTaskbar: true,
       resizable: false,
@@ -363,124 +464,185 @@ export class EdgeDockManager {
       minimizable: false,
       maximizable: false,
       closable: false,
-      focusable: false,
+      focusable: true,
       hasShadow: false,
       thickFrame: false,
+      fullscreenable: false,
       show: false,
+      type: process.platform === 'linux' ? 'notification' : undefined,
       webPreferences: {
+        preload: this.hooks.preloadPath,
         contextIsolation: true,
         nodeIntegration: false,
-        sandbox: true,
+        sandbox: false,
+        backgroundThrottling: false,
       },
     })
 
-    this.strip.setMenu(null)
-    this.strip.setMinimumSize(1, 1)
-    this.strip.setAlwaysOnTop(true, 'screen-saver')
-    this.strip.setOpacity(STRIP_OPACITY)
-    void this.strip.loadURL(
-      `data:text/html,${encodeURIComponent(
-        '<!doctype html><html><head><meta charset="utf-8"></head>' +
-          '<body style="margin:0;background:#ffffff;overflow:hidden"></body></html>',
-      )}`,
-    )
+    this.dock.setMenu(null)
+    this.dock.setMinimumSize(1, 1)
+    this.dock.setAlwaysOnTop(true, 'screen-saver')
+    this.dock.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+    this.hooks.loadDock(this.dock)
 
-    this.strip.on('closed', () => {
-      this.strip = null
+    this.dock.on('closed', () => {
+      this.dock = null
+      this.dockReady = false
+      this.dockAxis = null
     })
 
-    return this.strip
+    return this.dock
   }
 
-  private destroyStrip() {
-    const strip = this.strip
-    this.strip = null
-    if (strip && !strip.isDestroyed()) {
+  private destroyDock() {
+    const dock = this.dock
+    this.dock = null
+    this.dockReady = false
+    this.dockAxis = null
+    if (dock && !dock.isDestroyed()) {
       try {
-        strip.setShape([])
+        dock.setShape([])
       } catch {
         // ignore
       }
-      strip.destroy()
+      dock.destroy()
     }
   }
 
-  private hideStrip() {
-    const strip = this.strip
-    if (strip && !strip.isDestroyed()) {
-      try {
-        strip.setShape([])
-      } catch {
-        // ignore
-      }
-      if (strip.isVisible()) strip.hide()
-    }
+  private hideDock() {
+    const dock = this.dock
+    if (dock && !dock.isDestroyed() && dock.isVisible()) dock.hide()
   }
 
-  private placeStrip(edge: DockEdge, expanded: Rectangle, workArea: Rectangle) {
-    // 横/竖切换时销毁重建，避免系统最小尺寸把窄条粘成宽条
-    this.destroyStrip()
-    const strip = this.ensureStrip()
-    const desired = stripWindowBounds(edge, expanded, workArea)
+  private dockVisualFor(fanned: boolean): { across: number; along: number } {
+    return fanned ? fanVisualSize(this.plans.length) : sleepVisualSize(this.plans.length)
+  }
 
-    strip.setMinimumSize(1, 1)
-    strip.setBounds(desired, false)
-    strip.setSize(desired.width, desired.height)
-
-    let actual = strip.getBounds()
-    // 若系统仍放大了窗口，重新夹紧到当前屏内，避免右/底边溢到邻屏
-    if (edge === 'right') {
-      actual = {
-        ...actual,
-        x: workArea.x + workArea.width - actual.width,
-        y: desired.y,
-        height: desired.height,
-      }
-    } else if (edge === 'left') {
-      actual = {
-        ...actual,
-        x: workArea.x,
-        y: desired.y,
-        width: Math.min(actual.width, STRIP_HIT_PX),
-        height: desired.height,
-      }
-    } else if (edge === 'top') {
-      actual = {
-        ...actual,
-        x: desired.x,
-        y: workArea.y,
-        width: desired.width,
-        height: Math.min(actual.height, STRIP_HIT_PX),
-      }
+  private dockWindowBounds(edge: DockEdge, workArea: Rectangle, expanded: Rectangle): Rectangle {
+    const { across, along } = this.fanned
+      ? fanVisualSize(this.plans.length)
+      : sleepVisualSize(this.plans.length)
+    const vertical = edge === 'left' || edge === 'right'
+    const width = vertical ? across : along
+    const height = vertical ? along : across
+    let x = expanded.x
+    let y = expanded.y
+    if (vertical) {
+      y = Math.min(Math.max(expanded.y, workArea.y), workArea.y + workArea.height - height)
+      x = edge === 'left' ? workArea.x : workArea.x + workArea.width - width
     } else {
-      actual = {
-        ...actual,
-        x: desired.x,
-        y: workArea.y + workArea.height - actual.height,
-        width: desired.width,
-        height: Math.min(actual.height, STRIP_HIT_PX),
-      }
+      x = Math.min(Math.max(expanded.x, workArea.x), workArea.x + workArea.width - width)
+      y = edge === 'top' ? workArea.y : workArea.y + workArea.height - height
     }
-    actual = clampStripIntoWorkArea(actual, workArea)
-    // 再次贴边，保证整窗仍在本屏
-    if (edge === 'right') actual.x = workArea.x + workArea.width - actual.width
-    if (edge === 'left') actual.x = workArea.x
-    if (edge === 'top') actual.y = workArea.y
-    if (edge === 'bottom') actual.y = workArea.y + workArea.height - actual.height
-    actual = clampStripIntoWorkArea(actual, workArea)
+    return clampStripIntoWorkArea({ x, y, width, height }, workArea)
+  }
 
-    strip.setBounds(actual, false)
-    strip.setSize(actual.width, actual.height)
+  private pinToEdge(bounds: Rectangle, edge: DockEdge, workArea: Rectangle): Rectangle {
+    const next = { ...bounds }
+    if (edge === 'right') next.x = workArea.x + workArea.width - next.width
+    if (edge === 'left') next.x = workArea.x
+    if (edge === 'top') next.y = workArea.y
+    if (edge === 'bottom') next.y = workArea.y + workArea.height - next.height
+    return clampStripIntoWorkArea(next, workArea)
+  }
 
-    const shape = stripShape(edge, actual)
+  private visualInWindow(edge: DockEdge, actual: Rectangle): Rectangle {
+    const fanned = this.fanned
+    // 扇开后始终露出完整页签+便签区，悬停只需 CSS 滑出，不再改窗口形状
+    const { across, along } = fanned
+      ? fanVisualSize(this.plans.length)
+      : sleepVisualSize(this.plans.length)
+    const vertical = edge === 'left' || edge === 'right'
+    const width = Math.min(vertical ? across : along, actual.width)
+    const height = Math.min(vertical ? along : across, actual.height)
+    let x = 0
+    let y = 0
+    if (edge === 'right') x = Math.max(0, actual.width - width)
+    if (edge === 'bottom') y = Math.max(0, actual.height - height)
+    return { x, y, width, height }
+  }
+
+  private applyDockPlacement(dock: BrowserWindow, pinned: Rectangle, edge: DockEdge) {
+    dock.setMinimumSize(1, 1)
+    dock.setBounds(pinned, false)
+    dock.setPosition(pinned.x, pinned.y, false)
+    const { workArea } = this.resolveWorkArea(pinned)
+    let actual = this.pinToEdge(dock.getBounds(), edge, workArea)
+    const now = dock.getBounds()
+    if (actual.x !== now.x || actual.y !== now.y) {
+      dock.setBounds(actual, false)
+    }
+    actual = dock.getBounds()
+    const visual = this.visualInWindow(edge, actual)
+    this.lastLayout = {
+      windowSize: { width: actual.width, height: actual.height },
+      visual,
+    }
     try {
-      strip.setShape([shape])
+      dock.setShape([visual])
     } catch {
-      // setShape 不可用时至少保持半透明整块感应条
+      // setShape 不可用时仍靠透明窗口露出胶囊
     }
-    strip.setOpacity(STRIP_OPACITY)
-    strip.setAlwaysOnTop(true, 'screen-saver')
-    strip.showInactive()
+    dock.setAlwaysOnTop(true, 'screen-saver')
+  }
+
+  private placeDock() {
+    if (!this.enabled) {
+      this.hideDock()
+      return
+    }
+    const fallback = this.savedBounds ?? this.win?.getBounds() ?? {
+      x: 100,
+      y: 160,
+      width: 560,
+      height: 520,
+    }
+    const { workArea } = this.resolveWorkArea(fallback)
+    const edge =
+      this.edgePinned && this.edge
+        ? this.edge
+        : detectDockEdge(this.savedBounds ?? fallback, workArea)
+    this.edge = edge
+
+    const desired = this.dockWindowBounds(edge, workArea, this.savedBounds ?? fallback)
+    const dock = this.ensureDock(desired)
+    const pinned = this.pinToEdge(desired, edge, workArea)
+    this.applyDockPlacement(dock, pinned, edge)
+    if (!dock.isVisible()) dock.showInactive()
+    this.applyDockPlacement(dock, this.pinToEdge(dock.getBounds(), edge, workArea), edge)
+    this.sendDockState()
+  }
+
+  private snapDockIfDrifted() {
+    if (!this.enabled || !this.edge) return
+    const dock = this.dock
+    if (!dock || dock.isDestroyed() || !dock.isVisible()) return
+    const fallback = this.savedBounds ?? this.win?.getBounds() ?? dock.getBounds()
+    const { workArea } = this.resolveWorkArea(fallback)
+    const desired = this.dockWindowBounds(this.edge, workArea, fallback)
+    const pinned = this.pinToEdge(desired, this.edge, workArea)
+    const actual = dock.getBounds()
+    const drifted =
+      Math.abs(actual.x - pinned.x) > 4 ||
+      Math.abs(actual.y - pinned.y) > 4 ||
+      Math.abs(actual.width - pinned.width) > 12 ||
+      Math.abs(actual.height - pinned.height) > 12
+    if (drifted) this.applyDockPlacement(dock, pinned, this.edge)
+  }
+
+  private sendDockState() {
+    const dock = this.dock
+    if (!dock || dock.isDestroyed() || !this.dockReady) return
+    const payload: DockViewState = {
+      edge: this.edge ?? 'right',
+      fanned: this.fanned,
+      previewId: this.previewId,
+      plans: this.plans,
+      selectedId: this.selectedId,
+      windowSize: this.lastLayout.windowSize,
+      visual: this.lastLayout.visual,
+    }
+    dock.webContents.send('dock:state', payload)
   }
 
   private scheduleCollapse(delay = COLLAPSE_DELAY_MS) {
@@ -501,11 +663,8 @@ export class EdgeDockManager {
     const win = this.win
     if (!win || win.isDestroyed()) return
     if (win.isMaximized() || win.isMinimized() || !win.isVisible()) return
-
-    const bounds = win.getBounds()
-    const cursor = screen.getCursorScreenPoint()
-    if (pointInRect(cursor.x, cursor.y, bounds, HOVER_SLACK_PX)) return
-
+    if (this.pointerOverMain() || this.pointerOverDock()) return
+    this.setFanned(false)
     this.collapseImmediate()
   }
 
@@ -515,6 +674,76 @@ export class EdgeDockManager {
     return { display, workArea: display.workArea }
   }
 
+  private dockReserve(edge: DockEdge): number {
+    return this.dockVisualFor(false).across + 4
+  }
+
+  private snapExpandedToEdge(base: Rectangle, edge: DockEdge, workArea: Rectangle): Rectangle {
+    let next = clampExpandedBounds(base, workArea)
+    const inset = this.dockReserve(edge)
+    switch (edge) {
+      case 'left':
+        next = { ...next, x: workArea.x + inset }
+        break
+      case 'right':
+        next = { ...next, x: workArea.x + workArea.width - next.width - inset }
+        break
+      case 'top':
+        next = { ...next, y: workArea.y + inset }
+        break
+      case 'bottom':
+        next = { ...next, y: workArea.y + workArea.height - next.height - inset }
+        break
+    }
+    return clampExpandedBounds(next, workArea)
+  }
+
+  private slideOrigin(to: Rectangle, edge: DockEdge): Rectangle {
+    switch (edge) {
+      case 'right':
+        return { ...to, x: to.x + Math.min(72, to.width) }
+      case 'left':
+        return { ...to, x: to.x - Math.min(72, to.width) }
+      case 'top':
+        return { ...to, y: to.y - Math.min(56, to.height) }
+      case 'bottom':
+        return { ...to, y: to.y + Math.min(56, to.height) }
+    }
+  }
+
+  private animateBounds(
+    win: BrowserWindow,
+    from: Rectangle,
+    to: Rectangle,
+    ms: number,
+    done: () => void,
+  ) {
+    const steps = Math.max(6, Math.round(ms / 20))
+    let i = 0
+    const tick = () => {
+      if (win.isDestroyed()) {
+        done()
+        return
+      }
+      i += 1
+      const t = i / steps
+      const e = 1 - (1 - t) * (1 - t)
+      win.setBounds(
+        {
+          x: Math.round(from.x + (to.x - from.x) * e),
+          y: Math.round(from.y + (to.y - from.y) * e),
+          width: Math.round(from.width + (to.width - from.width) * e),
+          height: Math.round(from.height + (to.height - from.height) * e),
+        },
+        false,
+      )
+      if (i >= steps) done()
+      else setTimeout(tick, ms / steps)
+    }
+    win.setBounds(from, false)
+    tick()
+  }
+
   private collapseImmediate() {
     const win = this.win
     if (!win || win.isDestroyed() || this.collapsed) return
@@ -522,68 +751,143 @@ export class EdgeDockManager {
 
     const bounds = this.savedBounds ?? win.getBounds()
     const { workArea } = this.resolveWorkArea(bounds)
-    const edge = detectDockEdge(bounds, workArea)
+    const edge =
+      this.edgePinned && this.edge ? this.edge : detectDockEdge(bounds, workArea)
     const expanded = clampExpandedBounds(bounds, workArea)
 
     this.savedBounds = expanded
     this.edge = edge
+    const gen = ++this.motionGen
     this.animating = true
+    this.animatingSince = Date.now()
+    this.placeDock()
 
-    this.placeStrip(edge, expanded, workArea)
+    const hide = () => {
+      if (gen !== this.motionGen) return
+      if (!win.isDestroyed() && win.isVisible()) win.hide()
+      win.setSkipTaskbar(true)
+      this.collapsed = true
+      this.animating = false
+      this.placeDock()
+      this.emit()
+    }
 
-    // Hide the full UI so the edge only shows the shaped line.
-    if (win.isVisible()) win.hide()
-    win.setSkipTaskbar(true)
-
-    this.collapsed = true
-    this.animating = false
-    this.emit()
+    if (win.isVisible()) {
+      const from = win.getBounds()
+      const to = this.slideOrigin(from, edge)
+      this.animateBounds(win, from, to, SLIDE_MS, hide)
+    } else {
+      hide()
+    }
   }
 
   private expandImmediate() {
     const win = this.win
-    if (!win || win.isDestroyed() || !this.collapsed) return
+    if (!win || win.isDestroyed()) return
 
     const fallback = this.savedBounds ?? { x: 100, y: 100, width: 560, height: 520 }
     const { workArea } = this.resolveWorkArea(fallback)
     const edge = this.edge ?? detectDockEdge(fallback, workArea)
-    const next = snapExpandedToEdge(fallback, edge, workArea)
+    const next = this.snapExpandedToEdge(fallback, edge, workArea)
 
+    const gen = ++this.motionGen
     this.animating = true
-    this.hideStrip()
+    this.animatingSince = Date.now()
+    this.placeDock()
     win.setMinimumSize(MIN_WIDTH, MIN_HEIGHT)
-    win.setBounds(next, false)
     win.setAlwaysOnTop(true)
     win.setSkipTaskbar(true)
-    if (!win.isVisible()) win.show()
-    win.focus()
-    this.savedBounds = next
-    this.collapsed = false
-    this.animating = false
-    this.emit()
-  }
 
-  private pollCursor() {
-    if (!this.enabled || this.dragging || this.animating) return
-    const win = this.win
-    if (!win || win.isDestroyed()) return
-
-    const cursor = screen.getCursorScreenPoint()
-
-    if (this.collapsed) {
-      const strip = this.strip
-      if (!strip || strip.isDestroyed()) return
-      // 使用完整感应窗口矩形（含不可见 hit 区），便于移入触发
-      if (pointInRect(cursor.x, cursor.y, strip.getBounds(), HOVER_SLACK_PX)) {
-        this.expandImmediate()
+    const finish = () => {
+      if (gen !== this.motionGen) return
+      if (!win.isDestroyed()) {
+        win.setBounds(next, false)
+        if (!win.isVisible()) win.show()
+        win.focus()
       }
+      this.savedBounds = next
+      this.collapsed = false
+      this.animating = false
+      this.placeDock()
+      this.emit()
+    }
+
+    if (this.collapsed || !win.isVisible()) {
+      const from = this.slideOrigin(next, edge)
+      win.setBounds(from, false)
+      if (!win.isVisible()) win.show()
+      this.animateBounds(win, from, next, SLIDE_MS, finish)
       return
     }
 
+    finish()
+  }
+
+  private repositionExpanded() {
+    const win = this.win
+    if (!win || win.isDestroyed() || this.collapsed) return
+    const fallback = this.savedBounds ?? win.getBounds()
+    const { workArea } = this.resolveWorkArea(fallback)
+    const edge = this.edge ?? detectDockEdge(fallback, workArea)
+    const next = this.snapExpandedToEdge(fallback, edge, workArea)
+    win.setBounds(next, false)
+    this.savedBounds = next
+  }
+
+  private pointerOverDock(): boolean {
+    const dock = this.dock
+    if (!dock || dock.isDestroyed() || !dock.isVisible()) return false
+    const cursor = screen.getCursorScreenPoint()
+    const bounds = dock.getBounds()
+    const visual = this.lastLayout.visual
+    return pointInRect(
+      cursor.x,
+      cursor.y,
+      {
+        x: bounds.x + visual.x,
+        y: bounds.y + visual.y,
+        width: visual.width,
+        height: visual.height,
+      },
+      HOVER_SLACK_PX,
+    )
+  }
+
+  private pointerOverMain(): boolean {
+    const win = this.win
+    if (!win || win.isDestroyed() || !win.isVisible()) return false
+    const cursor = screen.getCursorScreenPoint()
+    return pointInRect(cursor.x, cursor.y, win.getBounds(), HOVER_SLACK_PX)
+  }
+
+  private pollCursor() {
+    if (this.animating && this.animatingSince && Date.now() - this.animatingSince > 2000) {
+      this.animating = false
+    }
+    if (!this.enabled || this.dragging || this.animating) return
+    this.snapDockIfDrifted()
+    const win = this.win
+    if (!win || win.isDestroyed()) return
+
+    const overDock = this.pointerOverDock()
+    const overMain = this.pointerOverMain()
+
+    if (overDock) {
+      this.clearCollapseTimer()
+      this.clearFanTimer()
+      this.setFanned(true)
+      return
+    }
+
+    if (this.fanned && !overDock) {
+      if (!this.fanTimer) this.scheduleFanClose()
+    }
+
+    if (this.collapsed) return
+
     if (win.isMaximized() || win.isMinimized() || !win.isVisible()) return
 
-    const bounds = win.getBounds()
-    if (pointInRect(cursor.x, cursor.y, bounds, HOVER_SLACK_PX)) {
+    if (overMain) {
       this.clearCollapseTimer()
       return
     }
@@ -594,6 +898,7 @@ export class EdgeDockManager {
   private readonly handleWillMove = () => {
     if (!this.enabled) return
     this.dragging = true
+    this.edgePinned = false
     this.clearCollapseTimer()
     if (this.collapsed) this.expandImmediate()
   }
@@ -605,6 +910,9 @@ export class EdgeDockManager {
     if (win && !win.isDestroyed() && !this.collapsed) {
       this.savedBounds = win.getBounds()
       this.displayId = displayForWindowBounds(this.savedBounds).id
+      const { workArea } = this.resolveWorkArea(this.savedBounds)
+      this.edge = detectDockEdge(this.savedBounds, workArea)
+      this.placeDock()
     }
     this.scheduleCollapse(COLLAPSE_AFTER_MOVE_MS)
   }
@@ -623,6 +931,7 @@ export class EdgeDockManager {
     if (win && !win.isDestroyed() && !this.collapsed) {
       this.savedBounds = win.getBounds()
       this.displayId = displayForWindowBounds(this.savedBounds).id
+      this.placeDock()
     }
     this.scheduleCollapse(COLLAPSE_AFTER_MOVE_MS)
   }

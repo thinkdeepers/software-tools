@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { PLAN_COLOR_META, normalizePlanColor } from '../planColors'
 import type { FontFamilyId, FontSizeId, Plan, PlanFilterId, ThemeId } from '../types'
 import { ALL_PLANS_ID, FONT_FAMILY_OPTIONS } from '../types'
 
@@ -31,6 +32,7 @@ interface Props {
   onCreatePlan: () => void
   onRenamePlan: () => void
   onDeletePlan: () => void
+  onCyclePlanColor: () => void
   onTheme: (theme: ThemeId) => void
   onTogglePin: () => void
   onToggleEdgeDock: () => void
@@ -53,6 +55,7 @@ export function AppMenuBar({
   onCreatePlan,
   onRenamePlan,
   onDeletePlan,
+  onCyclePlanColor,
   onTheme,
   onTogglePin,
   onToggleEdgeDock,
@@ -106,6 +109,10 @@ export function AppMenuBar({
                     }}
                   >
                     <span className="check">{planFilter === plan.id ? '●' : '○'}</span>
+                    <span
+                      className="plan-swatch"
+                      style={{ background: PLAN_COLOR_META[normalizePlanColor(plan.color)].hex }}
+                    />
                     {plan.title}
                   </button>
                 ))}
@@ -132,6 +139,18 @@ export function AppMenuBar({
                 >
                   <span className="check" />
                   重命名当前计划
+                </button>
+                <button
+                  type="button"
+                  className="menu-option"
+                  disabled={!canEditPlan}
+                  onClick={() => {
+                    onCyclePlanColor()
+                    setOpen(null)
+                  }}
+                >
+                  <span className="check" />
+                  更换当前计划颜色
                 </button>
                 <button
                   type="button"

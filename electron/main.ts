@@ -18,6 +18,7 @@ import {
   createTask,
   deletePlan,
   deleteTask,
+  getTask,
   initDb,
   listAllTasks,
   listDueReminders,
@@ -38,6 +39,54 @@ import type {
   UpdateTaskInput,
 } from './types'
 
+function loadDockWindow(win: BrowserWindow) {
+  if (isDev && process.env.VITE_DEV_SERVER_URL) {
+    const base = process.env.VITE_DEV_SERVER_URL.replace(/\/$/, '')
+    void win.loadURL(`${base}/?view=dock`)
+    return
+  }
+  void win.loadFile(path.join(__dirname, '../dist/index.html'), {
+    query: { view: 'dock' },
+  })
+}
+
+let showCompleted = true
+
+function visibleDockTasks() {
+  const tasks = listAllTasks()
+  if (showCompleted) return tasks
+  const hidden = new Set(tasks.filter((task) => task.completed).map((task) => task.id))
+  return tasks
+    .filter((task) => !task.completed)
+    .map((task) => ({
+      ...task,
+      parentId: task.parentId && hidden.has(task.parentId) ? null : task.parentId,
+    }))
+}
+
+function dockPlansPayload() {
+  const tasks = visibleDockTasks()
+  return [...listPlans()]
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+    .map((plan) => ({
+      id: plan.id,
+      title: plan.title,
+      color: plan.color,
+      tasks: tasks
+        .filter((task) => task.planId === plan.id)
+        .map((task) => ({
+          id: task.id,
+          title: task.title,
+          completed: task.completed,
+          parentId: task.parentId,
+        })),
+    }))
+}
+
+function syncDockPlans() {
+  edgeDock.setPlans(dockPlansPayload(), planFilter === 'all' ? null : planFilter)
+}
+
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let reminderTimer: NodeJS.Timeout | null = null
@@ -45,13 +94,24 @@ let isQuitting = false
 let alwaysOnTop = false
 let theme: ThemeId = 'white'
 let planFilter: PlanFilterId = 'all'
-let showCompleted = true
 let fontSize: FontSizeId = 'medium'
 let fontFamily: FontFamilyId = 'yahei'
 
-const edgeDock = new EdgeDockManager((state) => {
-  mainWindow?.webContents.send('ui:edge-dock', state.enabled)
-  updateTrayMenu()
+const edgeDock = new EdgeDockManager({
+  preloadPath: path.join(__dirname, 'preload.js'),
+  loadDock: (win) => loadDockWindow(win),
+  onChange: (state) => {
+    mainWindow?.webContents.send('ui:edge-dock', state)
+    updateTrayMenu()
+  },
+  onSelectPlan: (id) => {
+    applyPlanFilter(id)
+  },
+  onCreatePlan: () => {
+    showMainWindow()
+    mainWindow?.webContents.send('ui:create-plan')
+  },
+  onDisable: () => setEdgeDockState(false),
 })
 
 const THEME_BG: Record<ThemeId, string> = {
@@ -61,6 +121,10 @@ const THEME_BG: Record<ThemeId, string> = {
 }
 
 const isDev = !app.isPackaged
+
+if (process.platform === 'linux') {
+  app.commandLine.appendSwitch('enable-transparent-visuals')
+}
 
 // Windows 任务栏使用正确的应用身份与图标（与快捷方式/安装包一致）
 if (process.platform === 'win32') {
@@ -141,12 +205,19 @@ function setAlwaysOnTopState(enabled: boolean) {
   updateTrayMenu()
 }
 
+function applyPlanFilter(next: PlanFilterId) {
+  planFilter = next
+  syncDockPlans()
+  mainWindow?.webContents.send('ui:plan-filter', next)
+}
+
 function setEdgeDockState(enabled: boolean) {
   if (enabled) {
     alwaysOnTop = true
     mainWindow?.setAlwaysOnTop(true)
     mainWindow?.setSkipTaskbar(true)
     mainWindow?.webContents.send('ui:always-on-top', true)
+    syncDockPlans()
   }
   edgeDock.setEnabled(enabled)
   if (!enabled) {
@@ -271,6 +342,11 @@ function updateTrayMenu() {
       checked: edgeDock.isEnabled(),
       click: (item) => setEdgeDockState(item.checked),
     },
+    {
+      label: '换边停靠',
+      enabled: edgeDock.isEnabled(),
+      click: () => edgeDock.cycleEdge(),
+    },
     { type: 'separator' },
     {
       label: '退出',
@@ -320,13 +396,18 @@ function registerIpc() {
   ipcMain.handle('plans:list', () => listPlans())
   ipcMain.handle('plans:create', (_e, input: CreatePlanInput) => {
     const plan = createPlan(input)
-    planFilter = plan.id
+    applyPlanFilter(plan.id)
     return plan
   })
-  ipcMain.handle('plans:update', (_e, input: UpdatePlanInput) => updatePlan(input))
+  ipcMain.handle('plans:update', (_e, input: UpdatePlanInput) => {
+    const plan = updatePlan(input)
+    syncDockPlans()
+    return plan
+  })
   ipcMain.handle('plans:delete', (_e, id: string) => {
     const ok = deletePlan(id)
-    if (ok && planFilter === id) planFilter = 'all'
+    if (ok && planFilter === id) applyPlanFilter('all')
+    else syncDockPlans()
     return ok
   })
 
@@ -338,16 +419,19 @@ function registerIpc() {
   ipcMain.handle('tasks:create', (_e, input: CreateTaskInput) => {
     const task = createTask(input)
     updateTrayMenu()
+    syncDockPlans()
     return task
   })
   ipcMain.handle('tasks:update', (_e, input: UpdateTaskInput) => {
     const task = updateTask(input)
     updateTrayMenu()
+    syncDockPlans()
     return task
   })
   ipcMain.handle('tasks:delete', (_e, id: string) => {
     const ok = deleteTask(id)
     updateTrayMenu()
+    syncDockPlans()
     return ok
   })
 
@@ -370,12 +454,40 @@ function registerIpc() {
     return currentSettings()
   })
   ipcMain.handle('settings:setPlanFilter', (_e, next: PlanFilterId) => {
-    planFilter = next
+    applyPlanFilter(next)
     return currentSettings()
+  })
+  ipcMain.handle('dock:ready', () => {
+    edgeDock.markDockReady()
+  })
+  ipcMain.handle('dock:pointer', (_e, inside: boolean) => {
+    edgeDock.setPointerInside(inside)
+  })
+  ipcMain.handle('dock:select-plan', (_e, id: PlanFilterId) => {
+    edgeDock.selectFromDock(id)
+  })
+  ipcMain.handle('dock:create-plan', () => {
+    edgeDock.createFromDock()
+  })
+  ipcMain.handle('dock:hover-plan', (_e, id: string | null) => {
+    edgeDock.hoverPlan(id)
+  })
+  ipcMain.handle('dock:toggle-task', (_e, id: string) => {
+    const existing = getTask(id)
+    if (!existing) return null
+    const task = updateTask({ id, completed: !existing.completed })
+    updateTrayMenu()
+    syncDockPlans()
+    mainWindow?.webContents.send('ui:tasks-changed')
+    return task
+  })
+  ipcMain.handle('dock:context-menu', () => {
+    edgeDock.showDockMenu()
   })
   ipcMain.handle('settings:setShowCompleted', (_e, enabled: boolean) => {
     showCompleted = enabled
     mainWindow?.webContents.send('ui:show-completed', enabled)
+    syncDockPlans()
     return currentSettings()
   })
   ipcMain.handle('settings:setFontSize', (_e, next: FontSizeId) => {
@@ -413,6 +525,7 @@ app.whenReady().then(async () => {
   registerIpc()
   createWindow()
   createTray()
+  syncDockPlans()
   checkReminders()
   reminderTimer = setInterval(checkReminders, 30_000)
 
