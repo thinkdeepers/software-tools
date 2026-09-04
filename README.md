@@ -14,7 +14,7 @@
 
 **TodoThings** 是一款 Windows 本地桌面待办工具，数据保存在本机（SQLite / sql.js），不依赖云端账号。适合需要轻量、可置顶、可侧边停靠的日常任务管理。
 
-安装包与便携版位于本分支目录：
+安装包与便携版位于本分支目录（当前 **1.4.1**，含悬停竖排页签与待办预览）：
 
 - [`install安装包/TodoThings.exe`](./install安装包/TodoThings.exe) — 便携版，双击即可运行
 - [`install安装包/TodoThings 安装版.exe`](./install安装包/TodoThings%20安装版.exe) — NSIS 安装包（可改安装目录、创建快捷方式）
