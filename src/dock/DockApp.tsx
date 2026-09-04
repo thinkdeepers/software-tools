@@ -114,7 +114,7 @@ export function DockApp() {
                 className={`tab-wrap color-${color}${open ? ' open' : ''}${openId && !open ? ' folded' : ''}${state.selectedId === plan.id ? ' selected' : ''}`}
                 style={{
                   animationDelay: state.fanned ? `${index * 40}ms` : '0ms',
-                  zIndex: open ? 40 : index + 1,
+                  zIndex: index + 1,
                 }}
                 onMouseEnter={() => {
                   if (state.fanned) hoverPlan(plan.id)
