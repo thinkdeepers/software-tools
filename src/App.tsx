@@ -3,7 +3,15 @@ import { AppMenuBar } from './components/AppMenuBar'
 import { ConfirmDialog, PlanDialog } from './components/PlanDialog'
 import { TaskTree } from './components/TaskTree'
 import {
+  nextPlanColorId,
+  normalizePlanColor,
+  pickPlanColor,
+  PLAN_COLOR_META,
+  type PlanColorId,
+} from './planColors'
+import {
   ALL_PLANS_ID,
+  type DockEdge,
   type FontFamilyId,
   type FontSizeId,
   type Plan,
@@ -73,6 +81,8 @@ export default function App() {
   const [theme, setTheme] = useState<ThemeId>('white')
   const [alwaysOnTop, setAlwaysOnTop] = useState(false)
   const [edgeDock, setEdgeDock] = useState(false)
+  const [dockEdge, setDockEdge] = useState<DockEdge | null>(null)
+  const [dialogColor, setDialogColor] = useState<PlanColorId>('yellow')
   const [showCompleted, setShowCompleted] = useState(true)
   const [fontSize, setFontSize] = useState<FontSizeId>('medium')
   const [fontFamily, setFontFamily] = useState<FontFamilyId>('yahei')
@@ -118,12 +128,25 @@ export default function App() {
   }
 
   function openCreatePlan() {
+    setDialogColor(pickPlanColor(plans.map((p) => p.color)))
     setPlanDialog('create')
   }
 
   function openRenamePlan() {
     if (!activePlan) return
+    setDialogColor(normalizePlanColor(activePlan.color))
     setPlanDialog('rename')
+  }
+
+  async function cycleActivePlanColor() {
+    if (!activePlan) return
+    const updated = await window.todothings.updatePlan({
+      id: activePlan.id,
+      color: nextPlanColorId(activePlan.color),
+    })
+    if (updated) {
+      setPlans((prev) => prev.map((p) => (p.id === updated.id ? updated : p)))
+    }
   }
 
   function openDeletePlan() {
@@ -163,16 +186,18 @@ export default function App() {
   async function submitPlanDialog(value: string) {
     const title = value.trim() || '新计划'
     if (planDialog === 'create') {
-      const plan = await window.todothings.createPlan({ title })
+      const plan = await window.todothings.createPlan({ title, color: dialogColor })
       lastSpecificPlanId.current = plan.id
       await window.todothings.setPlanFilter(plan.id)
       await refreshPlans(plan.id)
     } else if (planDialog === 'rename' && activePlan) {
-      if (title !== activePlan.title) {
-        const updated = await window.todothings.updatePlan({ id: activePlan.id, title })
-        if (updated) {
-          setPlans((prev) => prev.map((p) => (p.id === updated.id ? updated : p)))
-        }
+      const updated = await window.todothings.updatePlan({
+        id: activePlan.id,
+        title,
+        color: dialogColor,
+      })
+      if (updated) {
+        setPlans((prev) => prev.map((p) => (p.id === updated.id ? updated : p)))
       }
     }
     setPlanDialog(null)
@@ -240,7 +265,13 @@ export default function App() {
         applyTheme(next)
       }),
       window.todothings.onAlwaysOnTop((enabled) => setAlwaysOnTop(enabled)),
-      window.todothings.onEdgeDock((enabled) => setEdgeDock(enabled)),
+      window.todothings.onEdgeDock((state) => {
+        setEdgeDock(state.enabled)
+        setDockEdge(state.edge)
+      }),
+      window.todothings.onPlanFilter((id) => {
+        setPlanFilter(id)
+      }),
       window.todothings.onShowCompleted((enabled) => setShowCompleted(enabled)),
       window.todothings.onFontSize((size) => {
         setFontSize(size)
@@ -257,6 +288,22 @@ export default function App() {
     ]
     return () => offs.forEach((off) => off())
   }, [planFilter, activePlan])
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && edgeDock && planDialog === null && !deleteOpen) {
+        event.preventDefault()
+        void window.todothings.windowClose()
+        return
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key === '.' && activePlan) {
+        event.preventDefault()
+        void cycleActivePlanColor()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [edgeDock, planDialog, deleteOpen, activePlan])
 
   const persistTaskTitle = useDebouncedCallback(async (id: string, title: string) => {
     const updated = await window.todothings.updateTask({ id, title })
@@ -319,7 +366,16 @@ export default function App() {
           : '当前计划暂无任务'
 
   return (
-    <div className="app compact">
+    <div
+      className="app compact"
+      data-dock-edge={edgeDock && dockEdge ? dockEdge : undefined}
+      data-plan-color={activePlan ? normalizePlanColor(activePlan.color) : undefined}
+      style={
+        activePlan
+          ? { ['--plan-accent' as string]: PLAN_COLOR_META[normalizePlanColor(activePlan.color)].hex }
+          : undefined
+      }
+    >
       <AppMenuBar
         plans={plans}
         planFilter={planFilter}
@@ -334,6 +390,7 @@ export default function App() {
         onCreatePlan={openCreatePlan}
         onRenamePlan={openRenamePlan}
         onDeletePlan={openDeletePlan}
+        onCyclePlanColor={() => void cycleActivePlanColor()}
         onTheme={(t) => void handleTheme(t)}
         onTogglePin={() => {
           const next = !alwaysOnTop
@@ -435,6 +492,8 @@ export default function App() {
         label="计划名称"
         initialValue={planDialog === 'rename' ? (activePlan?.title ?? '') : '新计划'}
         confirmText={planDialog === 'rename' ? '保存' : '创建'}
+        color={dialogColor}
+        onColorChange={setDialogColor}
         onCancel={() => setPlanDialog(null)}
         onConfirm={(value) => void submitPlanDialog(value)}
       />

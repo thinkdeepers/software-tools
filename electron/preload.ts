@@ -3,6 +3,8 @@ import type {
   AppSettings,
   CreatePlanInput,
   CreateTaskInput,
+  DockViewState,
+  EdgeDockUiState,
   FontFamilyId,
   FontSizeId,
   Plan,
@@ -73,10 +75,26 @@ const api = {
     ipcRenderer.on('ui:always-on-top', handler)
     return () => ipcRenderer.removeListener('ui:always-on-top', handler)
   },
-  onEdgeDock: (cb: (enabled: boolean) => void) => {
-    const handler = (_: Electron.IpcRendererEvent, enabled: boolean) => cb(enabled)
+  onEdgeDock: (cb: (state: EdgeDockUiState) => void) => {
+    const handler = (_: Electron.IpcRendererEvent, state: EdgeDockUiState) => cb(state)
     ipcRenderer.on('ui:edge-dock', handler)
     return () => ipcRenderer.removeListener('ui:edge-dock', handler)
+  },
+  onPlanFilter: (cb: (planFilter: PlanFilterId) => void) => {
+    const handler = (_: Electron.IpcRendererEvent, next: PlanFilterId) => cb(next)
+    ipcRenderer.on('ui:plan-filter', handler)
+    return () => ipcRenderer.removeListener('ui:plan-filter', handler)
+  },
+  dockReady: (): Promise<void> => ipcRenderer.invoke('dock:ready'),
+  dockPointer: (inside: boolean): Promise<void> => ipcRenderer.invoke('dock:pointer', inside),
+  dockSelectPlan: (id: PlanFilterId): Promise<void> => ipcRenderer.invoke('dock:select-plan', id),
+  dockCreatePlan: (): Promise<void> => ipcRenderer.invoke('dock:create-plan'),
+  dockShowMore: (): Promise<void> => ipcRenderer.invoke('dock:show-more'),
+  dockContextMenu: (): Promise<void> => ipcRenderer.invoke('dock:context-menu'),
+  onDockState: (cb: (state: DockViewState) => void) => {
+    const handler = (_: Electron.IpcRendererEvent, state: DockViewState) => cb(state)
+    ipcRenderer.on('dock:state', handler)
+    return () => ipcRenderer.removeListener('dock:state', handler)
   },
   onShowCompleted: (cb: (enabled: boolean) => void) => {
     const handler = (_: Electron.IpcRendererEvent, enabled: boolean) => cb(enabled)

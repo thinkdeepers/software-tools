@@ -3,6 +3,7 @@ import { app } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { normalizePlanColor, pickPlanColor } from './planColors'
 import type {
   CreatePlanInput,
   CreateTaskInput,
@@ -89,6 +90,7 @@ export async function initDb() {
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,
       notes TEXT NOT NULL DEFAULT '',
+      color TEXT NOT NULL DEFAULT 'yellow',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -112,8 +114,34 @@ export async function initDb() {
     CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_id);
     CREATE INDEX IF NOT EXISTS idx_tasks_remind ON tasks(remind_enabled, due_at, completed);
   `)
+  ensurePlanColorColumn()
   schedulePersist()
   return db
+}
+
+function tableHasColumn(table: string, column: string): boolean {
+  return queryAll(`PRAGMA table_info(${table})`).some((row) => String(row.name) === column)
+}
+
+function ensurePlanColorColumn() {
+  if (!tableHasColumn('plans', 'color')) {
+    requireDb().run("ALTER TABLE plans ADD COLUMN color TEXT NOT NULL DEFAULT 'yellow'")
+    const rows = queryAll('SELECT id FROM plans ORDER BY created_at ASC')
+    const used: string[] = []
+    for (const row of rows) {
+      const color = pickPlanColor(used)
+      used.push(color)
+      requireDb().run('UPDATE plans SET color = ? WHERE id = ?', [color, String(row.id)])
+    }
+    return
+  }
+  for (const row of queryAll('SELECT id, color FROM plans')) {
+    const raw = row.color == null ? '' : String(row.color)
+    const color = normalizePlanColor(raw || null)
+    if (color !== raw) {
+      requireDb().run('UPDATE plans SET color = ? WHERE id = ?', [color, String(row.id)])
+    }
+  }
 }
 
 function requireDb(): Database {
@@ -126,6 +154,7 @@ function mapPlan(row: Record<string, unknown>): Plan {
     id: String(row.id),
     title: String(row.title),
     notes: String(row.notes ?? ''),
+    color: normalizePlanColor(row.color == null ? null : String(row.color)),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   }
@@ -176,10 +205,14 @@ export function listPlans(): Plan[] {
 export function createPlan(input: CreatePlanInput): Plan {
   const id = randomUUID()
   const ts = nowIso()
+  const color =
+    input.color !== undefined
+      ? normalizePlanColor(input.color)
+      : pickPlanColor(listPlans().map((p) => p.color))
   run(
-    `INSERT INTO plans (id, title, notes, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?)`,
-    [id, input.title.trim() || '未命名计划', input.notes?.trim() ?? '', ts, ts],
+    `INSERT INTO plans (id, title, notes, color, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [id, input.title.trim() || '未命名计划', input.notes?.trim() ?? '', color, ts, ts],
   )
   return getPlan(id)!
 }
@@ -194,10 +227,12 @@ export function updatePlan(input: UpdatePlanInput): Plan | null {
   if (!existing) return null
   const title = input.title !== undefined ? input.title.trim() || existing.title : existing.title
   const notes = input.notes !== undefined ? input.notes : existing.notes
+  const color = input.color !== undefined ? normalizePlanColor(input.color) : existing.color
   const ts = nowIso()
-  run('UPDATE plans SET title = ?, notes = ?, updated_at = ? WHERE id = ?', [
+  run('UPDATE plans SET title = ?, notes = ?, color = ?, updated_at = ? WHERE id = ?', [
     title,
     notes,
+    color,
     ts,
     input.id,
   ])
