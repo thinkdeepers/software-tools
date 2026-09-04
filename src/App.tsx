@@ -285,6 +285,9 @@ export default function App() {
       window.todothings.onReminder(() => {
         void refreshTasks(planFilter)
       }),
+      window.todothings.onTasksChanged(() => {
+        void refreshTasks(planFilter)
+      }),
     ]
     return () => offs.forEach((off) => off())
   }, [planFilter, activePlan])

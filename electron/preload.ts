@@ -89,8 +89,14 @@ const api = {
   dockPointer: (inside: boolean): Promise<void> => ipcRenderer.invoke('dock:pointer', inside),
   dockSelectPlan: (id: PlanFilterId): Promise<void> => ipcRenderer.invoke('dock:select-plan', id),
   dockCreatePlan: (): Promise<void> => ipcRenderer.invoke('dock:create-plan'),
-  dockShowMore: (): Promise<void> => ipcRenderer.invoke('dock:show-more'),
+  dockHoverPlan: (id: string | null): Promise<void> => ipcRenderer.invoke('dock:hover-plan', id),
+  dockToggleTask: (id: string): Promise<void> => ipcRenderer.invoke('dock:toggle-task', id),
   dockContextMenu: (): Promise<void> => ipcRenderer.invoke('dock:context-menu'),
+  onTasksChanged: (cb: () => void) => {
+    const handler = () => cb()
+    ipcRenderer.on('ui:tasks-changed', handler)
+    return () => ipcRenderer.removeListener('ui:tasks-changed', handler)
+  },
   onDockState: (cb: (state: DockViewState) => void) => {
     const handler = (_: Electron.IpcRendererEvent, state: DockViewState) => cb(state)
     ipcRenderer.on('dock:state', handler)

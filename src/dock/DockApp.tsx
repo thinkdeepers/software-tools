@@ -2,26 +2,29 @@ import { useEffect, useState } from 'react'
 import { normalizePlanColor } from '../planColors'
 import type { DockEdge } from '../types'
 
-type DockPlan = { id: string; title: string; color: string }
+type DockTask = { id: string; title: string; completed: boolean; parentId: string | null }
+type DockPlan = { id: string; title: string; color: string; tasks: DockTask[] }
 
 type DockViewState = {
   edge: DockEdge
   fanned: boolean
+  previewId: string | null
   plans: DockPlan[]
   selectedId: string | null
-  overflowFrom: number
   windowSize: { width: number; height: number }
   visual: { x: number; y: number; width: number; height: number }
 }
 
-const MAX_VISIBLE = 8
-
 export function DockApp() {
   const [state, setState] = useState<DockViewState | null>(null)
+  const [previewId, setPreviewId] = useState<string | null>(null)
 
   useEffect(() => {
     document.documentElement.classList.add('dock-root')
-    const off = window.todothings.onDockState((next) => setState(next))
+    const off = window.todothings.onDockState((next) => {
+      setState(next)
+      if (!next.fanned) setPreviewId(null)
+    })
     void window.todothings.dockReady()
     return () => {
       off()
@@ -31,15 +34,18 @@ export function DockApp() {
 
   if (!state) return null
 
-  const items = state.plans
-  const start = items.length === 0 ? 0 : state.overflowFrom % Math.max(items.length, 1)
-  const visible = items.length === 0 ? [] : rotate(items, start).slice(0, MAX_VISIBLE)
-  const hiddenCount = Math.max(0, items.length - visible.length)
+  const plans = state.plans
+  const openId = state.fanned ? previewId : null
+
+  function hoverPlan(id: string | null) {
+    setPreviewId(id)
+    void window.todothings.dockHoverPlan(id)
+  }
 
   return (
-    <div className="deck-stage" style={{ width: '100%', height: '100%' }}>
+    <div className="deck-stage">
       <div
-        className={`deck edge-${state.edge} ${state.fanned ? 'fanned' : 'sleeping'}`}
+        className={`deck edge-${state.edge} ${state.fanned ? 'fanned' : 'sleeping'}${openId ? ' previewing' : ''}`}
         style={{
           left: state.visual.x,
           top: state.visual.y,
@@ -47,76 +53,110 @@ export function DockApp() {
           height: state.visual.height,
         }}
         onMouseEnter={() => window.todothings.dockPointer(true)}
-        onMouseLeave={() => window.todothings.dockPointer(false)}
+        onMouseLeave={() => {
+          hoverPlan(null)
+          window.todothings.dockPointer(false)
+        }}
         onContextMenu={(event) => {
           event.preventDefault()
           window.todothings.dockContextMenu()
         }}
       >
-        <div className="pill">
-          {visible.length === 0 && (
-            <button
-              type="button"
-              className="tab color-paper"
-              title="打开 TodoThings"
-              onClick={() => window.todothings.dockSelectPlan('all')}
-            >
-              <span className="dash" />
-              <span className="label">所有计划</span>
-            </button>
+        <div className="tab-stack">
+          {plans.length === 0 && (
+            <div className="tab-wrap color-paper">
+              <button
+                type="button"
+                className="tab color-paper"
+                title="打开 TodoThings"
+                onClick={() => window.todothings.dockSelectPlan('all')}
+              >
+                <span className="spine" />
+                <span className="label">计划</span>
+              </button>
+            </div>
           )}
-          {visible.map((plan, index) => (
-            <button
-              key={plan.id}
-              type="button"
-              className={`tab color-${normalizePlanColor(plan.color)}${state.selectedId === plan.id ? ' selected' : ''}`}
-              style={{
-                animationDelay: state.fanned ? `${index * 45}ms` : '0ms',
-                ['--lean' as string]: state.fanned ? `${index % 2 === 0 ? -1.2 : 1.1}deg` : '0deg',
-              }}
-              title={plan.title}
-              onClick={() => window.todothings.dockSelectPlan(plan.id)}
-            >
-              <span className="dash" />
-              <span className="label">{plan.title}</span>
-            </button>
-          ))}
-          {hiddenCount > 0 && (
-            <button
-              type="button"
-              className="tab more color-paper"
-              style={{
-                animationDelay: state.fanned ? `${visible.length * 45}ms` : '0ms',
-              }}
-              title={`还有 ${hiddenCount} 个计划`}
-              onClick={() => window.todothings.dockShowMore()}
-            >
-              <span className="dash" />
-              <span className="label">+{hiddenCount}</span>
-            </button>
-          )}
-          {state.fanned && (
-            <button
-              type="button"
-              className="tab create color-paper"
-              style={{
-                animationDelay: `${(visible.length + (hiddenCount > 0 ? 1 : 0)) * 45}ms`,
-              }}
-              title="新建计划"
-              onClick={() => window.todothings.dockCreatePlan()}
-            >
-              <span className="dash" />
-              <span className="plus">+</span>
-            </button>
-          )}
+          {plans.map((plan, index) => {
+            const color = normalizePlanColor(plan.color)
+            const open = openId === plan.id
+            return (
+              <div
+                key={plan.id}
+                className={`tab-wrap color-${color}${open ? ' open' : ''}${state.selectedId === plan.id ? ' selected' : ''}`}
+                style={{ animationDelay: state.fanned ? `${index * 45}ms` : '0ms' }}
+                onMouseEnter={() => {
+                  if (state.fanned) hoverPlan(plan.id)
+                }}
+              >
+                <button
+                  type="button"
+                  className={`tab color-${color}`}
+                  title={plan.title}
+                  onClick={() => window.todothings.dockSelectPlan(plan.id)}
+                >
+                  <span className="spine" />
+                  <span className="label">{plan.title}</span>
+                </button>
+                <div className="note-card" aria-hidden={!open}>
+                  <h4>{plan.title}</h4>
+                  <NoteList
+                    tasks={plan.tasks}
+                    onToggle={(id) => void window.todothings.dockToggleTask(id)}
+                  />
+                </div>
+              </div>
+            )
+          })}
         </div>
       </div>
     </div>
   )
 }
 
-function rotate<T>(list: T[], start: number): T[] {
-  if (list.length === 0) return list
-  const i = ((start % list.length) + list.length) % list.length
-  return list.slice(i).concat(list.slice(0, i))
+function NoteList({
+  tasks,
+  onToggle,
+}: {
+  tasks: DockTask[]
+  onToggle: (id: string) => void
+}) {
+  const roots = tasks.filter((task) => task.parentId == null)
+  if (roots.length === 0) {
+    return <p className="note-empty">暂无待办</p>
+  }
+  return (
+    <ul className="note-list">
+      {roots.map((task) => {
+        const children = tasks.filter((child) => child.parentId === task.id)
+        return (
+          <li key={task.id} className={task.completed ? 'done' : ''}>
+            <label>
+              <input
+                type="checkbox"
+                checked={task.completed}
+                onChange={() => onToggle(task.id)}
+              />
+              <span>{task.title}</span>
+            </label>
+            {children.length > 0 && (
+              <ul>
+                {children.map((child) => (
+                  <li key={child.id} className={child.completed ? 'done' : ''}>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={child.completed}
+                        onChange={() => onToggle(child.id)}
+                      />
+                      <span>{child.title}</span>
+                    </label>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </li>
+        )
+      })}
+    </ul>
+  )
 }

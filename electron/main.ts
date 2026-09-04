@@ -18,6 +18,7 @@ import {
   createTask,
   deletePlan,
   deleteTask,
+  getTask,
   initDb,
   listAllTasks,
   listDueReminders,
@@ -50,9 +51,22 @@ function loadDockWindow(win: BrowserWindow) {
 }
 
 function dockPlansPayload() {
+  const tasks = listAllTasks()
   return [...listPlans()]
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
-    .map((plan) => ({ id: plan.id, title: plan.title, color: plan.color }))
+    .map((plan) => ({
+      id: plan.id,
+      title: plan.title,
+      color: plan.color,
+      tasks: tasks
+        .filter((task) => task.planId === plan.id)
+        .map((task) => ({
+          id: task.id,
+          title: task.title,
+          completed: task.completed,
+          parentId: task.parentId,
+        })),
+    }))
 }
 
 function syncDockPlans() {
@@ -392,16 +406,19 @@ function registerIpc() {
   ipcMain.handle('tasks:create', (_e, input: CreateTaskInput) => {
     const task = createTask(input)
     updateTrayMenu()
+    syncDockPlans()
     return task
   })
   ipcMain.handle('tasks:update', (_e, input: UpdateTaskInput) => {
     const task = updateTask(input)
     updateTrayMenu()
+    syncDockPlans()
     return task
   })
   ipcMain.handle('tasks:delete', (_e, id: string) => {
     const ok = deleteTask(id)
     updateTrayMenu()
+    syncDockPlans()
     return ok
   })
 
@@ -439,8 +456,17 @@ function registerIpc() {
   ipcMain.handle('dock:create-plan', () => {
     edgeDock.createFromDock()
   })
-  ipcMain.handle('dock:show-more', () => {
-    edgeDock.showMore()
+  ipcMain.handle('dock:hover-plan', (_e, id: string | null) => {
+    edgeDock.hoverPlan(id)
+  })
+  ipcMain.handle('dock:toggle-task', (_e, id: string) => {
+    const existing = getTask(id)
+    if (!existing) return null
+    const task = updateTask({ id, completed: !existing.completed })
+    updateTrayMenu()
+    syncDockPlans()
+    mainWindow?.webContents.send('ui:tasks-changed')
+    return task
   })
   ipcMain.handle('dock:context-menu', () => {
     edgeDock.showDockMenu()

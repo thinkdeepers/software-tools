@@ -14,11 +14,12 @@ const PILL_THICK_PX = 16
 const PILL_PAD_PX = 5
 const DASH_MAIN_PX = 10
 const DASH_GAP_PX = 3
-const FAN_TAB_ALONG_PX = 36
-const FAN_TAB_ACROSS_PX = 156
-const FAN_OVERLAP_PX = 8
-const FAN_PAD_PX = 8
-const MAX_VISIBLE_TABS = 8
+/** Fanned tab thickness (width on left/right, height on top/bottom) */
+const TAB_THICK_PX = 40
+const TAB_LEN_PX = 128
+const TAB_GAP_PX = 8
+const NOTE_ACROSS_PX = 280
+const FAN_PAD_PX = 10
 const HOVER_SLACK_PX = 8
 const COLLAPSE_DELAY_MS = 900
 const FAN_COLLAPSE_MS = 700
@@ -80,11 +81,8 @@ function detectDockEdge(bounds: Rectangle, workArea: Rectangle): DockEdge {
     return touching[0]!.edge
   }
 
-  const min = Math.min(distLeft, distRight, distTop, distBottom)
-  if (min === distLeft) return 'left'
-  if (min === distRight) return 'right'
-  if (min === distTop) return 'top'
-  return 'bottom'
+  // Hold My Notes 默认停在右侧，未贴边时不改去顶/底
+  return 'right'
 }
 
 function clampExpandedBounds(bounds: Rectangle, workArea: Rectangle): Rectangle {
@@ -111,17 +109,8 @@ function clampStripIntoWorkArea(bounds: Rectangle, workArea: Rectangle): Rectang
   return { x, y, width, height }
 }
 
-function visibleTabCount(planCount: number, fanned: boolean): number {
-  if (planCount <= 0) return 1
-  const shown = Math.min(planCount, MAX_VISIBLE_TABS)
-  const extra = planCount > MAX_VISIBLE_TABS ? 1 : 0
-  const plus = fanned ? 1 : 0
-  return shown + extra + plus
-}
-
 function sleepDashCount(planCount: number): number {
-  if (planCount <= 0) return 1
-  return Math.min(planCount, MAX_VISIBLE_TABS) + (planCount > MAX_VISIBLE_TABS ? 1 : 0)
+  return Math.max(1, planCount)
 }
 
 function sleepVisualSize(planCount: number): { across: number; along: number } {
@@ -133,13 +122,10 @@ function sleepVisualSize(planCount: number): { across: number; along: number } {
 }
 
 function fanVisualSize(planCount: number): { across: number; along: number } {
-  const tabs = visibleTabCount(planCount, true)
+  const tabs = Math.max(1, planCount)
   return {
-    across: FAN_TAB_ACROSS_PX + FAN_PAD_PX * 2,
-    along:
-      FAN_PAD_PX * 2 +
-      tabs * (FAN_TAB_ALONG_PX - FAN_OVERLAP_PX) +
-      FAN_OVERLAP_PX,
+    across: FAN_PAD_PX + TAB_THICK_PX + NOTE_ACROSS_PX,
+    along: FAN_PAD_PX * 2 + tabs * TAB_LEN_PX + Math.max(0, tabs - 1) * TAB_GAP_PX,
   }
 }
 
@@ -165,7 +151,7 @@ export class EdgeDockManager {
   private motionGen = 0
   private plans: DockPlan[] = []
   private selectedId: string | null = null
-  private overflowFrom = 0
+  private previewId: string | null = null
   private lastLayout = {
     windowSize: { width: PILL_THICK_PX, height: 48 },
     visual: { x: 0, y: 0, width: PILL_THICK_PX, height: 48 },
@@ -287,7 +273,9 @@ export class EdgeDockManager {
   setPlans(plans: DockPlan[], selectedId: string | null) {
     this.plans = plans
     this.selectedId = selectedId
-    if (this.overflowFrom >= Math.max(plans.length, 1)) this.overflowFrom = 0
+    if (this.previewId && !plans.some((p) => p.id === this.previewId)) {
+      this.previewId = null
+    }
     if (this.enabled) this.placeDock()
     else this.sendDockState()
   }
@@ -305,8 +293,21 @@ export class EdgeDockManager {
       this.setFanned(true)
       return
     }
+    this.previewId = null
     this.scheduleFanClose()
     if (!this.collapsed) this.scheduleCollapse()
+  }
+
+  hoverPlan(id: string | null) {
+    if (!this.enabled) return
+    if (this.previewId === id) return
+    this.previewId = id
+    if (id) {
+      this.clearFanTimer()
+      this.clearCollapseTimer()
+      this.setFanned(true)
+    }
+    this.placeDock()
   }
 
   selectFromDock(id: PlanFilterId) {
@@ -322,12 +323,6 @@ export class EdgeDockManager {
     this.setFanned(false)
     this.expandImmediate()
     this.hooks.onCreatePlan()
-  }
-
-  showMore() {
-    if (this.plans.length <= MAX_VISIBLE_TABS) return
-    this.overflowFrom = (this.overflowFrom + MAX_VISIBLE_TABS) % this.plans.length
-    this.placeDock()
   }
 
   cycleEdge() {
@@ -418,8 +413,15 @@ export class EdgeDockManager {
   }
 
   private setFanned(fanned: boolean) {
-    if (this.fanned === fanned) return
+    if (this.fanned === fanned) {
+      if (!fanned && this.previewId) {
+        this.previewId = null
+        if (this.enabled) this.placeDock()
+      }
+      return
+    }
     this.fanned = fanned
+    if (!fanned) this.previewId = null
     if (this.enabled) this.placeDock()
   }
 
@@ -512,9 +514,10 @@ export class EdgeDockManager {
     return fanned ? fanVisualSize(this.plans.length) : sleepVisualSize(this.plans.length)
   }
 
-  /** Window stays fan-sized so the WM does not recenter a shrinking 16px strip. */
   private dockWindowBounds(edge: DockEdge, workArea: Rectangle, expanded: Rectangle): Rectangle {
-    const { across, along } = fanVisualSize(this.plans.length)
+    const { across, along } = this.fanned
+      ? fanVisualSize(this.plans.length)
+      : sleepVisualSize(this.plans.length)
     const vertical = edge === 'left' || edge === 'right'
     const width = vertical ? across : along
     const height = vertical ? along : across
@@ -540,7 +543,12 @@ export class EdgeDockManager {
   }
 
   private visualInWindow(edge: DockEdge, actual: Rectangle): Rectangle {
-    const { across, along } = this.dockVisualFor(this.fanned)
+    const fanned = this.fanned
+    const { across, along } = fanned
+      ? this.previewId
+        ? fanVisualSize(this.plans.length)
+        : { across: FAN_PAD_PX + TAB_THICK_PX, along: fanVisualSize(this.plans.length).along }
+      : sleepVisualSize(this.plans.length)
     const vertical = edge === 'left' || edge === 'right'
     const width = Math.min(vertical ? across : along, actual.width)
     const height = Math.min(vertical ? along : across, actual.height)
@@ -625,9 +633,9 @@ export class EdgeDockManager {
     const payload: DockViewState = {
       edge: this.edge ?? 'right',
       fanned: this.fanned,
+      previewId: this.previewId,
       plans: this.plans,
       selectedId: this.selectedId,
-      overflowFrom: this.overflowFrom,
       windowSize: this.lastLayout.windowSize,
       visual: this.lastLayout.visual,
     }

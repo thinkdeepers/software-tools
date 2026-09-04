@@ -43,18 +43,26 @@ export interface UpdatePlanInput {
   color?: string
 }
 
+export interface DockTask {
+  id: string
+  title: string
+  completed: boolean
+  parentId: string | null
+}
+
 export interface DockPlan {
   id: string
   title: string
   color: string
+  tasks: DockTask[]
 }
 
 export interface DockViewState {
   edge: DockEdge
   fanned: boolean
+  previewId: string | null
   plans: DockPlan[]
   selectedId: string | null
-  overflowFrom: number
   windowSize: { width: number; height: number }
   visual: { x: number; y: number; width: number; height: number }
 }
