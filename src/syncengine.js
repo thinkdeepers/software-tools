@@ -108,27 +108,54 @@ class SyncTask {
   }
 
   _noteGitProgress(chunk) {
-    const m = String(chunk).match(/(?:Receiving objects|Resolving deltas|Compressing objects):\s+\d+%/);
+    const m = String(chunk).match(/(?:remote: )?(?:Enumerating objects|Counting objects|Receiving objects|Resolving deltas|Compressing objects)[^\r\n]*/);
     if (!m) return;
-    this.progress = m[0].replace(/\s+/g, ' ');
+    this.progress = m[0].replace(/\s+/g, ' ').trim();
     this.ctx.onUpdate();
+  }
+
+  async _resetCloneDir() {
+    if (!this.folder || !fs.existsSync(this.folder)) return;
+    for (const name of fs.readdirSync(this.folder)) {
+      const p = path.join(this.folder, name);
+      try {
+        await removeDirRetry(p);
+      } catch {
+        try { fs.rmSync(p, { recursive: true, force: true }); } catch { /* ignore */ }
+      }
+    }
   }
 
   async _cloneWorkingCopy(branch, { cache = null } = {}) {
     const url = authUrl(this.cloneUrl);
-    const opts = { ...this.opts(), timeoutMs: 180000, onStderr: (d) => this._noteGitProgress(d) };
-    if (cache && fs.existsSync(cache)) {
-      this.progress = `从本地缓存展开 ${branch}`;
-      this.ctx.onUpdate();
-      this.log(`从本地缓存展开分支 ${branch}`);
-      await must(['clone', '--branch', branch, '--single-branch', cache, '.'], opts, '展开分支');
-      await must(['remote', 'set-url', 'origin', url], this.opts(), '设置远程地址');
-      return;
+    const opts = { ...this.opts(), onStderr: (d) => this._noteGitProgress(d) };
+    const attempts = 3;
+    let lastErr;
+    for (let i = 1; i <= attempts; i++) {
+      try {
+        await this._resetCloneDir();
+        fs.mkdirSync(this.folder, { recursive: true });
+        if (cache && fs.existsSync(cache)) {
+          this.progress = `从本地缓存展开 ${branch}` + (i > 1 ? `（重试 ${i}/${attempts}）` : '');
+          this.ctx.onUpdate();
+          this.log(`从本地缓存展开分支 ${branch}` + (i > 1 ? `（第 ${i} 次）` : ''));
+          await must(['clone', '--branch', branch, '--single-branch', cache, '.'], opts, '展开分支');
+          await must(['remote', 'set-url', 'origin', url], this.opts(), '设置远程地址');
+          return;
+        }
+        this.progress = `浅克隆 ${branch}` + (i > 1 ? `（重试 ${i}/${attempts}）` : '（只拉最新提交）');
+        this.ctx.onUpdate();
+        this.log(`浅克隆分支 ${branch}` + (i > 1 ? `（第 ${i} 次）` : '（只拉最新提交）'));
+        await must(['clone', '--progress', '--depth', '1', '--branch', branch, '--single-branch', url, '.'], opts, '克隆仓库');
+        return;
+      } catch (e) {
+        lastErr = e;
+        this.log(`克隆未完成（${i}/${attempts}）: ${e.message}`);
+        await this._resetCloneDir();
+        if (i < attempts) await sleep(1500 * i);
+      }
     }
-    this.progress = `浅克隆 ${branch}（只拉最新提交）`;
-    this.ctx.onUpdate();
-    this.log(`浅克隆分支 ${branch}（只拉最新提交，避免初始化卡很久）`);
-    await must(['clone', '--progress', '--depth', '1', '--branch', branch, '--single-branch', url, '.'], opts, '克隆仓库');
+    throw lastErr;
   }
 
   opts() {
@@ -773,28 +800,31 @@ class RepoHub {
   }
 
   async _downloadRepoCache() {
-    const cache = fs.mkdtempSync(path.join(os.tmpdir(), 'gsync-'));
     const url = authUrl(this.cloneUrl);
-    const opts = {
-      cwd: os.tmpdir(),
-      token: this.ctx.getToken(),
-      identity: this.ctx.getIdentity(),
-      timeoutMs: 180000,
-      onStderr: (chunk) => {
-        const m = String(chunk).match(/(?:Receiving objects|Resolving deltas):\s+\d+%/);
-        if (m) this._setProgress(`下载仓库 ${m[0].replace(/\s+/g, ' ')}`);
-      },
-    };
-    this.log('一次性浅克隆整个仓库（只拉各分支最新提交），随后在本地展开成文件夹');
-    const r = await run(
-      ['clone', '--progress', '--bare', '--depth', '1', '--no-single-branch', url, cache],
-      opts,
-    );
-    if (r.code !== 0) {
+    let lastErr;
+    for (let i = 1; i <= 3; i++) {
+      const cache = fs.mkdtempSync(path.join(os.tmpdir(), 'gsync-'));
+      const opts = {
+        cwd: os.tmpdir(),
+        token: this.ctx.getToken(),
+        identity: this.ctx.getIdentity(),
+        onStderr: (chunk) => {
+          const m = String(chunk).match(/(?:remote: )?(?:Enumerating objects|Counting objects|Receiving objects|Resolving deltas)[^\r\n]*/);
+          if (m) this._setProgress(`下载仓库 ${m[0].replace(/\s+/g, ' ').trim()}` + (i > 1 ? `（重试 ${i}/3）` : ''));
+        },
+      };
+      this.log('一次性浅克隆整个仓库（只拉各分支最新提交），随后在本地展开成文件夹' + (i > 1 ? `（第 ${i} 次）` : ''));
+      const r = await run(
+        ['clone', '--progress', '--bare', '--depth', '1', '--no-single-branch', url, cache],
+        opts,
+      );
+      if (r.code === 0) return cache;
+      lastErr = new Error(formatGitFailure('下载仓库', r));
+      this.log(`整仓下载未完成（${i}/3）: ${lastErr.message}`);
       try { await removeDirRetry(cache); } catch { /* ignore */ }
-      throw new Error(formatGitFailure('下载仓库', r));
+      if (i < 3) await sleep(1500 * i);
     }
-    return cache;
+    throw lastErr;
   }
 
   async ensureBranch(branch, { initialize = false, folderName = null, createBranch = false, cache = null } = {}) {

@@ -86,7 +86,21 @@ function mergeGitConfigs(env, pairs) {
 
 function isTransportError(err, out = '') {
   const s = `${err || ''} ${out || ''}`;
-  return /failed to connect|could not connect|could not resolve host|name or service not known|timed out|timeout after|git 超时|connection refused|connection reset|recv failure|ssl[_\s-]*connect|empty reply from server|proxy connect|network is unreachable|no route to host|gnutls_handshake|openssl ssl_connect|failed to send request|could not handshake|error setting certificate/i.test(s);
+  return /failed to connect|could not connect|could not resolve host|name or service not known|timed out|timeout after|git 超时|无进度|传输中断|connection refused|connection reset|recv failure|ssl[_\s-]*connect|empty reply from server|proxy connect|network is unreachable|no route to host|gnutls_handshake|openssl ssl_connect|failed to send request|could not handshake|error setting certificate|rpc failed|early eof|index-pack failed/i.test(s);
+}
+
+const GIT_PROGRESS_RE = /^(remote: )?(Enumerating objects|Counting objects|Compressing objects|Receiving objects|Resolving deltas|Filtering content)/i;
+
+function stripGitProgress(text) {
+  const raw = String(text || '').replace(/\r/g, '\n');
+  const lines = raw.split('\n').map((l) => l.trim()).filter(Boolean);
+  const kept = lines.filter((l) => !GIT_PROGRESS_RE.test(l) && !/^Cloning into /.test(l));
+  return kept.join('\n').trim();
+}
+
+function looksLikeInterruptedTransfer(text) {
+  const raw = String(text || '');
+  return /Enumerating objects|Counting objects|Receiving objects/.test(raw) && !stripGitProgress(raw);
 }
 
 function isAuthError(err, out = '') {
@@ -108,12 +122,16 @@ function interpretLsRemote(r) {
 }
 
 function formatGitFailure(what, r) {
-  const detail = (r && (r.err || r.out)) || `exit ${r && r.code}`;
+  const raw = (r && (r.err || r.out)) || `exit ${r && r.code}`;
+  const detail = stripGitProgress(raw) || raw;
+  if (looksLikeInterruptedTransfer(raw)) {
+    return `${what} 失败: 已连上 GitHub 并开始传输对象，但中途中断（不是认证失败）。将自动重试。`;
+  }
   if (isAuthError(detail)) {
     return `${what} 失败: ${detail}\nGitHub 已连通，但 git 认证被拒绝。登录成功只说明 API Token 有效；克隆必须用 Basic 认证（x-access-token + Token），且 Token 需要该仓库的 repo / Contents 读写权限。请重新登录后再同步。`;
   }
-  if (isTransportError(detail)) {
-    return `${what} 失败: ${detail}\n这不是整机断网（否则也登录不了 GitHub）。系统 git 默认直连 github.com:443，而登录走的是软件内置网络（系统代理 / IPv4）。同一账号在多台电脑同步时，只要其中一台开了代理或 IPv6 不通，就会出现「能登录、不能克隆」。软件已让 git 改走与登录相同的网络通道；若仍失败，请确认代理软件允许访问 GitHub。`;
+  if (isTransportError(detail) || isTransportError(raw)) {
+    return `${what} 失败: ${stripGitProgress(raw) || detail}\n这不是整机断网（否则也登录不了 GitHub）。系统 git 默认直连 github.com:443，而登录走的是软件内置网络（系统代理 / IPv4）。同一账号在多台电脑同步时，只要其中一台开了代理或 IPv6 不通，就会出现「能登录、不能克隆」。软件已让 git 改走与登录相同的网络通道；若仍失败，请确认代理软件允许访问 GitHub。`;
   }
   return `${what} 失败: ${detail}`;
 }
@@ -135,8 +153,6 @@ async function buildGitEnv({ token } = {}, args = []) {
   }
   env.GCM_INTERACTIVE = 'never';
   if (needsNetwork(args)) {
-    pairs.push(['http.lowSpeedLimit', '1000']);
-    pairs.push(['http.lowSpeedTime', '20']);
     try {
       const proxy = await getLocalProxyUrl();
       pairs.push(['http.proxy', proxy]);
@@ -173,39 +189,55 @@ function killGit(child) {
 
 function networkTimeoutMs(args) {
   const cmd = (args || []).join(' ');
-  if (/\bclone\b/.test(cmd)) return 180000;
-  if (/\b(fetch|push|pull|ls-remote)\b/.test(cmd)) return 90000;
+  if (/\bclone\b/.test(cmd)) return 15 * 60 * 1000;
+  if (/\b(fetch|push|pull|ls-remote)\b/.test(cmd)) return 3 * 60 * 1000;
   return 60000;
 }
 
-function run(args, { cwd, token, identity, timeoutMs, onStderr } = {}) {
+function run(args, { cwd, token, identity, timeoutMs, stallMs, onStderr } = {}) {
   return (async () => {
     const env = await buildGitEnv({ token }, args);
     const idArgs = identity
       ? ['-c', `user.name=${identity.name}`, '-c', `user.email=${identity.email}`]
       : [];
-    const limit = timeoutMs || (needsNetwork(args) ? networkTimeoutMs(args) : 60000);
+    const net = needsNetwork(args);
+    const absLimit = timeoutMs || (net ? networkTimeoutMs(args) : 60000);
+    const idleLimit = stallMs != null ? stallMs : (net && /\bclone\b/.test(args.join(' ')) ? 120000 : absLimit);
     return await new Promise((resolve) => {
       const child = spawn('git', [...idArgs, ...args], { cwd, env, windowsHide: true });
       let out = '', err = '';
       let settled = false;
+      let lastActivity = Date.now();
+      const started = Date.now();
       const finish = (result) => {
         if (settled) return;
         settled = true;
-        clearTimeout(timer);
+        clearInterval(timer);
         resolve(result);
       };
-      const timer = setTimeout(() => {
-        killGit(child);
-        finish({
-          code: -1,
-          out: out.trim(),
-          err: (err.trim() ? err.trim() + '\n' : '') + `git 超时（${Math.round(limit / 1000)}s），已中止，避免一直卡在初始化`,
-        });
-      }, limit);
-      child.stdout.on('data', d => { out += d; });
+      const timer = setInterval(() => {
+        const now = Date.now();
+        if (now - started >= absLimit) {
+          killGit(child);
+          finish({
+            code: -1,
+            out: out.trim(),
+            err: (err.trim() ? err.trim() + '\n' : '') + `git 超时（${Math.round(absLimit / 1000)}s），已中止，避免一直卡在初始化`,
+          });
+        } else if (now - lastActivity >= idleLimit) {
+          killGit(child);
+          finish({
+            code: -1,
+            out: out.trim(),
+            err: (err.trim() ? err.trim() + '\n' : '') + `git 超过 ${Math.round(idleLimit / 1000)}s 无进度，已中止（传输中断）`,
+          });
+        }
+      }, 1000);
+      const bump = () => { lastActivity = Date.now(); };
+      child.stdout.on('data', d => { out += d; bump(); });
       child.stderr.on('data', d => {
         err += d;
+        bump();
         if (onStderr) {
           try { onStderr(String(d)); } catch { /* ignore */ }
         }
@@ -236,5 +268,7 @@ module.exports = {
   isTransportError,
   interpretLsRemote,
   formatGitFailure,
+  stripGitProgress,
+  looksLikeInterruptedTransfer,
   buildGitEnv,
 };

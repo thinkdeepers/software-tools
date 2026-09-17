@@ -1,7 +1,7 @@
 // 传输层：系统代理解析、GIT_CONFIG 合并、本地 CONNECT 代理、克隆失败分类
 const net = require('net');
 const { parseProxySpec, parseWindowsProxyServer, parseConnectTarget, LocalGitProxy, defaultAllowHost } = require('../src/gitproxy');
-const { mergeGitConfigs, needsNetwork, isTransportError, isAuthError, interpretLsRemote, formatGitFailure, gitAuthHeader, authUrl, buildGitEnv } = require('../src/gitops');
+const { mergeGitConfigs, needsNetwork, isTransportError, isAuthError, interpretLsRemote, formatGitFailure, gitAuthHeader, authUrl, buildGitEnv, stripGitProgress, looksLikeInterruptedTransfer } = require('../src/gitops');
 const { isRemoteRefMissing } = require('../src/syncengine');
 
 let failures = 0;
@@ -163,6 +163,21 @@ async function main() {
   headers.some(h => /Bearer/.test(h))
     ? fail('仍然注入了 Bearer，GitHub git 会回 invalid credentials')
     : ok('没有注入 Bearer 头');
+
+  step('6. 克隆进度被误当成失败：Counting objects 不是报错');
+  const COUNT_ERR = "Cloning into '.'... remote: Enumerating objects: 644, done. remote: Counting objects: 0% (1/644) remote: Counting objects: 31% (200/644) remote: Counting";
+  looksLikeInterruptedTransfer(COUNT_ERR)
+    ? ok('只含进度输出时判定为传输中断')
+    : fail('没认出 Counting objects 进度');
+  stripGitProgress(COUNT_ERR) === ''
+    ? ok('错误信息里剥掉进度条')
+    : fail(`进度未剥干净: ${JSON.stringify(stripGitProgress(COUNT_ERR))}`);
+  /中途中断/.test(formatGitFailure('克隆仓库', { code: -1, err: COUNT_ERR }))
+    ? ok('不会把 Counting objects 进度整段当成失败原因')
+    : fail('Counting objects 仍被当成失败正文');
+  isAuthError(COUNT_ERR)
+    ? fail('把传输进度误判成认证失败')
+    : ok('传输进度不是认证失败');
 
   console.log(`\n结果：${failures === 0 ? '全部通过' : failures + ' 项失败'}`);
   process.exit(failures === 0 ? 0 : 1);
