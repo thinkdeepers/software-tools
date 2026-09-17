@@ -41,6 +41,7 @@ function render() {
 }
 
 function lastLine(m) {
+  if (m.progress) return esc(m.progress);
   const last = m.lastSync ? `上次同步 ${new Date(m.lastSync).toLocaleString('zh-CN')}` : '尚未同步';
   return last + (m.error ? ' · ' + esc(m.error) : '');
 }

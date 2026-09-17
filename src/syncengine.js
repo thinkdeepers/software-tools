@@ -7,7 +7,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
-const { run, must, authUrl } = require('./gitops');
+const { run, must, authUrl, isTransportError, isAuthError, interpretLsRemote, formatGitFailure } = require('./gitops');
 
 const GIT_DIR_RE = /(^|[/\\])\.git([/\\]|$)/;
 
@@ -86,22 +86,86 @@ class SyncTask {
     this.onLocalGone = null;
     this._dropping = false;
     this._localGoneNotified = false;
+    this.progress = null;
   }
 
   view() {
-    const { id, repoFullName, branch, folder, enabled, status, lastSync, error, hubId } = this;
+    const { id, repoFullName, branch, folder, enabled, status, lastSync, error, hubId, progress } = this;
     return {
       id, repoFullName, branch, folder, enabled, status, lastSync, error,
+      progress: progress || null,
       mode: hubId ? 'repo-branch' : 'branch',
       hubId: hubId || null,
     };
   }
 
   log(msg) { this.ctx.log(`[${this.repoFullName}#${this.branch}] ${msg}`); }
-  setStatus(s, err = null) { this.status = s; this.error = err; this.ctx.onUpdate(); }
+  setStatus(s, err = null) {
+    this.status = s;
+    this.error = err;
+    if (s !== 'init' && s !== 'syncing') this.progress = null;
+    this.ctx.onUpdate();
+  }
+
+  _noteGitProgress(chunk) {
+    const m = String(chunk).match(/(?:remote: )?(?:Enumerating objects|Counting objects|Receiving objects|Resolving deltas|Compressing objects)[^\r\n]*/);
+    if (!m) return;
+    this.progress = m[0].replace(/\s+/g, ' ').trim();
+    this.ctx.onUpdate();
+  }
+
+  async _resetCloneDir() {
+    if (!this.folder || !fs.existsSync(this.folder)) return;
+    for (const name of fs.readdirSync(this.folder)) {
+      const p = path.join(this.folder, name);
+      try {
+        await removeDirRetry(p);
+      } catch {
+        try { fs.rmSync(p, { recursive: true, force: true }); } catch { /* ignore */ }
+      }
+    }
+  }
+
+  async _cloneWorkingCopy(branch, { cache = null } = {}) {
+    const url = authUrl(this.cloneUrl);
+    const opts = { ...this.opts(), onStderr: (d) => this._noteGitProgress(d) };
+    const attempts = 3;
+    let lastErr;
+    for (let i = 1; i <= attempts; i++) {
+      try {
+        await this._resetCloneDir();
+        fs.mkdirSync(this.folder, { recursive: true });
+        if (cache && fs.existsSync(cache)) {
+          this.progress = `从本地缓存展开 ${branch}` + (i > 1 ? `（重试 ${i}/${attempts}）` : '');
+          this.ctx.onUpdate();
+          this.log(`从本地缓存展开分支 ${branch}` + (i > 1 ? `（第 ${i} 次）` : ''));
+          await must(['clone', '--branch', branch, '--single-branch', cache, '.'], opts, '展开分支');
+          await must(['remote', 'set-url', 'origin', url], this.opts(), '设置远程地址');
+          return;
+        }
+        this.progress = `浅克隆 ${branch}` + (i > 1 ? `（重试 ${i}/${attempts}）` : '（只拉最新提交）');
+        this.ctx.onUpdate();
+        this.log(`浅克隆分支 ${branch}` + (i > 1 ? `（第 ${i} 次）` : '（只拉最新提交）'));
+        await must(['clone', '--progress', '--depth', '1', '--branch', branch, '--single-branch', url, '.'], opts, '克隆仓库');
+        return;
+      } catch (e) {
+        lastErr = e;
+        this.log(`克隆未完成（${i}/${attempts}）: ${e.message}`);
+        await this._resetCloneDir();
+        if (i < attempts) await sleep(1500 * i);
+      }
+    }
+    throw lastErr;
+  }
 
   opts() {
     return { cwd: this.folder, token: this.ctx.getToken(), identity: this.ctx.getIdentity() };
+  }
+
+  async _ensureCleanRemote() {
+    if (!this.cloneUrl || !this.folder || !fs.existsSync(path.join(this.folder, '.git'))) return;
+    const url = authUrl(this.cloneUrl);
+    await run(['remote', 'set-url', 'origin', url], this.opts());
   }
 
   // 直接问远程仓库：存在 true，确定不存在 false，网络/认证异常抛错。
@@ -110,14 +174,13 @@ class SyncTask {
     const url = authUrl(this.cloneUrl);
     const cwd = this.folder && fs.existsSync(this.folder) ? this.folder : os.tmpdir();
     const r = await run(['ls-remote', '--exit-code', '--heads', url, this.branch], { ...this.opts(), cwd });
-    if (r.code === 0) return true;
-    if (r.code === 1 || r.code === 2) return false;
-    if (isRemoteRefMissing(r.err, r.out)) return false;
-    throw new Error(`无法访问远程仓库: ${r.err || r.out}`);
+    const parsed = interpretLsRemote(r);
+    if (parsed.error) throw new Error(`无法访问远程仓库: ${parsed.error}`);
+    return !!parsed.exists;
   }
 
   // ---------- 初始化：把本地文件夹和远程分支关联起来 ----------
-  async initialize({ createBranch = false, baseBranch = null } = {}) {
+  async initialize({ createBranch = false, baseBranch = null, cache = null } = {}) {
     this.setStatus('init');
     const token = this.ctx.getToken();
     const url = authUrl(this.cloneUrl);
@@ -136,6 +199,8 @@ class SyncTask {
           if (co.code !== 0) {
             await must(['checkout', '-b', this.branch, `origin/${this.branch}`], this.opts(), '切换分支');
           }
+        } else if (isAuthError(f.err, f.out) || isTransportError(f.err, f.out)) {
+          throw new Error(formatGitFailure('拉取', f));
         } else if (createBranch) {
           await must(['checkout', '-b', this.branch], this.opts(), '创建分支');
           await must(['push', '-u', 'origin', this.branch], this.opts(), '推送新分支');
@@ -147,12 +212,12 @@ class SyncTask {
         fs.mkdirSync(this.folder, { recursive: true });
         if (createBranch) {
           this.log(`克隆 ${baseBranch} 并创建新分支 ${this.branch}`);
-          await must(['clone', '--branch', baseBranch, url, '.'], this.opts(), '克隆仓库');
+          await this._cloneWorkingCopy(baseBranch, { cache });
           await must(['checkout', '-b', this.branch], this.opts(), '创建分支');
           await must(['push', '-u', 'origin', this.branch], this.opts(), '推送新分支');
         } else {
           this.log(`克隆分支 ${this.branch}`);
-          await must(['clone', '--branch', this.branch, '--single-branch', url, '.'], this.opts(), '克隆仓库');
+          await this._cloneWorkingCopy(this.branch, { cache });
         }
       } else {
         // 非空且不是仓库：初始化并把本地文件合并进分支（冲突以本地为准）
@@ -164,6 +229,8 @@ class SyncTask {
         const f = await run(['fetch', 'origin', `+refs/heads/${this.branch}:refs/remotes/origin/${this.branch}`], this.opts());
         if (f.code === 0) {
           await must(['merge', `origin/${this.branch}`, '--allow-unrelated-histories', '-X', 'ours', '--no-edit'], this.opts(), '合并远程内容');
+        } else if (isAuthError(f.err, f.out) || isTransportError(f.err, f.out)) {
+          throw new Error(formatGitFailure('拉取', f));
         } else if (!createBranch) {
           throw new Error(`远程分支 ${this.branch} 不存在`);
         }
@@ -192,10 +259,14 @@ class SyncTask {
     if (this._bailIfFolderGone()) return;
     this.setStatus('syncing');
     try {
+      await this._ensureCleanRemote();
       // 先问云端还在不在。分支没了就删本地，不要先 commit，否则未推送提交会挡住删除。
       const f = await run(['fetch', 'origin', `+refs/heads/${this.branch}:refs/remotes/origin/${this.branch}`], this.opts());
       let remoteExists = f.code === 0;
       if (!remoteExists) {
+        if (isTransportError(f.err, f.out) || isAuthError(f.err, f.out)) {
+          throw new Error(formatGitFailure('拉取', f));
+        }
         if (isRemoteRefMissing(f.err, f.out)) {
           remoteExists = false;
         } else {
@@ -327,6 +398,7 @@ class SyncTask {
       return;
     }
     await this.stop();
+    await this._ensureCleanRemote();
     this._watcher = chokidar.watch(this.folder, {
       ignored: GIT_DIR_RE,
       ignoreInitial: true,
@@ -579,6 +651,8 @@ class RepoHub {
     this._goneHandling = new Set();
     this._reconciling = false;
     this._starting = false;
+    this._initializing = false;
+    this.progress = null;
     if (Array.isArray(data.children)) {
       for (const c of data.children) this._attachChild(c);
     }
@@ -624,6 +698,7 @@ class RepoHub {
       return !acc || b.lastSync > acc ? b.lastSync : acc;
     }, this.lastSync);
     const error = branches.find(b => b.error)?.error || this.error;
+    if (this._initializing) status = 'init';
     return {
       id: this.id,
       mode: 'repo',
@@ -633,6 +708,7 @@ class RepoHub {
       status,
       lastSync,
       error,
+      progress: this.progress || null,
       defaultBranch: this.defaultBranch,
       branches,
     };
@@ -656,7 +732,17 @@ class RepoHub {
   }
 
   log(msg) { this.ctx.log(`[${this.repoFullName} 整仓] ${msg}`); }
-  setStatus(s, err = null) { this.status = s; this.error = err; this.ctx.onUpdate(); }
+  setStatus(s, err = null) {
+    this.status = s;
+    this.error = err;
+    if (s !== 'init') this.progress = null;
+    this.ctx.onUpdate();
+  }
+
+  _setProgress(msg) {
+    this.progress = msg;
+    this.ctx.onUpdate();
+  }
 
   requestSync(reason) {
     for (const t of this.children.values()) t.requestSync(reason);
@@ -672,8 +758,10 @@ class RepoHub {
   resolveConflict() { return Promise.resolve(); }
 
   async initialize() {
+    this._initializing = true;
     this.setStatus('init');
     fs.mkdirSync(this.folder, { recursive: true });
+    let cache = null;
     try {
       if (this.ctx.getDefaultBranch) {
         this.defaultBranch = await this.ctx.getDefaultBranch(this.repoFullName);
@@ -681,26 +769,70 @@ class RepoHub {
       const branches = await this.ctx.listBranches(this.repoFullName);
       if (!branches.length) throw new Error('该仓库没有任何分支');
       this.log(`开始同步整个仓库，共 ${branches.length} 个分支`);
+      this._setProgress(`正在下载仓库（${branches.length} 个分支只拉一次最新快照）…`);
+      try {
+        cache = await this._downloadRepoCache();
+      } catch (e) {
+        this.log(`整仓一次下载失败，改为逐个浅克隆: ${e.message}`);
+        cache = null;
+      }
+      let i = 0;
       for (const branch of branches) {
-        await this.ensureBranch(branch, { initialize: true });
+        i += 1;
+        this._setProgress(`展开本地文件夹 ${i}/${branches.length}：${branch}`);
+        await this.ensureBranch(branch, { initialize: true, cache });
       }
       this.lastSync = new Date().toISOString();
+      this._initializing = false;
       this.setStatus('ok');
       this.log('整仓初始化完成（每个分支对应一层文件夹）');
       return true;
     } catch (e) {
+      this._initializing = false;
       this.log(`初始化失败: ${e.message}`);
       this.setStatus('error', e.message);
       throw e;
+    } finally {
+      if (cache) {
+        try { await removeDirRetry(cache); } catch { /* ignore */ }
+      }
     }
   }
 
-  async ensureBranch(branch, { initialize = false, folderName = null, createBranch = false } = {}) {
+  async _downloadRepoCache() {
+    const url = authUrl(this.cloneUrl);
+    let lastErr;
+    for (let i = 1; i <= 3; i++) {
+      const cache = fs.mkdtempSync(path.join(os.tmpdir(), 'gsync-'));
+      const opts = {
+        cwd: os.tmpdir(),
+        token: this.ctx.getToken(),
+        identity: this.ctx.getIdentity(),
+        onStderr: (chunk) => {
+          const m = String(chunk).match(/(?:remote: )?(?:Enumerating objects|Counting objects|Receiving objects|Resolving deltas)[^\r\n]*/);
+          if (m) this._setProgress(`下载仓库 ${m[0].replace(/\s+/g, ' ').trim()}` + (i > 1 ? `（重试 ${i}/3）` : ''));
+        },
+      };
+      this.log('一次性浅克隆整个仓库（只拉各分支最新提交），随后在本地展开成文件夹' + (i > 1 ? `（第 ${i} 次）` : ''));
+      const r = await run(
+        ['clone', '--progress', '--bare', '--depth', '1', '--no-single-branch', url, cache],
+        opts,
+      );
+      if (r.code === 0) return cache;
+      lastErr = new Error(formatGitFailure('下载仓库', r));
+      this.log(`整仓下载未完成（${i}/3）: ${lastErr.message}`);
+      try { await removeDirRetry(cache); } catch { /* ignore */ }
+      if (i < 3) await sleep(1500 * i);
+    }
+    throw lastErr;
+  }
+
+  async ensureBranch(branch, { initialize = false, folderName = null, createBranch = false, cache = null } = {}) {
     if (this.children.has(branch)) {
       const t = this.children.get(branch);
       if (!fs.existsSync(path.join(t.folder, '.git'))) {
         fs.mkdirSync(t.folder, { recursive: true });
-        await t.initialize();
+        await t.initialize({ cache });
       }
       if (this.enabled && this._rootWatcher) await t.start();
       return t;
@@ -718,9 +850,9 @@ class RepoHub {
         fs.mkdirSync(folder, { recursive: true });
         if (createBranch) {
           if (!this.defaultBranch) throw new Error('仓库还没有任何分支，无法基于默认分支创建');
-          await task.initialize({ createBranch: true, baseBranch: this.defaultBranch });
+          await task.initialize({ createBranch: true, baseBranch: this.defaultBranch, cache });
         } else {
-          await task.initialize();
+          await task.initialize({ cache });
         }
       }
       if (this.enabled && this._rootWatcher) await task.start();
@@ -755,7 +887,8 @@ class RepoHub {
           return;
         }
       } catch (e) {
-        this.log(`确认分支 ${branch} 时出错（${e.message}），按云端已删除处理`);
+        this.log(`无法确认分支 ${branch} 是否存在（${e.message}），暂不删除本地文件夹`);
+        return;
       }
 
       this._ignore.add(path.resolve(folder));
@@ -1007,6 +1140,9 @@ module.exports = {
   isValidBranchName,
   isRemoteRefMissing,
   isProtectedBranchError,
+  isTransportError,
+  isAuthError,
+  interpretLsRemote,
   removeDirRetry,
 };
 

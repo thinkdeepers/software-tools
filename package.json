@@ -8,7 +8,7 @@
   "license": "MIT",
   "scripts": {
     "start": "electron .",
-    "test": "node test/e2e-repo-sync.js",
+    "test": "node test/git-transport.js && node test/e2e-repo-sync.js",
     "dist:win": "electron-builder --win nsis",
     "dist:portable": "electron-builder --win portable"
   },
