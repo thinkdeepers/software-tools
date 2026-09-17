@@ -7,7 +7,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
-const { run, must, authUrl } = require('./gitops');
+const { run, must, authUrl, isTransportError, interpretLsRemote, formatGitFailure } = require('./gitops');
 
 const GIT_DIR_RE = /(^|[/\\])\.git([/\\]|$)/;
 
@@ -110,10 +110,9 @@ class SyncTask {
     const url = authUrl(this.cloneUrl);
     const cwd = this.folder && fs.existsSync(this.folder) ? this.folder : os.tmpdir();
     const r = await run(['ls-remote', '--exit-code', '--heads', url, this.branch], { ...this.opts(), cwd });
-    if (r.code === 0) return true;
-    if (r.code === 1 || r.code === 2) return false;
-    if (isRemoteRefMissing(r.err, r.out)) return false;
-    throw new Error(`无法访问远程仓库: ${r.err || r.out}`);
+    const parsed = interpretLsRemote(r);
+    if (parsed.error) throw new Error(`无法访问远程仓库: ${parsed.error}`);
+    return !!parsed.exists;
   }
 
   // ---------- 初始化：把本地文件夹和远程分支关联起来 ----------
@@ -196,6 +195,9 @@ class SyncTask {
       const f = await run(['fetch', 'origin', `+refs/heads/${this.branch}:refs/remotes/origin/${this.branch}`], this.opts());
       let remoteExists = f.code === 0;
       if (!remoteExists) {
+        if (isTransportError(f.err, f.out)) {
+          throw new Error(formatGitFailure('拉取', f));
+        }
         if (isRemoteRefMissing(f.err, f.out)) {
           remoteExists = false;
         } else {
@@ -755,7 +757,8 @@ class RepoHub {
           return;
         }
       } catch (e) {
-        this.log(`确认分支 ${branch} 时出错（${e.message}），按云端已删除处理`);
+        this.log(`无法确认分支 ${branch} 是否存在（${e.message}），暂不删除本地文件夹`);
+        return;
       }
 
       this._ignore.add(path.resolve(folder));
@@ -1007,6 +1010,8 @@ module.exports = {
   isValidBranchName,
   isRemoteRefMissing,
   isProtectedBranchError,
+  isTransportError,
+  interpretLsRemote,
   removeDirRetry,
 };
 
