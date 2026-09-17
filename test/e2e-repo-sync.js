@@ -96,7 +96,7 @@ async function main() {
   await startMock();
 
   const github = require('../src/github');
-  const { SyncEngine, isRemoteRefMissing, isTransportError, interpretLsRemote } = require('../src/syncengine');
+  const { SyncEngine, isRemoteRefMissing, isTransportError, isAuthError, interpretLsRemote } = require('../src/syncengine');
   const TOKEN = 'test-token';
 
   step('0. 识别「远程分支已不存在」的 git 报错');
@@ -116,6 +116,10 @@ async function main() {
   interpretLsRemote({ code: 128, err: cloneConnErr, out: '' }).error
     ? ok('ls-remote 连接失败会抛错而不是当成分支已删除')
     : fail('ls-remote 连接失败没有当成 error');
+  const cloneAuthErr = "Cloning into '.'... remote: invalid credentials fatal: Authentication failed for 'https://github.com/thinkdeepers/houbeililiang.git/'";
+  isAuthError(cloneAuthErr) && !isTransportError(cloneAuthErr)
+    ? ok('用户报告的 invalid credentials 是认证问题，不是断网')
+    : fail('invalid credentials 分类不对');
 
   const engine = new SyncEngine({
     getToken: () => TOKEN,

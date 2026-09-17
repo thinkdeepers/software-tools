@@ -7,7 +7,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
-const { run, must, authUrl, isTransportError, interpretLsRemote, formatGitFailure } = require('./gitops');
+const { run, must, authUrl, isTransportError, isAuthError, interpretLsRemote, formatGitFailure } = require('./gitops');
 
 const GIT_DIR_RE = /(^|[/\\])\.git([/\\]|$)/;
 
@@ -104,6 +104,12 @@ class SyncTask {
     return { cwd: this.folder, token: this.ctx.getToken(), identity: this.ctx.getIdentity() };
   }
 
+  async _ensureCleanRemote() {
+    if (!this.cloneUrl || !this.folder || !fs.existsSync(path.join(this.folder, '.git'))) return;
+    const url = authUrl(this.cloneUrl);
+    await run(['remote', 'set-url', 'origin', url], this.opts());
+  }
+
   // 直接问远程仓库：存在 true，确定不存在 false，网络/认证异常抛错。
   // 用 clone URL 而不是 cwd 里的 origin，文件夹正在被删时也能问。
   async remoteBranchExists() {
@@ -135,6 +141,8 @@ class SyncTask {
           if (co.code !== 0) {
             await must(['checkout', '-b', this.branch, `origin/${this.branch}`], this.opts(), '切换分支');
           }
+        } else if (isAuthError(f.err, f.out) || isTransportError(f.err, f.out)) {
+          throw new Error(formatGitFailure('拉取', f));
         } else if (createBranch) {
           await must(['checkout', '-b', this.branch], this.opts(), '创建分支');
           await must(['push', '-u', 'origin', this.branch], this.opts(), '推送新分支');
@@ -163,6 +171,8 @@ class SyncTask {
         const f = await run(['fetch', 'origin', `+refs/heads/${this.branch}:refs/remotes/origin/${this.branch}`], this.opts());
         if (f.code === 0) {
           await must(['merge', `origin/${this.branch}`, '--allow-unrelated-histories', '-X', 'ours', '--no-edit'], this.opts(), '合并远程内容');
+        } else if (isAuthError(f.err, f.out) || isTransportError(f.err, f.out)) {
+          throw new Error(formatGitFailure('拉取', f));
         } else if (!createBranch) {
           throw new Error(`远程分支 ${this.branch} 不存在`);
         }
@@ -191,11 +201,12 @@ class SyncTask {
     if (this._bailIfFolderGone()) return;
     this.setStatus('syncing');
     try {
+      await this._ensureCleanRemote();
       // 先问云端还在不在。分支没了就删本地，不要先 commit，否则未推送提交会挡住删除。
       const f = await run(['fetch', 'origin', `+refs/heads/${this.branch}:refs/remotes/origin/${this.branch}`], this.opts());
       let remoteExists = f.code === 0;
       if (!remoteExists) {
-        if (isTransportError(f.err, f.out)) {
+        if (isTransportError(f.err, f.out) || isAuthError(f.err, f.out)) {
           throw new Error(formatGitFailure('拉取', f));
         }
         if (isRemoteRefMissing(f.err, f.out)) {
@@ -329,6 +340,7 @@ class SyncTask {
       return;
     }
     await this.stop();
+    await this._ensureCleanRemote();
     this._watcher = chokidar.watch(this.folder, {
       ignored: GIT_DIR_RE,
       ignoreInitial: true,
@@ -1011,6 +1023,7 @@ module.exports = {
   isRemoteRefMissing,
   isProtectedBranchError,
   isTransportError,
+  isAuthError,
   interpretLsRemote,
   removeDirRetry,
 };

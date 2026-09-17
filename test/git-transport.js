@@ -1,7 +1,7 @@
 // 传输层：系统代理解析、GIT_CONFIG 合并、本地 CONNECT 代理、克隆失败分类
 const net = require('net');
 const { parseProxySpec, parseWindowsProxyServer, parseConnectTarget, LocalGitProxy, defaultAllowHost } = require('../src/gitproxy');
-const { mergeGitConfigs, needsNetwork, isTransportError, interpretLsRemote, formatGitFailure } = require('../src/gitops');
+const { mergeGitConfigs, needsNetwork, isTransportError, isAuthError, interpretLsRemote, formatGitFailure, gitAuthHeader, authUrl, buildGitEnv } = require('../src/gitops');
 const { isRemoteRefMissing } = require('../src/syncengine');
 
 let failures = 0;
@@ -126,6 +126,37 @@ async function main() {
     await proxy.close();
     await new Promise((resolve) => echo.close(resolve));
   }
+
+  step('5. git 克隆必须用 Basic 认证，不能叠 Bearer（否则 GitHub 回 invalid credentials）');
+  const AUTH_ERR = "Cloning into '.'... remote: invalid credentials fatal: Authentication failed for 'https://github.com/thinkdeepers/houbeililiang.git/'";
+  isAuthError(AUTH_ERR) ? ok('invalid credentials 判定为认证错误') : fail('没认出 invalid credentials');
+  isTransportError(AUTH_ERR) ? fail('把认证失败误判成传输错误') : ok('认证失败不是传输错误');
+  interpretLsRemote({ code: 128, err: AUTH_ERR, out: '' }).error
+    ? ok('ls-remote 认证失败不会当成分支已删除')
+    : fail('认证失败被当成 exists=false');
+  /Basic 认证/.test(formatGitFailure('克隆仓库', { code: 128, err: AUTH_ERR }))
+    ? ok('认证失败文案说明了原因')
+    : fail('认证失败文案不对');
+  const header = gitAuthHeader('ghp_testtoken');
+  header.startsWith('Authorization: Basic ') && !/Bearer/.test(header)
+    ? ok('extraHeader 使用 Basic 而不是 Bearer')
+    : fail(`认证头不对: ${header}`);
+  const decoded = Buffer.from(header.replace('Authorization: Basic ', ''), 'base64').toString('utf8');
+  eq(decoded, 'x-access-token:ghp_testtoken', 'Basic 内容是 x-access-token:TOKEN');
+  eq(authUrl('https://x-access-token@github.com/thinkdeepers/houbeililiang.git'), 'https://github.com/thinkdeepers/houbeililiang.git', '远程 URL 去掉用户名，避免双份 Authorization');
+  eq(authUrl('https://github.com/thinkdeepers/houbeililiang.git'), 'https://github.com/thinkdeepers/houbeililiang.git', '干净 https URL 保持不变');
+  eq(authUrl('file:///tmp/repo.git'), 'file:///tmp/repo.git', 'file:// 测试远程不受影响');
+  const gitEnv = await buildGitEnv({ token: 'ghp_testtoken' }, ['status']);
+  const headers = [];
+  for (let i = 0; i < Number(gitEnv.GIT_CONFIG_COUNT); i++) {
+    if (gitEnv[`GIT_CONFIG_KEY_${i}`] === 'http.extraHeader') headers.push(gitEnv[`GIT_CONFIG_VALUE_${i}`]);
+  }
+  headers.length === 1 && headers[0] === gitAuthHeader('ghp_testtoken')
+    ? ok('git 环境只注入一份 Basic extraHeader')
+    : fail(`extraHeader 不对: ${JSON.stringify(headers)}`);
+  headers.some(h => /Bearer/.test(h))
+    ? fail('仍然注入了 Bearer，GitHub git 会回 invalid credentials')
+    : ok('没有注入 Bearer 头');
 
   console.log(`\n结果：${failures === 0 ? '全部通过' : failures + ' 项失败'}`);
   process.exit(failures === 0 ? 0 : 1);
