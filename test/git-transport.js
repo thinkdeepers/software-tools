@@ -89,6 +89,12 @@ async function main() {
   needsNetwork(['clone', '--branch', 'main', 'https://github.com/a/b.git', '.'])
     ? ok('https clone 需要走代理通道')
     : fail('https clone 应走网络');
+  needsNetwork(['clone', '--branch', 'main', 'file:///tmp/repo.git', '.'])
+    ? fail('file:// clone 不该走网络代理')
+    : ok('本地 file:// clone 不走网络代理');
+  needsNetwork(['clone', '--branch', 'dev', '--single-branch', '/tmp/gsync-cache', '.'])
+    ? fail('从本地缓存展开分支不该走网络')
+    : ok('从本地缓存展开分支不走网络');
   needsNetwork(['commit', '-m', 'x'])
     ? fail('本地 commit 不该走网络代理')
     : ok('本地 commit 不走网络代理');

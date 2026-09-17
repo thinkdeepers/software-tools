@@ -64,8 +64,11 @@ function gitAuthHeader(token) {
 function needsNetwork(args = []) {
   const list = Array.isArray(args) ? args : [];
   if (list.some(a => /^https?:\/\//i.test(String(a)))) return true;
+  const urls = list.filter(a => /^[a-z][a-z0-9+.-]*:\/\//i.test(String(a)));
+  if (urls.length && urls.every(u => /^(file|git):\/\//i.test(String(u)))) return false;
   const cmd = list.filter(a => a && !String(a).startsWith('-')).join(' ');
-  return /\b(clone|fetch|push|pull|ls-remote)\b/.test(cmd);
+  if (/\bclone\b/.test(cmd) && !list.some(a => /^https?:\/\//i.test(String(a)))) return false;
+  return /\b(fetch|push|pull|ls-remote)\b/.test(cmd);
 }
 
 function mergeGitConfigs(env, pairs) {
@@ -83,7 +86,7 @@ function mergeGitConfigs(env, pairs) {
 
 function isTransportError(err, out = '') {
   const s = `${err || ''} ${out || ''}`;
-  return /failed to connect|could not connect|could not resolve host|name or service not known|timed out|timeout after|connection refused|connection reset|recv failure|ssl[_\s-]*connect|empty reply from server|proxy connect|network is unreachable|no route to host|gnutls_handshake|openssl ssl_connect|failed to send request|could not handshake|error setting certificate/i.test(s);
+  return /failed to connect|could not connect|could not resolve host|name or service not known|timed out|timeout after|git 超时|connection refused|connection reset|recv failure|ssl[_\s-]*connect|empty reply from server|proxy connect|network is unreachable|no route to host|gnutls_handshake|openssl ssl_connect|failed to send request|could not handshake|error setting certificate/i.test(s);
 }
 
 function isAuthError(err, out = '') {
@@ -132,6 +135,8 @@ async function buildGitEnv({ token } = {}, args = []) {
   }
   env.GCM_INTERACTIVE = 'never';
   if (needsNetwork(args)) {
+    pairs.push(['http.lowSpeedLimit', '1000']);
+    pairs.push(['http.lowSpeedTime', '20']);
     try {
       const proxy = await getLocalProxyUrl();
       pairs.push(['http.proxy', proxy]);
@@ -152,19 +157,61 @@ async function buildGitEnv({ token } = {}, args = []) {
   return env;
 }
 
-function run(args, { cwd, token, identity } = {}) {
+function killGit(child) {
+  if (!child || child.killed || child.pid == null) return;
+  try {
+    if (process.platform === 'win32') {
+      spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+    } else {
+      child.kill('SIGTERM');
+      setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* ignore */ } }, 1500);
+    }
+  } catch {
+    try { child.kill(); } catch { /* ignore */ }
+  }
+}
+
+function networkTimeoutMs(args) {
+  const cmd = (args || []).join(' ');
+  if (/\bclone\b/.test(cmd)) return 180000;
+  if (/\b(fetch|push|pull|ls-remote)\b/.test(cmd)) return 90000;
+  return 60000;
+}
+
+function run(args, { cwd, token, identity, timeoutMs, onStderr } = {}) {
   return (async () => {
     const env = await buildGitEnv({ token }, args);
     const idArgs = identity
       ? ['-c', `user.name=${identity.name}`, '-c', `user.email=${identity.email}`]
       : [];
+    const limit = timeoutMs || (needsNetwork(args) ? networkTimeoutMs(args) : 60000);
     return await new Promise((resolve) => {
       const child = spawn('git', [...idArgs, ...args], { cwd, env, windowsHide: true });
       let out = '', err = '';
+      let settled = false;
+      const finish = (result) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(result);
+      };
+      const timer = setTimeout(() => {
+        killGit(child);
+        finish({
+          code: -1,
+          out: out.trim(),
+          err: (err.trim() ? err.trim() + '\n' : '') + `git 超时（${Math.round(limit / 1000)}s），已中止，避免一直卡在初始化`,
+        });
+      }, limit);
       child.stdout.on('data', d => { out += d; });
-      child.stderr.on('data', d => { err += d; });
-      child.on('error', e => resolve({ code: -1, out, err: String(e) }));
-      child.on('close', code => resolve({ code, out: out.trim(), err: err.trim() }));
+      child.stderr.on('data', d => {
+        err += d;
+        if (onStderr) {
+          try { onStderr(String(d)); } catch { /* ignore */ }
+        }
+      });
+      child.on('error', e => finish({ code: -1, out, err: String(e) }));
+      child.on('close', code => finish({ code, out: out.trim(), err: err.trim() }));
     });
   })();
 }

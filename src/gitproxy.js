@@ -107,7 +107,10 @@ async function resolveElectronProxy(targetUrl) {
     return null;
   }
   try {
-    const spec = await session.defaultSession.resolveProxy(targetUrl);
+    const spec = await Promise.race([
+      session.defaultSession.resolveProxy(targetUrl),
+      new Promise((resolve) => setTimeout(() => resolve('DIRECT'), 2000)),
+    ]);
     return parseProxySpec(spec);
   } catch {
     return null;
@@ -143,7 +146,7 @@ function connectSocket(options) {
   return new Promise((resolve, reject) => {
     const sock = net.connect(options);
     const fail = (e) => { try { sock.destroy(); } catch { /* ignore */ } reject(e || new Error('connect failed')); };
-    sock.setTimeout(12000);
+    sock.setTimeout(4000);
     sock.once('connect', () => { sock.setTimeout(0); resolve(sock); });
     sock.once('error', fail);
     sock.once('timeout', () => fail(new Error('connect timeout')));
@@ -178,7 +181,7 @@ function httpProxyConnect(proxyUrl, destHost, destPort) {
     });
     let buf = Buffer.alloc(0);
     const fail = (e) => { try { sock.destroy(); } catch { /* ignore */ } reject(e); };
-    sock.setTimeout(15000);
+    sock.setTimeout(5000);
     sock.on('data', (d) => {
       buf = Buffer.concat([buf, d]);
       const idx = buf.indexOf('\r\n\r\n');
@@ -208,7 +211,7 @@ function socks5Connect(proxyUrl, destHost, destPort) {
     const sock = net.connect({ host: u.hostname, port, family: 4 });
     let stage = user ? 'greet-auth' : 'greet';
     const fail = (e) => { try { sock.destroy(); } catch { /* ignore */ } reject(e); };
-    sock.setTimeout(15000);
+    sock.setTimeout(5000);
     sock.on('connect', () => {
       if (user) sock.write(Buffer.from([0x05, 0x01, 0x02]));
       else sock.write(Buffer.from([0x05, 0x01, 0x00]));
@@ -355,24 +358,32 @@ class LocalGitProxy {
 
   async _connectOutbound(host, port) {
     const errors = [];
-    const tryOne = (proxy) => {
-      if (!proxy) return connectDirectPreferIPv4(host, port);
-      return connectViaProxy(proxy, host, port);
+    const tryOne = async (proxy) => {
+      const sock = proxy
+        ? await connectViaProxy(proxy, host, port)
+        : await connectDirectPreferIPv4(host, port);
+      lastGoodOutbound = proxy || null;
+      return sock;
     };
+
+    if (lastGoodOutbound !== undefined) {
+      try {
+        return await tryOne(lastGoodOutbound);
+      } catch (e) {
+        errors.push(`${lastGoodOutbound || 'direct'}: ${e.message}`);
+        lastGoodOutbound = undefined;
+      }
+    }
 
     const detected = this.resolveUpstream
       ? await this.resolveUpstream(`https://${host}/`)
       : await detectUpstreamProxy(`https://${host}/`, this.port);
 
-    const first = [];
-    if (detected) first.push(detected);
-    first.push(null);
-
-    for (const proxy of first) {
+    if (detected) {
       try {
-        return await tryOne(proxy);
+        return await tryOne(detected);
       } catch (e) {
-        errors.push(`${proxy || 'direct'}: ${e.message}`);
+        errors.push(`${detected}: ${e.message}`);
       }
     }
 
@@ -384,10 +395,17 @@ class LocalGitProxy {
         errors.push(`${p}: ${e.message}`);
       }
     }
+
+    try {
+      return await tryOne(null);
+    } catch (e) {
+      errors.push(`direct: ${e.message}`);
+    }
     throw new Error(errors.join('; ') || `cannot reach ${host}:${port}`);
   }
 }
 
+let lastGoodOutbound = undefined; // null=直连, string=上游代理
 let cachedUpstream = undefined;
 let cachedAt = 0;
 const UPSTREAM_TTL = 20000;
@@ -418,6 +436,7 @@ async function getLocalProxyUrl() {
 function resetProxyCache() {
   cachedUpstream = undefined;
   cachedAt = 0;
+  lastGoodOutbound = undefined;
 }
 
 module.exports = {
