@@ -6,5 +6,6 @@ local.properties
 .cxx/
 captures/
 *.apk
+!cursor-android/dist/CursorMobile-1.0.0.apk
 *.aab
 .DS_Store

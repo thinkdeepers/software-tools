@@ -24,6 +24,23 @@
 - 付费 Cursor 账号，并已在 Dashboard 连接 GitHub 等源码托管
 - 在 [API Keys](https://cursor.com/dashboard/api) 创建用户 API Key
 
+## 安装包
+
+已打好的可安装包：
+
+`cursor-android/dist/CursorMobile-1.0.0.apk`
+
+- 包名：`com.cursor.mobile`
+- 版本：`1.0.0`（versionCode 1）
+- 最低系统：Android 8.0（API 26）
+- 签名：调试签名，可直接安装
+
+手机上把该文件传到设备后打开安装，或：
+
+```bash
+adb install -r cursor-android/dist/CursorMobile-1.0.0.apk
+```
+
 ## 构建
 
 ```bash
@@ -31,11 +48,7 @@ cd cursor-android
 ./gradlew :app:assembleDebug
 ```
 
-安装：
-
-```bash
-adb install -r app/build/outputs/apk/debug/app-debug.apk
-```
+重新打包后的输出在 `app/build/outputs/apk/debug/app-debug.apk`。
 
 ## 使用步骤
 
