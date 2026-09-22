@@ -6,6 +6,9 @@ local.properties
 .cxx/
 captures/
 *.apk
-!cursor-android/dist/CursorMobile-1.0.0.apk
+!cursor-android/dist/Yuncheng-1.1.0.apk
+*.jks
+cursor-android/keystore.properties
+cursor-android/keystore/
 *.aab
 .DS_Store

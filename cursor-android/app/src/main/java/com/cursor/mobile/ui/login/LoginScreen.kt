@@ -56,7 +56,7 @@ class LoginViewModel(
     fun login(onSuccess: () -> Unit) {
         val key = _state.value.apiKey.trim()
         if (key.isEmpty()) {
-            _state.update { it.copy(error = "请输入 Cursor API Key") }
+            _state.update { it.copy(error = "请输入 API Key") }
             return
         }
         viewModelScope.launch {
@@ -108,13 +108,13 @@ fun LoginScreen(
         verticalArrangement = Arrangement.Center
     ) {
         Text(
-            text = "Cursor 云编程",
+            text = "云程",
             style = MaterialTheme.typography.headlineMedium,
             fontWeight = FontWeight.Bold
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            text = "使用 Cursor 账号的 API Key 登录，在手机上通过 Cloud Agents 完成仓库级 AI 编程对话。",
+            text = "使用 Cloud Agents API Key 登录，在手机上完成仓库级 AI 编程对话。",
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Spacer(Modifier.height(24.dp))
@@ -122,7 +122,7 @@ fun LoginScreen(
             value = state.apiKey,
             onValueChange = viewModel::onApiKeyChange,
             modifier = Modifier.fillMaxWidth(),
-            label = { Text("Cursor API Key") },
+            label = { Text("API Key") },
             placeholder = { Text("key_…") },
             singleLine = true,
             visualTransformation = PasswordVisualTransformation(),

@@ -26,29 +26,36 @@
 
 ## 安装包
 
-已打好的可安装包：
+可安装的正式签名包：
 
-`cursor-android/dist/CursorMobile-1.0.0.apk`
+`cursor-android/dist/Yuncheng-1.1.0.apk`
 
-- 包名：`com.cursor.mobile`
-- 版本：`1.0.0`（versionCode 1）
+- 桌面名称：云程
+- 包名：`app.yuncheng.mobile`
+- 版本：`1.1.0`（versionCode 2）
 - 最低系统：Android 8.0（API 26）
-- 签名：调试签名，可直接安装
+- 签名：独立正式证书（不是 Android 调试证书）
 
-手机上把该文件传到设备后打开安装，或：
+请安装这一份，不要再安装旧的 `CursorMobile-1.0.0.apk`。华为手机若开启了纯净模式，仍需在 **设置 → 系统和更新 → 纯净模式** 中退出，并在 **设置 → 安全 → 更多安全设置 → 安装外部来源应用** 里允许文件管理安装应用。
 
 ```bash
-adb install -r cursor-android/dist/CursorMobile-1.0.0.apk
+adb install -r cursor-android/dist/Yuncheng-1.1.0.apk
 ```
 
 ## 构建
 
+正式包需要本机的 `keystore.properties` 与 keystore（不入库）。
+
 ```bash
 cd cursor-android
-./gradlew :app:assembleDebug
+./gradlew :app:assembleRelease
 ```
 
-重新打包后的输出在 `app/build/outputs/apk/debug/app-debug.apk`。
+输出在 `app/build/outputs/apk/release/app-release.apk`。调试包：
+
+```bash
+./gradlew :app:assembleDebug
+```
 
 ## 使用步骤
 

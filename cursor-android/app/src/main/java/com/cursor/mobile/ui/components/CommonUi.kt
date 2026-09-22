@@ -128,7 +128,7 @@ fun ChatBubble(item: ChatItem) {
             container = MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
         )
         is ChatItem.AssistantMessage -> MessageBubble(
-            title = if (item.isStreaming) "Cursor · 生成中" else "Cursor",
+            title = if (item.isStreaming) "云程 · 生成中" else "云程",
             text = item.text.ifBlank { "…" },
             alignEnd = false,
             container = MaterialTheme.colorScheme.surfaceVariant
