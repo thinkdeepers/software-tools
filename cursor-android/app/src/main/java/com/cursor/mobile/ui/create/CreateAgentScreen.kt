@@ -43,7 +43,11 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.cursor.mobile.data.local.SessionStore
 import com.cursor.mobile.data.model.AgentMode
+import com.cursor.mobile.data.model.EnvRef
+import com.cursor.mobile.data.model.McpServerConfig
 import com.cursor.mobile.data.model.ModelInfo
+import com.cursor.mobile.data.model.ModelParam
+import com.cursor.mobile.data.model.PromptImage
 import com.cursor.mobile.data.model.ModelSelection
 import com.cursor.mobile.data.model.RepositoryItem
 import com.cursor.mobile.data.repository.CursorRepository
@@ -69,6 +73,13 @@ data class CreateUiState(
     val name: String = "",
     val prompt: String = "",
     val manualRepoUrl: String = "",
+    val worker: String = "cloud",
+    val workerName: String = "",
+    val modelParams: Map<String, String> = emptyMap(),
+    val images: List<PromptImage> = emptyList(),
+    val mcpName: String = "",
+    val mcpUrl: String = "",
+    val prUrl: String = "",
     val error: String? = null,
     val repoWarning: String? = null
 )
@@ -130,6 +141,18 @@ class CreateViewModel(
     }
     fun onModeSelected(mode: AgentMode) = _state.update { it.copy(mode = mode) }
     fun onAutoCreatePRChange(value: Boolean) = _state.update { it.copy(autoCreatePR = value) }
+    fun onWorker(value: String) = _state.update { it.copy(worker = value) }
+    fun onWorkerName(value: String) = _state.update { it.copy(workerName = value) }
+    fun onPrUrl(value: String) = _state.update { it.copy(prUrl = value) }
+    fun onMcpName(value: String) = _state.update { it.copy(mcpName = value) }
+    fun onMcpUrl(value: String) = _state.update { it.copy(mcpUrl = value) }
+    fun onParam(id: String, value: String) = _state.update {
+        it.copy(modelParams = it.modelParams + (id to value))
+    }
+    fun addImage(image: PromptImage) = _state.update {
+        if (it.images.size >= 5) it.copy(error = "最多 5 张图片") else it.copy(images = it.images + image, error = null)
+    }
+    fun appendPrompt(text: String) = _state.update { it.copy(prompt = (it.prompt + "\n" + text).trim()) }
 
     fun submit(onCreated: (String) -> Unit) {
         val current = _state.value
@@ -142,7 +165,22 @@ class CreateViewModel(
             ?: current.selectedRepoUrl
         viewModelScope.launch {
             _state.update { it.copy(submitting = true, error = null) }
-            val model = current.selectedModelId?.let { ModelSelection(id = it) }
+            val model = current.selectedModelId?.let {
+                ModelSelection(
+                    id = it,
+                    params = current.modelParams.map { (id, value) -> ModelParam(id, value) }
+                )
+            }
+            val env = if (current.worker == "cloud") {
+                null
+            } else {
+                EnvRef(type = current.worker, name = current.workerName.ifBlank { null })
+            }
+            val mcp = if (current.mcpName.isNotBlank() && current.mcpUrl.isNotBlank()) {
+                listOf(McpServerConfig(name = current.mcpName.trim(), url = current.mcpUrl.trim()))
+            } else {
+                emptyList()
+            }
             runCatching {
                 sessionStore.setSelectedModelId(current.selectedModelId)
                 sessionStore.setSelectedRepoUrl(repoUrl)
@@ -154,7 +192,11 @@ class CreateViewModel(
                     model = model,
                     mode = current.mode.apiValue,
                     autoCreatePR = current.autoCreatePR,
-                    name = current.name
+                    name = current.name,
+                    images = current.images,
+                    env = env,
+                    mcpServers = mcp,
+                    prUrl = current.prUrl
                 )
             }.onSuccess { (agent, _) ->
                 _state.update { it.copy(submitting = false) }
@@ -192,6 +234,7 @@ fun CreateAgentScreen(
     val state by viewModel.state.collectAsState()
     var modelExpanded by remember { mutableStateOf(false) }
     var repoExpanded by remember { mutableStateOf(false) }
+    val context = androidx.compose.ui.platform.LocalContext.current
 
     Scaffold(
         topBar = {
@@ -329,6 +372,64 @@ fun CreateAgentScreen(
                     label = { Text("起始分支 / commit") },
                     singleLine = true
                 )
+                OutlinedTextField(
+                    value = state.prUrl,
+                    onValueChange = viewModel::onPrUrl,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("或在已有 PR 上工作") },
+                    placeholder = { Text("https://github.com/org/repo/pull/1") },
+                    singleLine = true
+                )
+
+                Text("运行位置", fontWeight = FontWeight.SemiBold)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("cloud" to "云端", "pool" to "机器池", "machine" to "我的机器").forEach { (id, label) ->
+                        FilterChip(
+                            selected = state.worker == id,
+                            onClick = { viewModel.onWorker(id) },
+                            label = { Text(label) }
+                        )
+                    }
+                }
+                if (state.worker != "cloud") {
+                    OutlinedTextField(
+                        value = state.workerName,
+                        onValueChange = viewModel::onWorkerName,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text(if (state.worker == "pool") "机器池名称" else "机器名称") },
+                        singleLine = true
+                    )
+                }
+
+                val selectedModel = state.models.find { it.id == state.selectedModelId }
+                selectedModel?.parameters?.forEach { parameter ->
+                    Text(parameter.displayName ?: parameter.id, fontWeight = FontWeight.SemiBold)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        parameter.values.forEach { option ->
+                            FilterChip(
+                                selected = state.modelParams[parameter.id] == option.value,
+                                onClick = { viewModel.onParam(parameter.id, option.value) },
+                                label = { Text(option.displayName ?: option.value) }
+                            )
+                        }
+                    }
+                }
+
+                Text("快捷指令", fontWeight = FontWeight.SemiBold)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(selected = false, onClick = { viewModel.onModeSelected(AgentMode.PLAN) }, label = { Text("/plan") })
+                    FilterChip(selected = false, onClick = { viewModel.onModeSelected(AgentMode.AGENT) }, label = { Text("/agent") })
+                    FilterChip(
+                        selected = false,
+                        onClick = { viewModel.appendPrompt("完成后打开 Pull Request，并总结改动、测试和风险。") },
+                        label = { Text("/pr") }
+                    )
+                    FilterChip(
+                        selected = false,
+                        onClick = { viewModel.appendPrompt("查看失败的 CI，定位原因并修复。") },
+                        label = { Text("/ci") }
+                    )
+                }
 
                 Text("模式", fontWeight = FontWeight.SemiBold)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -375,6 +476,58 @@ fun CreateAgentScreen(
                         .height(180.dp),
                     label = { Text("任务指令") },
                     placeholder = { Text("例如：给登录接口补上单元测试并修复失败用例") }
+                )
+                Text("已附图片 ${state.images.size}/5", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val picker = androidx.activity.compose.rememberLauncherForActivityResult(
+                        androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia()
+                    ) { uri ->
+                        uri ?: return@rememberLauncherForActivityResult
+                        val bitmap = context.contentResolver
+                            .openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it) }
+                        if (bitmap != null) viewModel.addImage(com.cursor.mobile.ui.media.bitmapToPromptImage(bitmap))
+                    }
+                    val camera = androidx.activity.compose.rememberLauncherForActivityResult(
+                        androidx.activity.result.contract.ActivityResultContracts.TakePicturePreview()
+                    ) { bitmap ->
+                        if (bitmap != null) viewModel.addImage(com.cursor.mobile.ui.media.bitmapToPromptImage(bitmap))
+                    }
+                    val voice = androidx.activity.compose.rememberLauncherForActivityResult(
+                        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+                    ) { result ->
+                        val spoken = result.data?.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS)
+                            ?.firstOrNull()
+                        if (!spoken.isNullOrBlank()) viewModel.appendPrompt(spoken)
+                    }
+                    androidx.compose.material3.OutlinedButton(onClick = {
+                        picker.launch(
+                            androidx.activity.result.PickVisualMediaRequest(
+                                androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly
+                            )
+                        )
+                    }) { Text("相册") }
+                    androidx.compose.material3.OutlinedButton(onClick = { camera.launch(null) }) { Text("拍照") }
+                    androidx.compose.material3.OutlinedButton(onClick = {
+                        val intent = android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+                            .putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL, android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                            .putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE, "zh-CN")
+                        voice.launch(intent)
+                    }) { Text("语音") }
+                }
+                OutlinedTextField(
+                    value = state.mcpName,
+                    onValueChange = viewModel::onMcpName,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("本次 MCP 名称（可选）") },
+                    singleLine = true
+                )
+                OutlinedTextField(
+                    value = state.mcpUrl,
+                    onValueChange = viewModel::onMcpUrl,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("MCP 地址") },
+                    placeholder = { Text("https://example.com/mcp") },
+                    singleLine = true
                 )
 
                 state.error?.let { ErrorBanner(it) }

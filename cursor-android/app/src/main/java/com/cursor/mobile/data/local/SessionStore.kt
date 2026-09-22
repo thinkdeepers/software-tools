@@ -39,6 +39,14 @@ class SessionStore(private val context: Context) {
         apiKeySecurePrefs.edit().remove(KEY_API).apply()
     }
 
+    fun getGithubToken(): String? = apiKeySecurePrefs.getString(KEY_GITHUB, null)
+
+    fun setGithubToken(value: String?) {
+        apiKeySecurePrefs.edit().apply {
+            if (value.isNullOrBlank()) remove(KEY_GITHUB) else putString(KEY_GITHUB, value.trim())
+        }.apply()
+    }
+
     val selectedModelId: Flow<String?> = context.dataStore.data.map { it[selectedModelKey] }
     val selectedRepoUrl: Flow<String?> = context.dataStore.data.map { it[selectedRepoKey] }
     val selectedMode: Flow<String?> = context.dataStore.data.map { it[selectedModeKey] }
@@ -63,5 +71,6 @@ class SessionStore(private val context: Context) {
 
     companion object {
         private const val KEY_API = "api_key"
+        private const val KEY_GITHUB = "github_token"
     }
 }

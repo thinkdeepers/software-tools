@@ -13,9 +13,14 @@ import com.cursor.mobile.data.model.CreateAgentRequest
 import com.cursor.mobile.data.model.CreateRunRequest
 import com.cursor.mobile.data.model.MeResponse
 import com.cursor.mobile.data.model.ModelInfo
+import com.cursor.mobile.data.model.ArtifactItem
+import com.cursor.mobile.data.model.EnvRef
+import com.cursor.mobile.data.model.McpServerConfig
 import com.cursor.mobile.data.model.ModelSelection
+import com.cursor.mobile.data.model.PromptImage
 import com.cursor.mobile.data.model.PromptPayload
 import com.cursor.mobile.data.model.RepoConfig
+import com.cursor.mobile.data.model.TokenUsage
 import com.cursor.mobile.data.model.RepositoryItem
 import com.cursor.mobile.data.model.RunStatus
 import com.cursor.mobile.data.model.RunSummary
@@ -60,24 +65,34 @@ class CursorRepository(
         model: ModelSelection?,
         mode: String?,
         autoCreatePR: Boolean,
-        name: String?
+        name: String?,
+        images: List<PromptImage> = emptyList(),
+        env: EnvRef? = null,
+        mcpServers: List<McpServerConfig> = emptyList(),
+        prUrl: String? = null
     ): Pair<AgentDetail, RunSummary> {
         val repos = repoUrl?.takeIf { it.isNotBlank() }?.let {
             listOf(
                 RepoConfig(
                     url = it.trim(),
-                    startingRef = startingRef?.takeIf { ref -> ref.isNotBlank() }
+                    startingRef = startingRef?.takeIf { ref -> ref.isNotBlank() },
+                    prUrl = prUrl?.takeIf { value -> value.isNotBlank() }
                 )
             )
         }
         val response = api.createAgent(
             CreateAgentRequest(
-                prompt = PromptPayload(text = prompt.trim()),
+                prompt = PromptPayload(
+                    text = prompt.trim(),
+                    images = images.takeIf { it.isNotEmpty() }
+                ),
                 model = model,
                 name = name?.takeIf { it.isNotBlank() },
+                env = env,
                 repos = repos,
                 autoCreatePR = autoCreatePR,
-                mode = mode
+                mode = mode,
+                mcpServers = mcpServers.takeIf { it.isNotEmpty() }
             )
         )
         return response.agent to response.run
@@ -86,11 +101,15 @@ class CursorRepository(
     suspend fun createFollowUp(
         agentId: String,
         prompt: String,
-        mode: String? = null
+        mode: String? = null,
+        images: List<PromptImage> = emptyList()
     ): RunSummary = api.createRun(
         agentId,
         CreateRunRequest(
-            prompt = PromptPayload(text = prompt.trim()),
+            prompt = PromptPayload(
+                text = prompt.trim().ifBlank { "请根据附图继续。" },
+                images = images.takeIf { it.isNotEmpty() }
+            ),
             mode = mode
         )
     ).run
@@ -103,7 +122,16 @@ class CursorRepository(
 
     suspend fun archiveAgent(agentId: String) = api.archiveAgent(agentId)
 
+    suspend fun unarchiveAgent(agentId: String) = api.unarchiveAgent(agentId)
+
     suspend fun deleteAgent(agentId: String) = api.deleteAgent(agentId)
+
+    suspend fun listArtifacts(agentId: String): List<ArtifactItem> = api.listArtifacts(agentId).items
+
+    suspend fun artifactUrl(agentId: String, path: String): String =
+        api.downloadArtifact(agentId, path).url
+
+    suspend fun usage(agentId: String): TokenUsage? = api.getUsage(agentId).totalUsage
 
     fun streamRun(agentId: String, runId: String): Flow<StreamEvent> =
         streamClient.stream(agentId, runId)

@@ -28,18 +28,18 @@
 
 可安装的正式签名包：
 
-`cursor-android/dist/Yuncheng-1.1.0.apk`
+`cursor-android/dist/Yuncheng-1.2.0.apk`
 
 - 桌面名称：云程
 - 包名：`app.yuncheng.mobile`
-- 版本：`1.1.0`（versionCode 2）
+- 版本：`1.2.0`（versionCode 3）
 - 最低系统：Android 8.0（API 26）
 - 签名：独立正式证书（不是 Android 调试证书）
 
-请安装这一份，不要再安装旧的 `CursorMobile-1.0.0.apk`。华为手机若开启了纯净模式，仍需在 **设置 → 系统和更新 → 纯净模式** 中退出，并在 **设置 → 安全 → 更多安全设置 → 安装外部来源应用** 里允许文件管理安装应用。
+这一版对齐 iOS 的云代理工作流：收件箱、模型与参数、仓库和分支、已有 PR、云端 / 机器池 / 我的机器、语音、图片、快捷指令、排队跟进、产物、GitHub diff 与 squash 合并。电脑上的 Remote Control 仍要从桌面端发起。
 
 ```bash
-adb install -r cursor-android/dist/Yuncheng-1.1.0.apk
+adb install -r cursor-android/dist/Yuncheng-1.2.0.apk
 ```
 
 ## 构建

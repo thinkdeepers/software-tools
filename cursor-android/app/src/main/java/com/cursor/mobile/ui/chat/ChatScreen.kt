@@ -52,6 +52,7 @@ import com.cursor.mobile.data.api.StreamEvent
 import com.cursor.mobile.data.model.AgentDetail
 import com.cursor.mobile.data.model.AgentMode
 import com.cursor.mobile.data.model.ChatItem
+import com.cursor.mobile.data.model.PromptImage
 import com.cursor.mobile.data.model.RunStatus
 import com.cursor.mobile.data.repository.CursorRepository
 import com.cursor.mobile.ui.components.ChatBubble
@@ -77,7 +78,10 @@ data class ChatUiState(
     val streaming: Boolean = false,
     val mode: AgentMode = AgentMode.AGENT,
     val error: String? = null,
-    val info: String? = null
+    val info: String? = null,
+    val pendingCount: Int = 0,
+    val attachmentCount: Int = 0,
+    val artifacts: List<String> = emptyList()
 )
 
 class ChatViewModel(
@@ -88,6 +92,8 @@ class ChatViewModel(
     val state: StateFlow<ChatUiState> = _state.asStateFlow()
 
     private var streamJob: Job? = null
+    private val queue = ArrayDeque<Pair<String, List<PromptImage>>>()
+    private val attachments = mutableListOf<PromptImage>()
 
     init {
         bootstrap()
@@ -129,17 +135,47 @@ class ChatViewModel(
 
     fun onModeChange(mode: AgentMode) = _state.update { it.copy(mode = mode) }
 
+    fun addImage(image: PromptImage) {
+        if (attachments.size >= 5) {
+            _state.update { it.copy(error = "最多 5 张图片") }
+            return
+        }
+        attachments += image
+        _state.update { it.copy(attachmentCount = attachments.size, error = null) }
+    }
+
     fun sendFollowUp() {
         val text = _state.value.draft.trim()
-        if (text.isEmpty() || _state.value.sending || _state.value.streaming) return
+        val images = attachments.toList()
+        if (text.isEmpty() && images.isEmpty()) return
+        if (_state.value.sending || _state.value.streaming) {
+            queue.addLast(text to images)
+            attachments.clear()
+            _state.update {
+                it.copy(
+                    draft = "",
+                    attachmentCount = 0,
+                    pendingCount = queue.size,
+                    info = "已排队 ${queue.size} 条，当前步骤结束后发送"
+                )
+            }
+            return
+        }
+        dispatch(text, images)
+    }
+
+    private fun dispatch(text: String, images: List<PromptImage>) {
+        attachments.clear()
         viewModelScope.launch {
             _state.update {
                 it.copy(
                     sending = true,
                     error = null,
+                    attachmentCount = 0,
+                    pendingCount = queue.size,
                     messages = it.messages + ChatItem.UserMessage(
                         id = UUID.randomUUID().toString(),
-                        text = text
+                        text = text.ifBlank { "（附图）" }
                     ),
                     draft = ""
                 )
@@ -148,7 +184,8 @@ class ChatViewModel(
                 repository.createFollowUp(
                     agentId = agentId,
                     prompt = text,
-                    mode = _state.value.mode.apiValue
+                    mode = _state.value.mode.apiValue,
+                    images = images
                 )
             }.onSuccess { run ->
                 _state.update {
@@ -165,6 +202,13 @@ class ChatViewModel(
                 }
             }
         }
+    }
+
+    private fun flushQueue() {
+        if (queue.isEmpty() || _state.value.sending || _state.value.streaming) return
+        val (text, images) = queue.removeFirst()
+        _state.update { it.copy(pendingCount = queue.size) }
+        dispatch(text, images)
     }
 
     fun cancelActiveRun() {
@@ -186,6 +230,23 @@ class ChatViewModel(
                 }
         }
     }
+
+    fun showArtifacts() {
+        viewModelScope.launch {
+            runCatching { repository.listArtifacts(agentId) }
+                .onSuccess { items ->
+                    _state.update {
+                        it.copy(
+                            artifacts = items.map { item -> item.path },
+                            info = if (items.isEmpty()) "这个任务还没有截图或产物" else null
+                        )
+                    }
+                }
+                .onFailure { t -> _state.update { it.copy(error = repository.mapError(t)) } }
+        }
+    }
+
+    suspend fun artifactUrl(path: String): String = repository.artifactUrl(agentId, path)
 
     fun archiveAgent(onDone: () -> Unit) {
         viewModelScope.launch {
@@ -357,6 +418,8 @@ class ChatViewModel(
                     StreamEvent.Heartbeat -> Unit
                 }
             }
+            _state.update { it.copy(streaming = false) }
+            flushQueue()
         }
     }
 
@@ -377,6 +440,9 @@ fun ChatScreen(
     agentId: String,
     repository: CursorRepository,
     onBack: () -> Unit,
+    onOpenReview: (String) -> Unit = {},
+    incomingPrompt: String = "",
+    onIncomingConsumed: () -> Unit = {},
     viewModel: ChatViewModel = viewModel(
         key = agentId,
         factory = ChatViewModel.factory(agentId, repository)
@@ -387,6 +453,14 @@ fun ChatScreen(
     var menuOpen by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
     val uriHandler = LocalUriHandler.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+
+    LaunchedEffect(incomingPrompt) {
+        if (incomingPrompt.isNotBlank()) {
+            viewModel.onDraftChange(incomingPrompt)
+            onIncomingConsumed()
+        }
+    }
 
     LaunchedEffect(state.messages.size, state.streaming) {
         if (state.messages.isNotEmpty()) {
@@ -431,6 +505,13 @@ fun ChatScreen(
                         Icon(Icons.Default.MoreVert, contentDescription = "更多")
                     }
                     DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text("产物") },
+                            onClick = {
+                                menuOpen = false
+                                viewModel.showArtifacts()
+                            }
+                        )
                         DropdownMenuItem(
                             text = { Text("刷新") },
                             onClick = {
@@ -488,6 +569,14 @@ fun ChatScreen(
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
+                    state.artifacts.forEach { path ->
+                        androidx.compose.material3.TextButton(onClick = {
+                            scope.launch {
+                                runCatching { viewModel.artifactUrl(path) }
+                                    .onSuccess { uriHandler.openUri(it) }
+                            }
+                        }) { Text(path) }
+                    }
                     LazyColumn(
                         state = listState,
                         modifier = Modifier
@@ -497,7 +586,7 @@ fun ChatScreen(
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         itemsIndexed(state.messages, key = { index, item -> "$index-${item.id}" }) { _, item ->
-                            ChatBubble(item)
+                            ChatBubble(item, onOpenReview)
                         }
                     }
 
@@ -505,6 +594,12 @@ fun ChatScreen(
                         modifier = Modifier.padding(horizontal = 12.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
+                        FilterChip(selected = false, onClick = {
+                            viewModel.onDraftChange("请根据当前 PR 的审查意见逐条修复。")
+                        }, label = { Text("/review") })
+                        FilterChip(selected = false, onClick = {
+                            viewModel.onDraftChange("查看失败的检查并修复。")
+                        }, label = { Text("/ci") })
                         AgentMode.entries.forEach { mode ->
                             FilterChip(
                                 selected = state.mode == mode,
@@ -513,6 +608,50 @@ fun ChatScreen(
                                 enabled = !state.streaming
                             )
                         }
+                    }
+                    if (state.pendingCount > 0 || state.attachmentCount > 0) {
+                        Text(
+                            text = buildString {
+                                if (state.pendingCount > 0) append("排队 ${state.pendingCount} 条  ")
+                                if (state.attachmentCount > 0) append("附图 ${state.attachmentCount}")
+                            },
+                            modifier = Modifier.padding(horizontal = 16.dp),
+                            color = MaterialTheme.colorScheme.primary,
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                    }
+                    val context = androidx.compose.ui.platform.LocalContext.current
+                    val picker = androidx.activity.compose.rememberLauncherForActivityResult(
+                        androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia()
+                    ) { uri ->
+                        val bitmap = uri?.let {
+                            context.contentResolver.openInputStream(it)?.use { stream ->
+                                android.graphics.BitmapFactory.decodeStream(stream)
+                            }
+                        }
+                        if (bitmap != null) viewModel.addImage(com.cursor.mobile.ui.media.bitmapToPromptImage(bitmap))
+                    }
+                    val voice = androidx.activity.compose.rememberLauncherForActivityResult(
+                        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+                    ) { result ->
+                        result.data?.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS)
+                            ?.firstOrNull()?.let(viewModel::onDraftChange)
+                    }
+                    Row(modifier = Modifier.padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        androidx.compose.material3.TextButton(onClick = {
+                            picker.launch(
+                                androidx.activity.result.PickVisualMediaRequest(
+                                    androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly
+                                )
+                            )
+                        }) { Text("图片") }
+                        androidx.compose.material3.TextButton(onClick = {
+                            voice.launch(
+                                android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+                                    .putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL, android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                                    .putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE, "zh-CN")
+                            )
+                        }) { Text("语音") }
                     }
                     Row(
                         modifier = Modifier
@@ -531,7 +670,7 @@ fun ChatScreen(
                         )
                         FilledIconButton(
                             onClick = viewModel::sendFollowUp,
-                            enabled = !state.sending && !state.streaming && state.draft.isNotBlank()
+                            enabled = !state.sending && (state.draft.isNotBlank() || state.attachmentCount > 0)
                         ) {
                             Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "发送")
                         }

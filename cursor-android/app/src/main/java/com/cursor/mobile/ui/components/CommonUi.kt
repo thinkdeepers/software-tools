@@ -119,7 +119,7 @@ fun AgentCard(
 }
 
 @Composable
-fun ChatBubble(item: ChatItem) {
+fun ChatBubble(item: ChatItem, onOpenPull: (String) -> Unit = {}) {
     when (item) {
         is ChatItem.UserMessage -> MessageBubble(
             title = "你",
@@ -183,6 +183,11 @@ fun ChatBubble(item: ChatItem) {
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    branch.prUrl?.let { url ->
+                        androidx.compose.material3.TextButton(onClick = { onOpenPull(url) }) {
+                            Text("打开评审")
+                        }
+                    }
                     Spacer(Modifier.height(6.dp))
                 }
             }

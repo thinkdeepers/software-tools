@@ -1,6 +1,9 @@
 package com.cursor.mobile.navigation
 
+import android.net.Uri
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -12,6 +15,7 @@ import com.cursor.mobile.ui.chat.ChatScreen
 import com.cursor.mobile.ui.create.CreateAgentScreen
 import com.cursor.mobile.ui.home.HomeScreen
 import com.cursor.mobile.ui.login.LoginScreen
+import com.cursor.mobile.ui.review.ReviewScreen
 import com.cursor.mobile.ui.settings.SettingsScreen
 
 object Routes {
@@ -20,8 +24,10 @@ object Routes {
     const val CREATE = "create"
     const val SETTINGS = "settings"
     const val CHAT = "chat/{agentId}"
+    const val REVIEW = "review?prUrl={prUrl}"
 
     fun chat(agentId: String) = "chat/$agentId"
+    fun review(prUrl: String) = "review?prUrl=${Uri.encode(prUrl)}"
 }
 
 @Composable
@@ -39,6 +45,7 @@ fun CursorNavHost(container: AppContainer) {
             LoginScreen(
                 repository = container.repository,
                 onLoggedIn = {
+                    container.watch.start()
                     navController.navigate(Routes.HOME) {
                         popUpTo(Routes.LOGIN) { inclusive = true }
                     }
@@ -48,6 +55,7 @@ fun CursorNavHost(container: AppContainer) {
         composable(Routes.HOME) {
             HomeScreen(
                 repository = container.repository,
+                watch = container.watch,
                 onOpenAgent = { id -> navController.navigate(Routes.chat(id)) },
                 onCreateAgent = { navController.navigate(Routes.CREATE) },
                 onOpenSettings = { navController.navigate(Routes.SETTINGS) }
@@ -68,8 +76,10 @@ fun CursorNavHost(container: AppContainer) {
         composable(Routes.SETTINGS) {
             SettingsScreen(
                 repository = container.repository,
+                sessionStore = container.sessionStore,
                 onBack = { navController.popBackStack() },
                 onLoggedOut = {
+                    container.watch.stop()
                     navController.navigate(Routes.LOGIN) {
                         popUpTo(0) { inclusive = true }
                     }
@@ -81,10 +91,29 @@ fun CursorNavHost(container: AppContainer) {
             arguments = listOf(navArgument("agentId") { type = NavType.StringType })
         ) { entry ->
             val agentId = entry.arguments?.getString("agentId").orEmpty()
+            val incoming by entry.savedStateHandle.getStateFlow("queuedPrompt", "").collectAsState()
             ChatScreen(
                 agentId = agentId,
                 repository = container.repository,
-                onBack = { navController.popBackStack() }
+                incomingPrompt = incoming,
+                onIncomingConsumed = { entry.savedStateHandle["queuedPrompt"] = "" },
+                onBack = { navController.popBackStack() },
+                onOpenReview = { url -> navController.navigate(Routes.review(url)) }
+            )
+        }
+        composable(
+            route = Routes.REVIEW,
+            arguments = listOf(navArgument("prUrl") { type = NavType.StringType })
+        ) { entry ->
+            val prUrl = entry.arguments?.getString("prUrl").orEmpty()
+            ReviewScreen(
+                prUrl = prUrl,
+                github = container.github,
+                onBack = { navController.popBackStack() },
+                onAskAgent = { prompt ->
+                    navController.previousBackStackEntry?.savedStateHandle?.set("queuedPrompt", prompt)
+                    navController.popBackStack()
+                }
             )
         }
     }

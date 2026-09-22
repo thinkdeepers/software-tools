@@ -42,6 +42,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.cursor.mobile.data.model.AgentSummary
 import com.cursor.mobile.data.repository.CursorRepository
+import com.cursor.mobile.notify.AgentWatch
 import com.cursor.mobile.ui.components.AgentCard
 import com.cursor.mobile.ui.components.ErrorBanner
 import com.cursor.mobile.ui.components.LoadingBlock
@@ -56,11 +57,14 @@ data class HomeUiState(
     val refreshing: Boolean = false,
     val agents: List<AgentSummary> = emptyList(),
     val accountLabel: String? = null,
+    val filter: String = "active",
+    val query: String = "",
     val error: String? = null
 )
 
 class HomeViewModel(
-    private val repository: CursorRepository
+    private val repository: CursorRepository,
+    private val watch: AgentWatch
 ) : ViewModel() {
     private val _state = MutableStateFlow(HomeUiState())
     val state: StateFlow<HomeUiState> = _state.asStateFlow()
@@ -76,9 +80,10 @@ class HomeViewModel(
             }
             runCatching {
                 val me = runCatching { repository.me() }.getOrNull()
-                val agents = repository.listAgents(includeArchived = false)
+                val agents = repository.listAgents(includeArchived = _state.value.filter == "archived")
                 me to agents
             }.onSuccess { (me, agents) ->
+                watch.publish(agents)
                 _state.update {
                     it.copy(
                         loading = false,
@@ -100,11 +105,18 @@ class HomeViewModel(
         }
     }
 
+    fun setFilter(value: String) {
+        _state.update { it.copy(filter = value) }
+        refresh()
+    }
+
+    fun setQuery(value: String) = _state.update { it.copy(query = value) }
+
     companion object {
-        fun factory(repository: CursorRepository) = object : ViewModelProvider.Factory {
+        fun factory(repository: CursorRepository, watch: AgentWatch) = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                return HomeViewModel(repository) as T
+                return HomeViewModel(repository, watch) as T
             }
         }
     }
@@ -114,10 +126,11 @@ class HomeViewModel(
 @Composable
 fun HomeScreen(
     repository: CursorRepository,
+    watch: AgentWatch,
     onOpenAgent: (String) -> Unit,
     onCreateAgent: () -> Unit,
     onOpenSettings: () -> Unit,
-    viewModel: HomeViewModel = viewModel(factory = HomeViewModel.factory(repository))
+    viewModel: HomeViewModel = viewModel(factory = HomeViewModel.factory(repository, watch))
 ) {
     val state by viewModel.state.collectAsState()
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -137,7 +150,7 @@ fun HomeScreen(
             TopAppBar(
                 title = {
                     Column {
-                        Text("Cloud Agents", fontWeight = FontWeight.Bold)
+                        Text("收件箱", fontWeight = FontWeight.Bold)
                         state.accountLabel?.let {
                             Text(
                                 text = it,
@@ -177,12 +190,43 @@ fun HomeScreen(
                 state.loading -> LoadingBlock("正在同步云代理…")
                 else -> {
                     Column(modifier = Modifier.fillMaxSize()) {
+                        androidx.compose.foundation.layout.Row(
+                            modifier = Modifier.padding(horizontal = 16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            listOf("active" to "进行中", "all" to "全部", "archived" to "归档").forEach { (id, label) ->
+                                androidx.compose.material3.FilterChip(
+                                    selected = state.filter == id,
+                                    onClick = { viewModel.setFilter(id) },
+                                    label = { Text(label) }
+                                )
+                            }
+                        }
+                        androidx.compose.material3.OutlinedTextField(
+                            value = state.query,
+                            onValueChange = viewModel::setQuery,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                            placeholder = { Text("搜索任务") },
+                            singleLine = true
+                        )
                         state.error?.let {
                             Box(modifier = Modifier.padding(16.dp)) {
                                 ErrorBanner(it)
                             }
                         }
-                        if (state.agents.isEmpty() && state.error == null) {
+                        val shown = state.agents.filter { agent ->
+                            val status = agent.status?.uppercase().orEmpty()
+                            val matchesFilter = when (state.filter) {
+                                "active" -> status in setOf("ACTIVE", "RUNNING", "CREATING")
+                                "archived" -> status == "ARCHIVED"
+                                else -> status != "ARCHIVED"
+                            }
+                            val q = state.query.trim()
+                            matchesFilter && (q.isBlank() || agent.name.orEmpty().contains(q, true) || agent.id.contains(q, true))
+                        }
+                        if (shown.isEmpty() && state.error == null) {
                             Box(
                                 modifier = Modifier.fillMaxSize(),
                                 contentAlignment = Alignment.Center
@@ -202,7 +246,7 @@ fun HomeScreen(
                                 verticalArrangement = Arrangement.spacedBy(12.dp),
                                 modifier = Modifier.fillMaxSize()
                             ) {
-                                items(state.agents, key = { it.id }) { agent ->
+                                items(shown, key = { it.id }) { agent ->
                                     AgentCard(agent = agent, onClick = { onOpenAgent(agent.id) })
                                 }
                                 item {

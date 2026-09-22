@@ -26,6 +26,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.dp
+import com.cursor.mobile.data.local.SessionStore
 import com.cursor.mobile.data.model.MeResponse
 import com.cursor.mobile.data.repository.CursorRepository
 
@@ -33,11 +34,13 @@ import com.cursor.mobile.data.repository.CursorRepository
 @Composable
 fun SettingsScreen(
     repository: CursorRepository,
+    sessionStore: SessionStore,
     onBack: () -> Unit,
     onLoggedOut: () -> Unit
 ) {
     var me by remember { mutableStateOf<MeResponse?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
+    var githubToken by remember { mutableStateOf(sessionStore.getGithubToken().orEmpty()) }
     val uriHandler = LocalUriHandler.current
 
     LaunchedEffect(Unit) {
@@ -98,6 +101,27 @@ fun SettingsScreen(
             ) {
                 Text("Cloud Agents API 文档")
             }
+            Spacer(Modifier.height(24.dp))
+            Text("GitHub 评审", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(8.dp))
+            androidx.compose.material3.OutlinedTextField(
+                value = githubToken,
+                onValueChange = { githubToken = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("GitHub Token（可选）") },
+                singleLine = true
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = { sessionStore.setGithubToken(githubToken) },
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("保存 Token") }
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = "用于读取 diff、检查、评论和 squash 合并。电脑上的 Remote Control 需要在 Cursor 桌面端执行 /remote-control，会话会出现在收件箱。密钥、环境和 MCP 目录仍在网页配置。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
             Spacer(Modifier.height(24.dp))
             Button(
                 onClick = {

@@ -10,5 +10,8 @@ class CursorApp : Application() {
     override fun onCreate() {
         super.onCreate()
         container = AppContainer(this)
+        if (container.repository.hasSession()) {
+            container.watch.start()
+        }
     }
 }

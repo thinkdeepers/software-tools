@@ -5,7 +5,9 @@ import com.cursor.mobile.data.api.CursorApi
 import com.cursor.mobile.data.api.CursorApiFactory
 import com.cursor.mobile.data.api.RunStreamClient
 import com.cursor.mobile.data.local.SessionStore
+import com.cursor.mobile.data.github.GithubClient
 import com.cursor.mobile.data.repository.CursorRepository
+import com.cursor.mobile.notify.AgentWatch
 import okhttp3.OkHttpClient
 
 class AppContainer(context: Context) {
@@ -19,4 +21,8 @@ class AppContainer(context: Context) {
     val streamClient: RunStreamClient = RunStreamClient(okHttpClient)
 
     val repository: CursorRepository = CursorRepository(api, streamClient, sessionStore)
+
+    val github: GithubClient = GithubClient { sessionStore.getGithubToken() }
+
+    val watch: AgentWatch = AgentWatch(context.applicationContext, repository)
 }

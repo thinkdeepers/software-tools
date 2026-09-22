@@ -137,14 +137,23 @@ data class PromptImage(
 )
 
 @Serializable
+data class McpServerConfig(
+    val name: String,
+    val type: String = "http",
+    val url: String
+)
+
+@Serializable
 data class CreateAgentRequest(
     val prompt: PromptPayload,
     val model: ModelSelection? = null,
     val name: String? = null,
+    val env: EnvRef? = null,
     val repos: List<RepoConfig>? = null,
     val workOnCurrentBranch: Boolean = false,
     val autoCreatePR: Boolean? = null,
-    val mode: String? = null
+    val mode: String? = null,
+    val mcpServers: List<McpServerConfig>? = null
 )
 
 @Serializable
