@@ -1,1 +1,9 @@
-软件合集
+# 软件合集
+
+本仓库包含实用软件工具集合。
+
+## Cursor Android
+
+原生 Android 客户端，通过官方 Cloud Agents API 在手机上使用 Cursor 云仓库 AI 编程（对话驱动）。
+
+详见 [`cursor-android/README.md`](cursor-android/README.md)。
