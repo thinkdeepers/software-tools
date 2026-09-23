@@ -28,18 +28,18 @@
 
 可安装的正式签名包：
 
-`cursor-android/dist/Yuncheng-1.3.0.apk`
+`cursor-android/dist/Yuncheng-1.3.1.apk`
 
 - 桌面名称：云程
 - 包名：`app.yuncheng.mobile`
-- 版本：`1.3.0`（versionCode 4）
+- 版本：`1.3.1`（versionCode 5）
 - 最低系统：Android 8.0（API 26）
 - 签名：独立正式证书（不是 Android 调试证书）
 
-这一版对齐 iOS 的云代理工作流：收件箱、模型与参数、仓库和分支、已有 PR、云端 / 机器池 / 我的机器、语音、图片、快捷指令、排队跟进、产物、GitHub diff 与 squash 合并。电脑上的 Remote Control 仍要从桌面端发起。
+首页按仓库分组，每个仓库默认展开下面的对话，标题右侧按钮可以收起或展开。对话底部可以选择模型和 High / Fast 等类型。电脑上的 Remote Control 仍要从桌面端发起。
 
 ```bash
-adb install -r cursor-android/dist/Yuncheng-1.3.0.apk
+adb install -r cursor-android/dist/Yuncheng-1.3.1.apk
 ```
 
 ## 构建

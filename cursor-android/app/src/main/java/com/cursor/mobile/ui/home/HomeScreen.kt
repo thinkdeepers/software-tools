@@ -1,9 +1,12 @@
 package com.cursor.mobile.ui.home
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -11,35 +14,40 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
-import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.cursor.mobile.data.model.AgentDetail
@@ -62,8 +70,7 @@ data class HomeUiState(
     val agents: List<AgentSummary> = emptyList(),
     val details: List<AgentDetail> = emptyList(),
     val repositories: List<RepositoryItem> = emptyList(),
-    val browsingRepo: Boolean = false,
-    val repoKey: String = "",
+    val collapsedRepos: Set<String> = emptySet(),
     val accountLabel: String? = null,
     val filter: String = "all",
     val query: String = "",
@@ -127,9 +134,13 @@ class HomeViewModel(
 
     fun setQuery(value: String) = _state.update { it.copy(query = value) }
 
-    fun openRepo(key: String) = _state.update { it.copy(browsingRepo = true, repoKey = key) }
-
-    fun closeRepo() = _state.update { it.copy(browsingRepo = false) }
+    fun toggleRepo(key: String) {
+        _state.update { state ->
+            val next = state.collapsedRepos.toMutableSet()
+            if (!next.add(key)) next.remove(key)
+            state.copy(collapsedRepos = next)
+        }
+    }
 
     companion object {
         fun factory(repository: CursorRepository, watch: AgentWatch) = object : ViewModelProvider.Factory {
@@ -153,7 +164,6 @@ fun HomeScreen(
 ) {
     val state by viewModel.state.collectAsState()
     val lifecycleOwner = LocalLifecycleOwner.current
-    BackHandler(enabled = state.browsingRepo) { viewModel.closeRepo() }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -170,10 +180,7 @@ fun HomeScreen(
             TopAppBar(
                 title = {
                     Column {
-                        Text(
-                            if (state.browsingRepo) repoTitle(state.repoKey) else "仓库",
-                            fontWeight = FontWeight.Bold
-                        )
+                        Text("仓库", fontWeight = FontWeight.Bold)
                         state.accountLabel?.let {
                             Text(
                                 text = it,
@@ -193,20 +200,11 @@ fun HomeScreen(
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.background
-                ),
-                navigationIcon = {
-                    if (state.browsingRepo) {
-                        IconButton(onClick = viewModel::closeRepo) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回仓库")
-                        }
-                    }
-                }
+                )
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = {
-                onCreateAgent(if (state.browsingRepo) state.repoKey else null)
-            }) {
+            FloatingActionButton(onClick = { onCreateAgent(null) }) {
                 Icon(Icons.Default.Add, contentDescription = "新建云任务")
             }
         }
@@ -221,55 +219,40 @@ fun HomeScreen(
             when {
                 state.loading -> LoadingBlock("正在同步云代理…")
                 else -> {
+                    val sections = buildRepoSections(
+                        repositories = state.repositories,
+                        details = state.details,
+                        filter = state.filter,
+                        query = state.query
+                    )
                     Column(modifier = Modifier.fillMaxSize()) {
-                        androidx.compose.foundation.layout.Row(
+                        Row(
                             modifier = Modifier.padding(horizontal = 16.dp),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             listOf("active" to "进行中", "all" to "全部", "archived" to "归档").forEach { (id, label) ->
-                                androidx.compose.material3.FilterChip(
+                                FilterChip(
                                     selected = state.filter == id,
                                     onClick = { viewModel.setFilter(id) },
                                     label = { Text(label) }
                                 )
                             }
                         }
-                        androidx.compose.material3.OutlinedTextField(
+                        OutlinedTextField(
                             value = state.query,
                             onValueChange = viewModel::setQuery,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 16.dp, vertical = 8.dp),
-                            placeholder = { Text("搜索任务") },
+                            placeholder = { Text("搜索任务或仓库") },
                             singleLine = true
                         )
                         state.error?.let {
-                            Box(modifier = Modifier.padding(16.dp)) {
+                            Box(modifier = Modifier.padding(horizontal = 16.dp)) {
                                 ErrorBanner(it)
                             }
                         }
-                        val shown = state.details.filter { agent ->
-                            val status = agent.status?.uppercase().orEmpty()
-                            val matchesFilter = when (state.filter) {
-                                "active" -> status in setOf("ACTIVE", "RUNNING", "CREATING")
-                                "archived" -> status == "ARCHIVED"
-                                else -> status != "ARCHIVED"
-                            }
-                            val repo = agent.repos.firstOrNull()?.url.orEmpty()
-                            val inRepo = !state.browsingRepo || repo == state.repoKey
-                            val q = state.query.trim()
-                            matchesFilter && inRepo && (
-                                q.isBlank() ||
-                                    agent.name.orEmpty().contains(q, true) ||
-                                    agent.id.contains(q, true) ||
-                                    repoTitle(repo).contains(q, true)
-                                )
-                        }
-                        val repoCards = buildRepoCards(state.repositories, state.details).filter { card ->
-                            val q = state.query.trim()
-                            q.isBlank() || card.title.contains(q, true)
-                        }
-                        if (!state.browsingRepo && repoCards.isEmpty() && state.error == null) {
+                        if (sections.isEmpty() && state.error == null) {
                             Box(
                                 modifier = Modifier.fillMaxSize(),
                                 contentAlignment = Alignment.Center
@@ -278,60 +261,50 @@ fun HomeScreen(
                                     Text("还没有仓库")
                                     Spacer(Modifier.height(8.dp))
                                     Text(
-                                        text = "连接 GitHub 后下拉刷新，或点右下角开始一个不绑定仓库的对话",
+                                        text = "连接 GitHub 后下拉刷新，或点右下角开始一个对话",
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
-                            }
-                        } else if (!state.browsingRepo) {
-                            LazyColumn(
-                                contentPadding = PaddingValues(16.dp),
-                                verticalArrangement = Arrangement.spacedBy(12.dp),
-                                modifier = Modifier.fillMaxSize()
-                            ) {
-                                items(repoCards, key = { it.key.ifBlank { "none" } }) { card ->
-                                    AgentCard(
-                                        agent = AgentSummary(
-                                            id = card.key.ifBlank { "none" },
-                                            name = card.title,
-                                            status = if (card.activeCount > 0) "ACTIVE" else "IDLE"
-                                        ),
-                                        onClick = { viewModel.openRepo(card.key) }
-                                    )
-                                    Text(
-                                        text = "${card.count} 个对话" + if (card.activeCount > 0) " · ${card.activeCount} 进行中" else "",
-                                        modifier = Modifier.padding(start = 4.dp, top = 4.dp),
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                                item { Spacer(Modifier.height(72.dp)) }
-                            }
-                        } else if (shown.isEmpty() && state.error == null) {
-                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                Text("这个仓库还没有对话，点右下角开始")
                             }
                         } else {
                             LazyColumn(
                                 contentPadding = PaddingValues(16.dp),
-                                verticalArrangement = Arrangement.spacedBy(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
                                 modifier = Modifier.fillMaxSize()
                             ) {
-                                items(shown, key = { it.id }) { agent ->
-                                    AgentCard(
-                                        agent = AgentSummary(
-                                            id = agent.id,
-                                            name = agent.name,
-                                            status = agent.status,
-                                            url = agent.url,
-                                            createdAt = agent.createdAt,
-                                            updatedAt = agent.updatedAt,
-                                            latestRunId = agent.latestRunId
-                                        ),
-                                        onClick = { onOpenAgent(agent.id) }
-                                    )
+                                sections.forEach { section ->
+                                    val expanded = section.key !in state.collapsedRepos
+                                    val stableKey = section.key.ifBlank { "none" }
+                                    item(key = "repo-$stableKey") {
+                                        RepoHeader(
+                                            title = section.title,
+                                            subtitle = section.subtitle(),
+                                            expanded = expanded,
+                                            onToggle = { viewModel.toggleRepo(section.key) }
+                                        )
+                                    }
+                                    if (expanded) {
+                                        if (section.chats.isEmpty()) {
+                                            item(key = "empty-$stableKey") {
+                                                Text(
+                                                    text = "还没有对话",
+                                                    modifier = Modifier.padding(start = 16.dp, bottom = 8.dp),
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        } else {
+                                            items(section.chats, key = { it.id }) { agent ->
+                                                AgentCard(
+                                                    agent = agent.toSummary(),
+                                                    onClick = { onOpenAgent(agent.id) },
+                                                    modifier = Modifier.padding(start = 12.dp)
+                                                )
+                                            }
+                                        }
+                                    }
                                 }
-                                item { Spacer(Modifier.height(72.dp)) }
+                                item(key = "bottom-space") { Spacer(Modifier.height(72.dp)) }
                             }
                         }
                     }
@@ -341,19 +314,105 @@ fun HomeScreen(
     }
 }
 
-private data class RepoCard(val key: String, val title: String, val count: Int, val activeCount: Int)
+@Composable
+private fun RepoHeader(
+    title: String,
+    subtitle: String,
+    expanded: Boolean,
+    onToggle: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
+            .clickable(onClick = onToggle)
+            .padding(start = 16.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        IconButton(onClick = onToggle) {
+            Icon(
+                imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                contentDescription = if (expanded) "收起对话" else "展开对话"
+            )
+        }
+    }
+}
+
+private data class RepoSection(
+    val key: String,
+    val title: String,
+    val chats: List<AgentDetail>,
+    val totalCount: Int,
+    val activeCount: Int
+) {
+    fun subtitle(): String {
+        val running = if (activeCount > 0) " · $activeCount 进行中" else ""
+        return "$totalCount 个对话$running"
+    }
+}
+
+private fun AgentDetail.repoKey(): String = repos.firstOrNull()?.url.orEmpty()
+
+private fun AgentDetail.toSummary() = AgentSummary(
+    id = id,
+    name = name,
+    status = status,
+    url = url,
+    createdAt = createdAt,
+    updatedAt = updatedAt,
+    latestRunId = latestRunId
+)
+
+private fun AgentDetail.matches(filter: String, query: String): Boolean {
+    val status = status?.uppercase().orEmpty()
+    val matchesFilter = when (filter) {
+        "active" -> status in setOf("ACTIVE", "RUNNING", "CREATING")
+        "archived" -> status == "ARCHIVED"
+        else -> status != "ARCHIVED"
+    }
+    val q = query.trim()
+    return matchesFilter && (
+        q.isBlank() ||
+            name.orEmpty().contains(q, true) ||
+            id.contains(q, true) ||
+            repoTitle(repoKey()).contains(q, true)
+        )
+}
 
 private fun repoTitle(url: String): String {
     if (url.isBlank()) return "不绑定仓库"
     return url.removePrefix("https://").removePrefix("http://").removePrefix("github.com/")
 }
 
-private fun buildRepoCards(repositories: List<RepositoryItem>, details: List<AgentDetail>): List<RepoCard> {
-    val keys = (repositories.map { it.url } + details.map { it.repos.firstOrNull()?.url.orEmpty() })
-        .distinct()
-    return keys.map { key ->
-        val agents = details.filter { it.repos.firstOrNull()?.url.orEmpty() == key }
-        val active = agents.count { it.status?.uppercase() in setOf("ACTIVE", "RUNNING", "CREATING") }
-        RepoCard(key, repoTitle(key), agents.size, active)
-    }.sortedWith(compareByDescending<RepoCard> { it.activeCount }.thenBy { it.title })
+private fun buildRepoSections(
+    repositories: List<RepositoryItem>,
+    details: List<AgentDetail>,
+    filter: String,
+    query: String
+): List<RepoSection> {
+    val q = query.trim()
+    val keys = (repositories.map { it.url } + details.map { it.repoKey() }).distinct()
+    return keys.mapNotNull { key ->
+        val shown = details.filter { it.repoKey() == key && it.matches(filter, query) }
+        val title = repoTitle(key)
+        val titleMatches = q.isBlank() || title.contains(q, true)
+        if (shown.isEmpty() && !(filter == "all" && titleMatches)) return@mapNotNull null
+        val active = shown.count { it.status?.uppercase() in setOf("ACTIVE", "RUNNING", "CREATING") }
+        RepoSection(key, title, shown, shown.size, active)
+    }.sortedWith(compareByDescending<RepoSection> { it.activeCount }.thenBy { it.title })
 }
