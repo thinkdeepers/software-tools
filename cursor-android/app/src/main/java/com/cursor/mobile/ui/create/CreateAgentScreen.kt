@@ -53,6 +53,8 @@ import com.cursor.mobile.data.model.RepositoryItem
 import com.cursor.mobile.data.repository.CursorRepository
 import com.cursor.mobile.ui.components.ErrorBanner
 import com.cursor.mobile.ui.components.LoadingBlock
+import com.cursor.mobile.ui.components.ModelPickerBar
+import com.cursor.mobile.ui.components.defaultParams
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -86,7 +88,8 @@ data class CreateUiState(
 
 class CreateViewModel(
     private val repository: CursorRepository,
-    private val sessionStore: SessionStore
+    private val sessionStore: SessionStore,
+    private val initialRepo: String = ""
 ) : ViewModel() {
     private val _state = MutableStateFlow(CreateUiState())
     val state: StateFlow<CreateUiState> = _state.asStateFlow()
@@ -107,14 +110,16 @@ class CreateViewModel(
             val repos = reposResult.getOrElse { emptyList() }
             val repoWarning = reposResult.exceptionOrNull()?.let { repository.mapError(it) }
 
+            val chosenRepo = initialRepo.ifBlank { preferredRepo ?: repos.firstOrNull()?.url }
+            val chosenModel = preferredModel ?: models.firstOrNull()?.id
             _state.update {
                 it.copy(
                     loadingMeta = false,
                     models = models,
                     repositories = repos,
-                    selectedModelId = preferredModel
-                        ?: models.firstOrNull()?.id,
-                    selectedRepoUrl = preferredRepo ?: repos.firstOrNull()?.url,
+                    selectedModelId = chosenModel,
+                    modelParams = models.find { model -> model.id == chosenModel }?.defaultParams().orEmpty(),
+                    selectedRepoUrl = chosenRepo,
                     mode = AgentMode.entries.find { m -> m.apiValue == preferredMode } ?: AgentMode.AGENT,
                     repoWarning = repoWarning,
                     error = null
@@ -129,9 +134,14 @@ class CreateViewModel(
     fun onManualRepoChange(value: String) = _state.update {
         it.copy(manualRepoUrl = value, selectedRepoUrl = null, error = null)
     }
-    fun onModelSelected(id: String?) = _state.update {
-        it.copy(selectedModelId = id?.takeIf { value -> value.isNotBlank() })
+    fun onModelSelected(id: String?) = _state.update { state ->
+        val model = state.models.find { it.id == id }
+        state.copy(
+            selectedModelId = id?.takeIf { value -> value.isNotBlank() },
+            modelParams = model?.defaultParams().orEmpty()
+        )
     }
+    fun onModelParams(params: Map<String, String>) = _state.update { it.copy(modelParams = params) }
     fun onRepoSelected(url: String?) = _state.update {
         it.copy(
             selectedRepoUrl = url?.takeIf { value -> value.isNotBlank() },
@@ -210,11 +220,11 @@ class CreateViewModel(
     }
 
     companion object {
-        fun factory(repository: CursorRepository, sessionStore: SessionStore) =
+        fun factory(repository: CursorRepository, sessionStore: SessionStore, initialRepo: String) =
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                    return CreateViewModel(repository, sessionStore) as T
+                    return CreateViewModel(repository, sessionStore, initialRepo) as T
                 }
             }
     }
@@ -225,14 +235,14 @@ class CreateViewModel(
 fun CreateAgentScreen(
     repository: CursorRepository,
     sessionStore: SessionStore,
+    initialRepo: String = "",
     onBack: () -> Unit,
     onCreated: (String) -> Unit,
     viewModel: CreateViewModel = viewModel(
-        factory = CreateViewModel.factory(repository, sessionStore)
+        factory = CreateViewModel.factory(repository, sessionStore, initialRepo)
     )
 ) {
     val state by viewModel.state.collectAsState()
-    var modelExpanded by remember { mutableStateOf(false) }
     var repoExpanded by remember { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
 
@@ -260,56 +270,13 @@ fun CreateAgentScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text("模型", fontWeight = FontWeight.SemiBold)
-                ExposedDropdownMenuBox(
-                    expanded = modelExpanded,
-                    onExpandedChange = { modelExpanded = it }
-                ) {
-                    val selectedLabel = state.models
-                        .find { it.id == state.selectedModelId }
-                        ?.label
-                        ?: state.selectedModelId
-                        ?: "使用账号默认模型"
-                    OutlinedTextField(
-                        value = selectedLabel,
-                        onValueChange = {},
-                        readOnly = true,
-                        label = { Text("选择模型") },
-                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(modelExpanded) },
-                        modifier = Modifier
-                            .menuAnchor(MenuAnchorType.PrimaryNotEditable)
-                            .fillMaxWidth()
-                    )
-                    ExposedDropdownMenu(
-                        expanded = modelExpanded,
-                        onDismissRequest = { modelExpanded = false }
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("账号默认模型") },
-                            onClick = {
-                                viewModel.onModelSelected(null)
-                                modelExpanded = false
-                            }
-                        )
-                        state.models.forEach { model ->
-                            DropdownMenuItem(
-                                text = {
-                                    Column {
-                                        Text(model.label)
-                                        Text(
-                                            text = model.id,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                },
-                                onClick = {
-                                    viewModel.onModelSelected(model.id)
-                                    modelExpanded = false
-                                }
-                            )
-                        }
-                    }
-                }
+                ModelPickerBar(
+                    models = state.models,
+                    selectedId = state.selectedModelId,
+                    params = state.modelParams,
+                    onModel = viewModel::onModelSelected,
+                    onParams = viewModel::onModelParams
+                )
 
                 Text("仓库", fontWeight = FontWeight.SemiBold)
                 state.repoWarning?.let {
@@ -399,20 +366,6 @@ fun CreateAgentScreen(
                         label = { Text(if (state.worker == "pool") "机器池名称" else "机器名称") },
                         singleLine = true
                     )
-                }
-
-                val selectedModel = state.models.find { it.id == state.selectedModelId }
-                selectedModel?.parameters?.forEach { parameter ->
-                    Text(parameter.displayName ?: parameter.id, fontWeight = FontWeight.SemiBold)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        parameter.values.forEach { option ->
-                            FilterChip(
-                                selected = state.modelParams[parameter.id] == option.value,
-                                onClick = { viewModel.onParam(parameter.id, option.value) },
-                                label = { Text(option.displayName ?: option.value) }
-                            )
-                        }
-                    }
                 }
 
                 Text("快捷指令", fontWeight = FontWeight.SemiBold)

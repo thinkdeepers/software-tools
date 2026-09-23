@@ -52,6 +52,10 @@ import com.cursor.mobile.data.api.StreamEvent
 import com.cursor.mobile.data.model.AgentDetail
 import com.cursor.mobile.data.model.AgentMode
 import com.cursor.mobile.data.model.ChatItem
+import com.cursor.mobile.data.model.ModelInfo
+import com.cursor.mobile.ui.components.defaultParams
+import com.cursor.mobile.data.model.ModelParam
+import com.cursor.mobile.data.model.ModelSelection
 import com.cursor.mobile.data.model.PromptImage
 import com.cursor.mobile.data.model.RunStatus
 import com.cursor.mobile.data.repository.CursorRepository
@@ -81,7 +85,10 @@ data class ChatUiState(
     val info: String? = null,
     val pendingCount: Int = 0,
     val attachmentCount: Int = 0,
-    val artifacts: List<String> = emptyList()
+    val artifacts: List<String> = emptyList(),
+    val models: List<ModelInfo> = emptyList(),
+    val modelId: String? = null,
+    val modelParams: Map<String, String> = emptyMap()
 )
 
 class ChatViewModel(
@@ -92,11 +99,51 @@ class ChatViewModel(
     val state: StateFlow<ChatUiState> = _state.asStateFlow()
 
     private var streamJob: Job? = null
-    private val queue = ArrayDeque<Pair<String, List<PromptImage>>>()
+    private val queue = ArrayDeque<PendingSend>()
     private val attachments = mutableListOf<PromptImage>()
+
+    private data class PendingSend(
+        val text: String,
+        val images: List<PromptImage>,
+        val model: ModelSelection?
+    )
 
     init {
         bootstrap()
+        loadModels()
+    }
+
+    fun loadModels() {
+        viewModelScope.launch {
+            val models = runCatching { repository.listModels() }.getOrElse { emptyList() }
+            val currentId = _state.value.modelId
+            val chosen = currentId ?: models.firstOrNull()?.id
+            val params = if (_state.value.modelParams.isEmpty()) {
+                models.find { it.id == chosen }?.defaultParams().orEmpty()
+            } else {
+                _state.value.modelParams
+            }
+            _state.update {
+                it.copy(models = models, modelId = chosen, modelParams = params)
+            }
+        }
+    }
+
+    fun onModelSelected(id: String?) {
+        val model = _state.value.models.find { it.id == id }
+        _state.update {
+            it.copy(
+                modelId = id?.takeIf { value -> value.isNotBlank() },
+                modelParams = model?.defaultParams().orEmpty()
+            )
+        }
+    }
+
+    fun onModelParams(params: Map<String, String>) = _state.update { it.copy(modelParams = params) }
+
+    private fun currentModel(): ModelSelection? {
+        val id = _state.value.modelId ?: return null
+        return ModelSelection(id, _state.value.modelParams.map { (key, value) -> ModelParam(key, value) })
     }
 
     private fun bootstrap() {
@@ -147,9 +194,10 @@ class ChatViewModel(
     fun sendFollowUp() {
         val text = _state.value.draft.trim()
         val images = attachments.toList()
+        val model = currentModel()
         if (text.isEmpty() && images.isEmpty()) return
         if (_state.value.sending || _state.value.streaming) {
-            queue.addLast(text to images)
+            queue.addLast(PendingSend(text, images, model))
             attachments.clear()
             _state.update {
                 it.copy(
@@ -161,10 +209,10 @@ class ChatViewModel(
             }
             return
         }
-        dispatch(text, images)
+        dispatch(text, images, model)
     }
 
-    private fun dispatch(text: String, images: List<PromptImage>) {
+    private fun dispatch(text: String, images: List<PromptImage>, model: ModelSelection?) {
         attachments.clear()
         viewModelScope.launch {
             _state.update {
@@ -185,7 +233,8 @@ class ChatViewModel(
                     agentId = agentId,
                     prompt = text,
                     mode = _state.value.mode.apiValue,
-                    images = images
+                    images = images,
+                    model = model
                 )
             }.onSuccess { run ->
                 _state.update {
@@ -206,9 +255,9 @@ class ChatViewModel(
 
     private fun flushQueue() {
         if (queue.isEmpty() || _state.value.sending || _state.value.streaming) return
-        val (text, images) = queue.removeFirst()
+        val next = queue.removeFirst()
         _state.update { it.copy(pendingCount = queue.size) }
-        dispatch(text, images)
+        dispatch(next.text, next.images, next.model)
     }
 
     fun cancelActiveRun() {
@@ -590,6 +639,15 @@ fun ChatScreen(
                         }
                     }
 
+                    com.cursor.mobile.ui.components.ModelPickerBar(
+                        models = state.models,
+                        selectedId = state.modelId,
+                        params = state.modelParams,
+                        onModel = viewModel::onModelSelected,
+                        onParams = viewModel::onModelParams,
+                        onReload = viewModel::loadModels,
+                        modifier = Modifier.padding(horizontal = 8.dp)
+                    )
                     Row(
                         modifier = Modifier.padding(horizontal = 12.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)

@@ -21,12 +21,13 @@ import com.cursor.mobile.ui.settings.SettingsScreen
 object Routes {
     const val LOGIN = "login"
     const val HOME = "home"
-    const val CREATE = "create"
+    const val CREATE = "create?repo={repo}"
     const val SETTINGS = "settings"
     const val CHAT = "chat/{agentId}"
     const val REVIEW = "review?prUrl={prUrl}"
 
     fun chat(agentId: String) = "chat/$agentId"
+    fun create(repo: String = "") = "create?repo=${Uri.encode(repo)}"
     fun review(prUrl: String) = "review?prUrl=${Uri.encode(prUrl)}"
 }
 
@@ -57,14 +58,21 @@ fun CursorNavHost(container: AppContainer) {
                 repository = container.repository,
                 watch = container.watch,
                 onOpenAgent = { id -> navController.navigate(Routes.chat(id)) },
-                onCreateAgent = { navController.navigate(Routes.CREATE) },
+                onCreateAgent = { repo -> navController.navigate(Routes.create(repo.orEmpty())) },
                 onOpenSettings = { navController.navigate(Routes.SETTINGS) }
             )
         }
-        composable(Routes.CREATE) {
+        composable(
+            route = Routes.CREATE,
+            arguments = listOf(navArgument("repo") {
+                type = NavType.StringType
+                defaultValue = ""
+            })
+        ) { entry ->
             CreateAgentScreen(
                 repository = container.repository,
                 sessionStore = container.sessionStore,
+                initialRepo = entry.arguments?.getString("repo").orEmpty(),
                 onBack = { navController.popBackStack() },
                 onCreated = { agentId ->
                     navController.navigate(Routes.chat(agentId)) {

@@ -24,6 +24,9 @@ import com.cursor.mobile.data.model.TokenUsage
 import com.cursor.mobile.data.model.RepositoryItem
 import com.cursor.mobile.data.model.RunStatus
 import com.cursor.mobile.data.model.RunSummary
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 
 class CursorRepository(
@@ -55,6 +58,25 @@ class CursorRepository(
 
     suspend fun listAgents(includeArchived: Boolean = false): List<AgentSummary> =
         api.listAgents(includeArchived = includeArchived).items
+
+    suspend fun listAgentDetails(includeArchived: Boolean = false): List<AgentDetail> = coroutineScope {
+        api.listAgents(limit = 50, includeArchived = includeArchived).items.map { summary ->
+            async {
+                runCatching { api.getAgent(summary.id) }.getOrElse {
+                    AgentDetail(
+                        id = summary.id,
+                        name = summary.name,
+                        status = summary.status,
+                        env = summary.env,
+                        url = summary.url,
+                        createdAt = summary.createdAt,
+                        updatedAt = summary.updatedAt,
+                        latestRunId = summary.latestRunId
+                    )
+                }
+            }
+        }.awaitAll()
+    }
 
     suspend fun getAgent(id: String): AgentDetail = api.getAgent(id)
 
@@ -102,7 +124,8 @@ class CursorRepository(
         agentId: String,
         prompt: String,
         mode: String? = null,
-        images: List<PromptImage> = emptyList()
+        images: List<PromptImage> = emptyList(),
+        model: ModelSelection? = null
     ): RunSummary = api.createRun(
         agentId,
         CreateRunRequest(
@@ -110,7 +133,8 @@ class CursorRepository(
                 text = prompt.trim().ifBlank { "请根据附图继续。" },
                 images = images.takeIf { it.isNotEmpty() }
             ),
-            mode = mode
+            mode = mode,
+            model = model
         )
     ).run
 

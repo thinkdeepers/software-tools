@@ -165,7 +165,8 @@ data class CreateAgentResponse(
 @Serializable
 data class CreateRunRequest(
     val prompt: PromptPayload,
-    val mode: String? = null
+    val mode: String? = null,
+    val model: ModelSelection? = null
 )
 
 @Serializable
