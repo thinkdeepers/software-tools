@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -100,21 +101,25 @@ fun ChatBubble(msg: ChatMessage) {
     val isUser = msg.sender == Sender.USER
     if (isUser) {
         Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 4.dp)
-                .clip(RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp))
-                .background(
-                    Brush.linearGradient(
-                        listOf(Color(0xFF3B63F2), Color(0xFF7C3AED))
-                    )
-                )
-                .padding(14.dp)
-                .animateContentSize()
+            modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+            contentAlignment = Alignment.CenterEnd
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("你 · ${msg.time}", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.8f))
-                Text(msg.text, color = Color.White, style = MaterialTheme.typography.bodyMedium)
+            Box(
+                modifier = Modifier
+                    .widthIn(max = 300.dp)
+                    .clip(RoundedCornerShape(18.dp, 18.dp, 6.dp, 18.dp))
+                    .background(
+                        Brush.linearGradient(
+                            listOf(Color(0xFF3B63F2), Color(0xFF7C3AED))
+                        )
+                    )
+                    .padding(horizontal = 11.dp, vertical = 8.dp)
+                    .animateContentSize()
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text("你 · ${msg.time}", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.8f))
+                    Text(msg.text, color = Color.White, style = MaterialTheme.typography.bodyMedium)
+                }
             }
         }
     } else if (msg.sender == Sender.SYSTEM) {
@@ -131,21 +136,24 @@ fun ChatBubble(msg: ChatMessage) {
             )
         }
     } else {
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 4.dp)
-                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(18.dp, 18.dp, 18.dp, 6.dp)),
-            shape = RoundedCornerShape(18.dp, 18.dp, 18.dp, 6.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant,
-            tonalElevation = 1.dp
+        Box(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+            contentAlignment = Alignment.CenterStart
         ) {
-            Column(
-                Modifier
-                    .padding(14.dp)
-                    .animateContentSize(),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
+            Surface(
+                modifier = Modifier
+                    .widthIn(max = 340.dp)
+                    .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp, 16.dp, 16.dp, 6.dp)),
+                shape = RoundedCornerShape(16.dp, 16.dp, 16.dp, 6.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                tonalElevation = 1.dp
             ) {
+                Column(
+                    Modifier
+                        .padding(horizontal = 11.dp, vertical = 8.dp)
+                        .animateContentSize(),
+                    verticalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -172,6 +180,7 @@ fun ChatBubble(msg: ChatMessage) {
                 if (msg.attachment != null) {
                     MiniCodeCard(msg.attachment)
                 }
+                }
             }
         }
     }
@@ -191,7 +200,7 @@ fun MiniCodeCard(text: String) {
     ) {
         Box(
             modifier = Modifier
-                .size(width = 3.dp, height = 28.dp)
+                .size(width = 3.dp, height = 24.dp)
                 .clip(RoundedCornerShape(999.dp))
                 .background(accentGradient())
         )
@@ -209,7 +218,7 @@ fun CodeBlock(path: String, code: String, additions: Int, deletions: Int, badge:
             .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp))
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 9.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -233,14 +242,14 @@ fun CodeBlock(path: String, code: String, additions: Int, deletions: Int, badge:
             modifier = Modifier
                 .fillMaxWidth()
                 .background(MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.6f))
-                .padding(12.dp)
+                .padding(horizontal = 10.dp, vertical = 8.dp)
         )
         Text(
             "+$additions  −$deletions",
             fontFamily = CodeFont,
             fontSize = 11.sp,
             color = CursorPalette.Success,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
         )
     }
 }
@@ -248,7 +257,7 @@ fun CodeBlock(path: String, code: String, additions: Int, deletions: Int, badge:
 @Composable
 fun DiffRow(file: DiffFile) {
     Column(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
         CodeBlock(file.path, file.preview, file.additions, file.deletions, file.status)

@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.DrawerValue
@@ -46,6 +47,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -54,10 +56,12 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.cursor.mobile.android.data.AuthRepository
 import com.cursor.mobile.android.data.FakeRepository
 import com.cursor.mobile.android.ui.navigation.Routes
 import com.cursor.mobile.android.ui.screens.ChatScreen
 import com.cursor.mobile.android.ui.screens.InboxScreen
+import com.cursor.mobile.android.ui.screens.LoginScreen
 import com.cursor.mobile.android.ui.screens.NewAgentScreen
 import com.cursor.mobile.android.ui.screens.ReviewScreen
 import com.cursor.mobile.android.ui.screens.SettingsScreen
@@ -76,8 +80,10 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun CursorMobileApp() {
+    val context = LocalContext.current
     var darkTheme by remember { mutableStateOf(false) }
     var notifications by remember { mutableStateOf(true) }
+    var loggedIn by remember { mutableStateOf(AuthRepository.isLoggedIn(context)) }
     var showSplash by remember { mutableStateOf(true) }
     LaunchedEffect(Unit) {
         delay(1100)
@@ -91,7 +97,13 @@ fun CursorMobileApp() {
                     darkTheme = darkTheme,
                     onToggleTheme = { darkTheme = it },
                     notifications = notifications,
-                    onToggleNotifications = { notifications = it }
+                    onToggleNotifications = { notifications = it },
+                    loggedIn = loggedIn,
+                    onLoggedIn = { loggedIn = true },
+                    onLogout = {
+                        AuthRepository.clear(context)
+                        loggedIn = false
+                    }
                 )
                 AnimatedVisibility(
                     visible = showSplash,
@@ -142,8 +154,12 @@ private fun MainScaffold(
     darkTheme: Boolean,
     onToggleTheme: (Boolean) -> Unit,
     notifications: Boolean,
-    onToggleNotifications: (Boolean) -> Unit
+    onToggleNotifications: (Boolean) -> Unit,
+    loggedIn: Boolean,
+    onLoggedIn: () -> Unit,
+    onLogout: () -> Unit
 ) {
+    val context = LocalContext.current
     val nav = rememberNavController()
     val drawer = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -152,6 +168,13 @@ private fun MainScaffold(
         selected = route
         scope.launch { drawer.close() }
         nav.navigate(route) { launchSingleTop = true }
+    }
+    fun requireLogin(route: String) {
+        if (loggedIn) open(route)
+        else {
+            scope.launch { drawer.close() }
+            nav.navigate(Routes.LOGIN) { launchSingleTop = true }
+        }
     }
 
     ModalNavigationDrawer(
@@ -180,18 +203,43 @@ private fun MainScaffold(
                     FakeRepository.repos.forEach {
                         Text("◈ ${it.name} (${it.branch})", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(vertical = 3.dp))
                     }
+                    if (loggedIn) {
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            "Key ${AuthRepository.maskedKey(context)}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        DrawerEntry("退出登录", false, Icons.Filled.ExitToApp) {
+                            scope.launch { drawer.close() }
+                            onLogout()
+                            nav.navigate(Routes.LOGIN) {
+                                popUpTo(0) { inclusive = true }
+                                launchSingleTop = true
+                            }
+                        }
+                    }
                 }
             }
         }
     ) {
-        NavHost(navController = nav, startDestination = Routes.INBOX) {
+        NavHost(navController = nav, startDestination = if (loggedIn) Routes.INBOX else Routes.LOGIN) {
+            composable(Routes.LOGIN) {
+                LoginScreen(onLoggedIn = {
+                    onLoggedIn()
+                    nav.navigate(Routes.INBOX) {
+                        popUpTo(Routes.LOGIN) { inclusive = true }
+                        launchSingleTop = true
+                    }
+                })
+            }
             composable(Routes.INBOX) {
                 selected = Routes.INBOX
                 InboxScreen(
                     sessions = FakeRepository.sessions,
                     onOpenDrawer = { scope.launch { drawer.open() } },
-                    onOpenChat = { nav.navigate(Routes.chat(it)) },
-                    onNewAgent = { nav.navigate(Routes.NEW_AGENT) }
+                    onOpenChat = { requireLogin(Routes.chat(it)) },
+                    onNewAgent = { requireLogin(Routes.NEW_AGENT) }
                 )
             }
             composable(Routes.NEW_AGENT) {

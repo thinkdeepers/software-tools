@@ -31,6 +31,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -39,25 +40,32 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.cursor.mobile.android.data.ChatMessage
 import com.cursor.mobile.android.data.FakeRepository
+import com.cursor.mobile.android.data.ModelTier
+import com.cursor.mobile.android.data.PrefsRepository
 import com.cursor.mobile.android.data.Sender
 import com.cursor.mobile.android.ui.components.ChatBubble
 import com.cursor.mobile.android.ui.components.ComposerBar
+import com.cursor.mobile.android.ui.components.ModelTierPicker
 import com.cursor.mobile.android.ui.components.StatusChip
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(sessionId: String, onBack: () -> Unit, onOpenReview: (String) -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val session = remember(sessionId) { FakeRepository.sessions.firstOrNull { it.id == sessionId } }
     var input by remember { mutableStateOf("") }
-    var model by remember { mutableStateOf(session?.model ?: FakeRepository.models.first()) }
+    val savedTier by PrefsRepository.tierFlow(context).collectAsState(ModelTier.BALANCED)
+    val savedModel by PrefsRepository.modelFlow(context).collectAsState(ModelTier.BALANCED.model)
     var menuOpen by remember { mutableStateOf(false) }
+    var tierOpen by remember { mutableStateOf(false) }
     val messages = remember(sessionId) { androidx.compose.runtime.mutableStateListOf(*FakeRepository.messagesFor(sessionId).toTypedArray()) }
-    val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
 
     Scaffold(
@@ -85,19 +93,31 @@ fun ChatScreen(sessionId: String, onBack: () -> Unit, onOpenReview: (String) -> 
             Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Box {
-                        ModelPill(model) { menuOpen = true }
+                        ModelPill("${savedTier.label} · $savedModel") { tierOpen = true }
                         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                             FakeRepository.models.forEach {
-                                DropdownMenuItem(text = { Text(it) }, onClick = { model = it; menuOpen = false })
+                                DropdownMenuItem(
+                                    text = { Text(it) },
+                                    onClick = {
+                                        menuOpen = false
+                                        scope.launch { PrefsRepository.saveSelection(context, ModelTier.fromModel(it), it) }
+                                    }
+                                )
                             }
                         }
                     }
                     MachinePill("Cloud machine")
                 }
+                androidx.compose.animation.AnimatedVisibility(visible = tierOpen) {
+                    ModelTierPicker(savedTier) { tier ->
+                        scope.launch { PrefsRepository.saveSelection(context, tier, tier.model) }
+                        tierOpen = false
+                    }
+                }
                 ComposerBar(
                     value = input,
                     onValueChange = { input = it },
-                    model = model,
+                    model = savedModel,
                     onSend = {
                         val text = input.trim()
                         if (text.isEmpty()) return@ComposerBar

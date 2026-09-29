@@ -30,29 +30,39 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.cursor.mobile.android.data.AgentSession
 import com.cursor.mobile.android.data.AgentStatus
 import com.cursor.mobile.android.data.FakeRepository
 import com.cursor.mobile.android.data.MachineKind
+import com.cursor.mobile.android.data.ModelTier
+import com.cursor.mobile.android.data.PrefsRepository
 import com.cursor.mobile.android.ui.components.Kicker
+import com.cursor.mobile.android.ui.components.ModelTierPicker
 import com.cursor.mobile.android.ui.theme.CursorPalette
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NewAgentScreen(onBack: () -> Unit, onLaunched: (String) -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val savedTier by PrefsRepository.tierFlow(context).collectAsState(ModelTier.BALANCED)
+    val savedModel by PrefsRepository.modelFlow(context).collectAsState(ModelTier.BALANCED.model)
     var repo by remember { mutableStateOf(FakeRepository.repos.first().name) }
     var repoMenu by remember { mutableStateOf(false) }
-    var model by remember { mutableStateOf(FakeRepository.models.first()) }
     var modelMenu by remember { mutableStateOf(false) }
     var machine by remember { mutableStateOf("Cloud machine") }
     var prompt by remember { mutableStateOf("") }
@@ -82,12 +92,23 @@ fun NewAgentScreen(onBack: () -> Unit, onLaunched: (String) -> Unit) {
                     FakeRepository.repos.forEach { DropdownMenuItem(text = { Text("${it.name} · ${it.branch}") }, onClick = { repo = it.name; repoMenu = false }) }
                 }
             }
-            Text("模型 · 机器", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleMedium)
+            Text("模型 · 强度", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleMedium)
+            ModelTierPicker(savedTier) { tier ->
+                scope.launch { PrefsRepository.saveSelection(context, tier, tier.model) }
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Box {
-                    PickerRow(model, null) { modelMenu = true }
+                    PickerRow(savedModel, null) { modelMenu = true }
                     DropdownMenu(expanded = modelMenu, onDismissRequest = { modelMenu = false }) {
-                        FakeRepository.models.forEach { DropdownMenuItem(text = { Text(it) }, onClick = { model = it; modelMenu = false }) }
+                        FakeRepository.models.forEach {
+                            DropdownMenuItem(
+                                text = { Text(it) },
+                                onClick = {
+                                    modelMenu = false
+                                    scope.launch { PrefsRepository.saveSelection(context, ModelTier.fromModel(it), it) }
+                                }
+                            )
+                        }
                     }
                 }
                 PickerRow(machine, null) {}
@@ -117,10 +138,18 @@ fun NewAgentScreen(onBack: () -> Unit, onLaunched: (String) -> Unit) {
             Button(
                 onClick = {
                     val id = "a${FakeRepository.sessions.size + 1}"
+                    val request = com.cursor.mobile.android.data.AgentRequest(
+                        repo = repo,
+                        branch = "agent/$id",
+                        prompt = prompt.ifBlank { "新任务 $id" },
+                        model = savedModel,
+                        tier = savedTier,
+                        machine = MachineKind.CLOUD
+                    )
                     FakeRepository.sessions.add(
                         AgentSession(
-                            id, prompt.ifBlank { "新任务 $id" }.take(24), repo, "agent/$id",
-                            AgentStatus.WORKING, model, MachineKind.CLOUD, "刚刚"
+                            id, request.prompt.take(24), request.repo, request.branch,
+                            AgentStatus.WORKING, request.model, request.machine, "刚刚"
                         )
                     )
                     onLaunched(id)

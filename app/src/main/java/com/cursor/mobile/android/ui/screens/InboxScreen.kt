@@ -87,9 +87,9 @@ fun InboxScreen(
                             )
                         )
                         .border(1.dp, Color.White.copy(alpha = 0.7f), RoundedCornerShape(24.dp))
-                        .padding(18.dp)
+                        .padding(horizontal = 16.dp, vertical = 14.dp)
                 ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
                         Kicker("Cloud agents · 与 iOS 同后端")
                         Text("从口袋里指挥全部 Agent", style = MaterialTheme.typography.titleLarge)
                         Text(
@@ -120,8 +120,8 @@ private fun SessionCard(s: AgentSession, onClick: () -> Unit) {
             .background(MaterialTheme.colorScheme.surface)
             .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(20.dp))
             .clickable(interactionSource = press, indication = null, onClick = onClick)
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
             Text(s.title, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f).padding(end = 8.dp))

@@ -70,7 +70,7 @@ fun ReviewScreen(sessionId: String, onBack: () -> Unit) {
                         .clip(RoundedCornerShape(20.dp))
                         .background(MaterialTheme.colorScheme.surface)
                         .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(20.dp))
-                        .padding(16.dp),
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Kicker("Pull request · 对标 iOS Review 页")
@@ -91,7 +91,7 @@ fun ReviewScreen(sessionId: String, onBack: () -> Unit) {
                         .clip(RoundedCornerShape(20.dp))
                         .background(MaterialTheme.colorScheme.surface)
                         .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(20.dp))
-                        .padding(16.dp),
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     Text("Artifacts（占位）", fontWeight = FontWeight.SemiBold)
