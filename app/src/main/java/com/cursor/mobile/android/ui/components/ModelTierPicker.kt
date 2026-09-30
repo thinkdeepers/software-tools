@@ -71,9 +71,40 @@ fun ModelTierPicker(selected: ModelTier, modelLabel: String = selected.model, on
 }
 
 @Composable
+fun ModelTierInline(selected: ModelTier, onSelect: (ModelTier) -> Unit) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        ModelTier.entries.forEach { tier ->
+            val active = tier == selected
+            Text(
+                tier.label,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
+                color = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                softWrap = false,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface)
+                    .border(
+                        1.dp,
+                        if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                        RoundedCornerShape(999.dp)
+                    )
+                    .clickable { onSelect(tier) }
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+            )
+        }
+    }
+}
+
+@Composable
 fun ModelPicker(
     selectedId: String,
     models: List<RemoteModel>,
+    compact: Boolean = false,
     onSelect: (RemoteModel) -> Unit
 ) {
     var open by rememberSaveable { mutableStateOf(false) }
@@ -84,7 +115,10 @@ fun ModelPicker(
             .background(MaterialTheme.colorScheme.surface)
             .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(999.dp))
             .clickable { open = true }
-            .padding(horizontal = 14.dp, vertical = 9.dp),
+            .padding(
+                horizontal = if (compact) 10.dp else 14.dp,
+                vertical = if (compact) 4.dp else 9.dp
+            ),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {

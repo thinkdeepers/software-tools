@@ -12,14 +12,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -27,8 +25,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -143,26 +139,41 @@ private fun looksLikeCode(text: String): Boolean {
 }
 
 @Composable
-fun MessageBody(text: String, color: Color, style: TextStyle) {
+fun MessageBody(
+    text: String,
+    color: Color,
+    style: TextStyle,
+    partSpacing: androidx.compose.ui.unit.Dp = 6.dp,
+    textAlign: androidx.compose.ui.text.style.TextAlign = androidx.compose.ui.text.style.TextAlign.Start
+) {
     val parts = remember(text) { splitMessage(text) }
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(partSpacing)) {
         parts.forEach { part ->
-            if (part.code) CodeScroll(part.text, color) else PlainScroll(part.text, color, style)
+            if (part.code) CodeScroll(part.text, color) else PlainScroll(part.text, color, style, textAlign)
         }
     }
 }
 
 @Composable
-private fun PlainScroll(text: String, color: Color, style: TextStyle) {
+private fun PlainScroll(
+    text: String,
+    color: Color,
+    style: TextStyle,
+    textAlign: androidx.compose.ui.text.style.TextAlign
+) {
     val base = style.fontSize.value
-    val line = if (base.isNaN()) 22.sp else (base + 8f).sp
+    val line = if (!style.lineHeight.value.isNaN()) style.lineHeight
+    else if (base.isNaN()) 22.sp
+    else (base + 8f).sp
     Text(
         text,
         color = color,
         style = style.copy(lineHeight = line),
+        textAlign = textAlign,
         softWrap = true,
         overflow = TextOverflow.Visible,
-        maxLines = Int.MAX_VALUE
+        maxLines = Int.MAX_VALUE,
+        modifier = Modifier.fillMaxWidth()
     )
 }
 
@@ -189,99 +200,37 @@ private fun CodeScroll(text: String, color: Color) {
     )
 }
 
+private val chatBody = TextStyle(fontSize = 14.sp, lineHeight = 17.sp)
+
 @Composable
 fun ChatBubble(msg: ChatMessage) {
-    val maxBubble = (LocalConfiguration.current.screenWidthDp * 0.72f).dp
-    val arrangement = when (msg.sender) {
-        Sender.USER -> Arrangement.End
-        Sender.SYSTEM -> Arrangement.Center
-        Sender.AGENT -> Arrangement.Start
+    val user = msg.sender == Sender.USER
+    val align = if (user) androidx.compose.ui.text.style.TextAlign.End else androidx.compose.ui.text.style.TextAlign.Start
+    val background = when (msg.sender) {
+        Sender.USER -> MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
+        Sender.SYSTEM -> MaterialTheme.colorScheme.surfaceContainer
+        Sender.AGENT -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
     }
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
-        horizontalArrangement = arrangement
-    ) {
-        when (msg.sender) {
-            Sender.USER -> UserBubble(msg, maxBubble)
-            Sender.SYSTEM -> SystemChip(msg, maxBubble)
-            Sender.AGENT -> AgentBubble(msg, maxBubble)
-        }
+    val color = when (msg.sender) {
+        Sender.SYSTEM -> MaterialTheme.colorScheme.onSurfaceVariant
+        else -> MaterialTheme.colorScheme.onSurface
     }
-}
-
-@Composable
-private fun UserBubble(msg: ChatMessage, maxBubble: androidx.compose.ui.unit.Dp) {
     Column(
         modifier = Modifier
-            .widthIn(max = maxBubble)
-            .wrapContentWidth()
-            .clip(RoundedCornerShape(18.dp, 18.dp, 6.dp, 18.dp))
-            .background(Brush.linearGradient(listOf(Color(0xFF3B63F2), Color(0xFF7C3AED))))
-            .padding(horizontal = 8.dp, vertical = 6.dp)
-            .animateContentSize(),
-        verticalArrangement = Arrangement.spacedBy(2.dp)
+            .fillMaxWidth()
+            .padding(vertical = 2.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .background(background)
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+            .animateContentSize()
     ) {
-        if (msg.time.isNotBlank()) {
-            Text("你 · ${msg.time}", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.8f))
+        if (msg.text.isNotBlank()) {
+            MessageBody(msg.text, color, chatBody, partSpacing = 2.dp, textAlign = align)
         }
-        MessageBody(msg.text, Color.White, MaterialTheme.typography.bodyMedium)
-    }
-}
-
-@Composable
-private fun SystemChip(msg: ChatMessage, maxBubble: androidx.compose.ui.unit.Dp) {
-    Column(
-        modifier = Modifier
-            .widthIn(max = maxBubble)
-            .wrapContentWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainer)
-            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp))
-            .padding(horizontal = 8.dp, vertical = 6.dp)
-    ) {
-        MessageBody(msg.text, MaterialTheme.colorScheme.onSurfaceVariant, MaterialTheme.typography.labelSmall)
-    }
-}
-
-@Composable
-private fun AgentBubble(msg: ChatMessage, maxBubble: androidx.compose.ui.unit.Dp) {
-    Surface(
-        modifier = Modifier
-            .widthIn(max = maxBubble)
-            .wrapContentWidth()
-            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp, 16.dp, 16.dp, 6.dp)),
-        shape = RoundedCornerShape(16.dp, 16.dp, 16.dp, 6.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        tonalElevation = 1.dp
-    ) {
-        Column(
-            Modifier.padding(horizontal = 8.dp, vertical = 6.dp).animateContentSize(),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(18.dp)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(accentGradient()),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("◈", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                }
-                Text(
-                    if (msg.time.isBlank()) "Agent" else "Agent · ${msg.time}",
-                    style = MaterialTheme.typography.labelMedium
-                )
-                if (msg.isStreaming) TypingDots()
-            }
-            if (msg.text.isNotBlank()) {
-                MessageBody(msg.text, MaterialTheme.colorScheme.onSurface, MaterialTheme.typography.bodyMedium)
-            }
-            if (msg.attachment != null) MiniCodeCard(msg.attachment)
+        if (msg.isStreaming) {
+            Box(Modifier.padding(top = 2.dp).align(Alignment.Start)) { TypingDots() }
         }
+        if (msg.attachment != null) MiniCodeCard(msg.attachment)
     }
 }
 

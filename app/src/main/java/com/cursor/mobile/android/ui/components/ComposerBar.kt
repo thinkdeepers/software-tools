@@ -145,7 +145,7 @@ fun ComposerBar(
             value = value,
             onValueChange = onValueChange,
             modifier = Modifier.weight(1f),
-            placeholder = { Text("$model · 描述任务，/ 唤起指令…", style = MaterialTheme.typography.bodySmall) },
+            placeholder = { Text("描述任务…", style = MaterialTheme.typography.bodySmall) },
             maxLines = 5,
             colors = TextFieldDefaults.colors(
                 focusedContainerColor = Color.Transparent,

@@ -117,7 +117,7 @@ fun NewAgentScreen(onBack: () -> Unit, onLaunched: (String) -> Unit, onSessionEx
         ) {
             Kicker("New agent · 先选分类，再选目标")
             Text("描述任务，Agent 在云端开工", style = MaterialTheme.typography.titleLarge)
-            Text("Projects 用会话上的 project / projectId，Repositories 写入 repos.url。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Projects 来自登录会话里的项目字段，Repositories 写入 repos.url。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
             Text("分类", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleMedium)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
@@ -138,7 +138,7 @@ fun NewAgentScreen(onBack: () -> Unit, onLaunched: (String) -> Unit, onSessionEx
             PickerRow(targetLabel, if (taskScope == WorkScope.REPOSITORY) selectedRepo?.branch else null) { targetOpen = true }
             if (choices.isEmpty()) {
                 Text(
-                    if (taskScope == WorkScope.PROJECT) "账号里还没有项目。项目来自同一账号 Cloud Agents 详情里的 project.id / projectId，不是 env.name。"
+                    if (taskScope == WorkScope.PROJECT) "账号里还没有项目。项目来自登录会话的 ListBackgroundComposers，按 project.id、projectId、parentBcId 或 coordinator 归组。"
                     else "账号里还没有仓库。仓库来自 GET /v1/repositories 的 items.url，没有再试 /v0/repositories。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -197,8 +197,6 @@ fun NewAgentScreen(onBack: () -> Unit, onLaunched: (String) -> Unit, onSessionEx
                 colors = fieldColors()
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                QuickChip("/review") { prompt += "/review " }
-                QuickChip("/fix-ci") { prompt += "/fix-ci " }
                 QuickChip("截图批注") {}
                 QuickChip("语音输入") {}
             }

@@ -410,8 +410,8 @@ object CursorApi {
         val trimmed = body.trim()
         if (trimmed.startsWith("<")) {
             return when (code) {
-                401 -> "API Key 无效（HTTP 401）。请到 cursor.com/dashboard → API Keys 重新复制。"
-                403 -> "API Key 没有访问 Cloud Agents 的权限（HTTP 403）。"
+                401 -> "登录凭证无效（HTTP 401）。请退出后重新用 Cursor 账号登录。"
+                403 -> "当前账号没有访问 Cloud Agents 的权限（HTTP 403）。"
                 else -> "Cursor API 错误（HTTP $code）"
             }
         }
@@ -426,9 +426,9 @@ object CursorApi {
         }.ifBlank { trimmed.replace("\\s+".toRegex(), " ").take(180) }
         val detail = listOf(apiCode, message).filter { it.isNotBlank() }.joinToString("：")
         return when (code) {
-            401 -> "API Key 无效（HTTP 401）。请到 cursor.com/dashboard → API Keys 重新复制。" +
+            401 -> "登录凭证无效（HTTP 401）。请退出后重新用 Cursor 账号登录。" +
                 if (detail.isNotBlank()) " $detail" else ""
-            403 -> "API Key 没有访问 Cloud Agents 的权限（HTTP 403）。" +
+            403 -> "当前账号没有访问 Cloud Agents 的权限（HTTP 403）。" +
                 if (detail.isNotBlank()) " $detail" else ""
             429 -> "请求过于频繁（HTTP 429），请稍后再试。"
             else -> "Cursor API 错误（HTTP $code）" + if (detail.isNotBlank()) "：$detail" else ""

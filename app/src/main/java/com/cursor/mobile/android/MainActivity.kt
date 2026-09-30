@@ -224,7 +224,7 @@ private fun MainScaffold(
                     if (loggedIn) {
                         Spacer(Modifier.height(12.dp))
                         Text(
-                            "Key ${AuthRepository.maskedKey(context)}",
+                            AuthRepository.accountLabel(context).ifBlank { "已登录" },
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

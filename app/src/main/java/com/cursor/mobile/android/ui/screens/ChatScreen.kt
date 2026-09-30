@@ -5,23 +5,19 @@ import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.RateReview
@@ -45,10 +41,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.cursor.mobile.android.data.AgentStore
 import com.cursor.mobile.android.data.ChatMessage
@@ -61,11 +55,9 @@ import com.cursor.mobile.android.ui.components.ChatBubble
 import com.cursor.mobile.android.ui.components.ComposerAttachment
 import com.cursor.mobile.android.ui.components.ComposerBar
 import com.cursor.mobile.android.ui.components.ModelPicker
-import com.cursor.mobile.android.ui.components.ModelTierPicker
+import com.cursor.mobile.android.ui.components.ModelTierInline
 import com.cursor.mobile.android.ui.components.StatusChip
 import kotlinx.coroutines.launch
-
-private val slashCommands = listOf("/remote-control", "/fix-ci", "/review", "/move-to-cloud", "/summarize")
 
 private fun attachmentName(context: android.content.Context, uri: Uri): String {
     context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
@@ -169,19 +161,22 @@ fun ChatScreen(
             )
         },
         bottomBar = {
-            Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    ModelPicker(savedModel, modelChoices(catalog.toList())) { model ->
+            Column(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    ModelPicker(savedModel, modelChoices(catalog.toList()), compact = true) { model ->
                         picked = true
                         savedModel = model.id
                         scope.launch { PrefsRepository.saveSelection(context, savedTier, model.id) }
                     }
-                    MachinePill("Cloud")
-                }
-                ModelTierPicker(savedTier, savedModel) { tier ->
-                    picked = true
-                    savedTier = tier
-                    scope.launch { PrefsRepository.saveSelection(context, tier, savedModel) }
+                    ModelTierInline(savedTier) { tier ->
+                        picked = true
+                        savedTier = tier
+                        scope.launch { PrefsRepository.saveSelection(context, tier, savedModel) }
+                    }
                 }
                 ComposerBar(
                     value = input,
@@ -247,20 +242,8 @@ fun ChatScreen(
         LazyColumn(
             state = listState,
             reverseLayout = true,
-            modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 14.dp)
+            modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 12.dp)
         ) {
-            item {
-                Row(
-                    modifier = Modifier
-                        .padding(vertical = 10.dp)
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    slashCommands.forEach { cmd ->
-                        SuggestChip(cmd) { input = "$cmd " }
-                    }
-                }
-            }
             items(messages.asReversed(), key = { it.id }) { message ->
                 ChatBubble(message)
             }
@@ -293,38 +276,4 @@ fun ChatScreen(
             }
         }
     }
-}
-
-@Composable
-private fun MachinePill(text: String) {
-    Text(
-        text,
-        style = MaterialTheme.typography.labelMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier
-            .clip(RoundedCornerShape(999.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainer)
-            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(999.dp))
-            .padding(horizontal = 12.dp, vertical = 7.dp)
-    )
-}
-
-@Composable
-private fun SuggestChip(cmd: String, onClick: () -> Unit) {
-    Text(
-        cmd,
-        fontFamily = com.cursor.mobile.android.ui.theme.CodeFont,
-        style = MaterialTheme.typography.labelMedium,
-        color = MaterialTheme.colorScheme.primary,
-        maxLines = 1,
-        softWrap = false,
-        overflow = TextOverflow.Clip,
-        modifier = Modifier
-            .wrapContentWidth(unbounded = true)
-            .clip(RoundedCornerShape(999.dp))
-            .background(MaterialTheme.colorScheme.surface)
-            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(999.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 7.dp)
-    )
 }

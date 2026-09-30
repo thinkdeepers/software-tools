@@ -53,34 +53,45 @@ object AgentStore {
     }
 
     suspend fun refresh(context: Context) {
-        val key = AuthRepository.apiKey(context) ?: throw CursorApi.Unauthorized("未登录")
+        val token = AuthRepository.accessToken(context) ?: throw CursorApi.Unauthorized("未登录")
         gate.withLock {
             loading = true
             error = null
             try {
-                val bundle = withContext(Dispatchers.IO) { fetchBundle(key) }
+                val sync = CursorSession.sync(token)
+                var merged = linkProjectNames(sync.composers.map { mapComposer(it) })
+                val key = AuthRepository.apiKey(context)
+                if (key != null) {
+                    try {
+                        val bundle = withContext(Dispatchers.IO) { fetchBundle(key) }
+                        merged = linkProjectNames(mergeDesktop(merged, bundle.sessions))
+                        merged = linkProjectNames(enrichRepos(key, merged))
+                        if (bundle.models.isNotEmpty()) {
+                            catalog.clear()
+                            catalog.addAll(bundle.models)
+                        }
+                        if (bundle.account.isNotBlank()) accountLabel = bundle.account
+                    } catch (_: Exception) {
+                        // 会话已经能列项目；Cloud Agents 凭证失败时不把列表清空
+                    }
+                }
+                val email = AuthRepository.accountLabel(context)
+                if (email.isNotBlank()) accountLabel = email
                 sessions.clear()
-                sessions.addAll(bundle.sessions)
-                if (bundle.models.isNotEmpty()) {
-                    catalog.clear()
-                    catalog.addAll(bundle.models)
+                sessions.addAll(merged)
+                projects.clear()
+                sync.projects.forEach { item ->
+                    if (projects.none { (item.id.isNotBlank() && it.id == item.id) || it.name.equals(item.name, true) }) {
+                        projects.add(item)
+                    }
                 }
-                if (bundle.account.isNotBlank()) accountLabel = bundle.account
-                loading = false
-                val enriched = linkProjectNames(enrichRepos(key, sessions.toList()))
-                enriched.forEach { updated ->
-                    val index = sessions.indexOfFirst { it.id == updated.id }
-                    if (index >= 0) sessions[index] = updated
-                }
+                projectsLoaded = true
+                absorbTargets()
+                reposLoaded = false
                 try {
                     ensureRepos(context)
                 } catch (_: Exception) {
-                    // 仓库目录失败时仍用会话上的 repos.url
-                }
-                try {
-                    ensureProjects(context)
-                } catch (_: Exception) {
-                    // /v1/me 没有项目数组时，仍用会话详情里的 project 字段
+                    // 仓库目录失败时仍用会话上的仓库地址
                 }
                 absorbTargets()
                 if (!scopeTouched) {
@@ -125,19 +136,13 @@ object AgentStore {
 
     suspend fun ensureProjects(context: Context) {
         if (projectsLoaded) return
-        val key = AuthRepository.apiKey(context) ?: return
-        val loaded = withContext(Dispatchers.IO) { CursorApi.listProjects(key) }
-        loaded.forEach { item ->
-            if (projects.none { (item.id.isNotBlank() && it.id == item.id) || it.name.equals(item.name, true) }) {
-                projects.add(item)
-            }
-        }
+        if (AuthRepository.accessToken(context) == null) return
         absorbTargets()
         projectsLoaded = true
     }
 
     suspend fun loadMessages(context: Context, agentId: String): List<ChatMessage> {
-        val key = AuthRepository.apiKey(context) ?: throw CursorApi.Unauthorized("未登录")
+        val key = cloudKey(context)
         hydrate(context, agentId)
         return withContext(Dispatchers.IO) { fetchMessages(key, agentId) }
     }
@@ -171,7 +176,7 @@ object AgentStore {
     }
 
     suspend fun create(context: Context, request: AgentRequest): String {
-        val key = AuthRepository.apiKey(context) ?: throw CursorApi.Unauthorized("未登录")
+        val key = cloudKey(context)
         if (catalog.isEmpty()) {
             val models = withContext(Dispatchers.IO) { CursorApi.listModels(key) }
             if (models.isNotEmpty()) {
@@ -238,7 +243,7 @@ object AgentStore {
         modelName: String,
         onDelta: (String) -> Unit
     ): Boolean {
-        val key = AuthRepository.apiKey(context) ?: throw CursorApi.Unauthorized("未登录")
+        val key = cloudKey(context)
         val selection = selectModel(tier, modelName, catalog.toList())
         val started = withContext(Dispatchers.IO) { CursorApi.startRun(key, agentId, text, selection) }
         withContext(Dispatchers.IO) {
@@ -247,6 +252,12 @@ object AgentStore {
             }
         }
         return started.modelSent
+    }
+
+    private fun cloudKey(context: Context): String {
+        if (AuthRepository.accessToken(context) == null) throw CursorApi.Unauthorized("未登录")
+        return AuthRepository.apiKey(context)
+            ?: throw CursorApi.ApiException("已登录，但没有换发 Cloud Agents 凭证。请退出后重新登录。")
     }
 
     private fun fetchBundle(apiKey: String): Bundle {

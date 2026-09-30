@@ -157,12 +157,12 @@ fun InboxScreen(
                 }
             }
             if (!loading && visible.isEmpty() && pending > 0) {
-                item { EmptyState("正在区分项目和仓库", "正在拉会话详情里的 project 字段和 repos.url。") }
+                item { EmptyState("正在区分项目和仓库", "正在用登录会话补齐 project 字段和仓库地址。") }
             }
             if (!loading && visible.isEmpty() && pending == 0 && error.isNullOrBlank()) {
                 item {
                     if (scope == WorkScope.PROJECT) {
-                        EmptyState("还没有项目会话", "只收录带 project.id、projectId 或 coordinator 关联的会话。没有仓库不会被当成项目。")
+                        EmptyState("还没有项目会话", "只收录登录会话里带 project.id、projectId、parentBcId 或 coordinator 的会话，并按这个项目归组。没有仓库不会被当成项目。")
                     } else {
                         EmptyState("还没有仓库会话", "带 repos.url 或 source.repository 的会话会归在这里。")
                     }
