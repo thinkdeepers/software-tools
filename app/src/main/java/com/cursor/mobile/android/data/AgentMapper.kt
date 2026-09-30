@@ -54,15 +54,18 @@ internal fun mapV1Agent(obj: JSONObject, modelLabel: String = ""): AgentSession 
 // Projects 只收：composerType、type、kind、isProject、isCoordinator 标成项目的条目，
 // 或者整批里占少数、且没有仓库地址的协调项目（名字用它自己的 name，这才是左侧项目名）。
 // 分不清单批时，不要把全部会话放进 Projects。
-internal fun mapDesktopComposers(items: List<JSONObject>): List<AgentSession> {
-    val repoUrls = items.map { readRepoUrl(it) }
-    val marked = items.map { explicitProject(it) }
-    val noRepo = repoUrls.count { it.isBlank() }
-    val withRepo = items.size - noRepo
-    val noRepoAreProjects = marked.none { it } && noRepo in 1..12 && withRepo > noRepo
-    return items.mapIndexed { index, obj ->
-        mapComposer(obj, repoUrls[index], marked[index], noRepoAreProjects)
-    }
+internal fun mapDesktopComposers(items: List<JSONObject>): List<AgentSession> = items.map { composerSession(it) }
+
+internal fun projectMetadataReport(items: List<JSONObject>): String {
+    val named = items.mapNotNull { projectMetadata(it)?.name }.distinct()
+    val filled = items.count { projectMetadata(it) != null }
+    return buildString {
+        appendLine("composer ${items.size} 条")
+        appendLine("projectMetadata 有名称 $filled 条")
+        appendLine("projectMetadata 为空 ${items.size - filled} 条")
+        appendLine("项目组 ${named.size} 个")
+        if (named.isNotEmpty()) appendLine(named.joinToString("、"))
+    }.trim()
 }
 
 internal fun desktopFieldReport(items: List<JSONObject>): String {
@@ -386,7 +389,56 @@ private fun readProject(obj: JSONObject): ProjectHit? {
     return ProjectHit(resolvedId.ifBlank { label }, label)
 }
 
-internal fun jsonHasProject(obj: JSONObject): Boolean = readProject(obj) != null
+internal fun jsonHasProject(obj: JSONObject): Boolean = projectMetadata(obj) != null
+
+private fun composerSession(obj: JSONObject): AgentSession {
+    val id = obj.optStr("bcId").ifBlank { obj.optStr("bc_id") }.ifBlank { obj.optStr("composerId") }.ifBlank { obj.optStr("id") }
+    val repoUrl = readRepoUrl(obj)
+    val branchName = obj.optStr("branchName").ifBlank { obj.optStr("branch_name") }
+        .ifBlank { obj.optStr("branch") }.ifBlank { obj.optStr("baseBranch") }.ifBlank { obj.optStr("startingCommit") }
+    val iso = readInstant(obj)
+    val title = obj.optStr("name").ifBlank { obj.optStr("title") }.ifBlank { obj.optStr("summary") }.ifBlank { "未命名会话" }
+    val archived = obj.optBoolean("isArchived", false) || obj.optBoolean("is_archived", false)
+    val statusRaw = obj.optStr("status").ifBlank { obj.optStr("composerStatus") }.ifBlank { if (archived) "ARCHIVED" else "" }
+    val meta = projectMetadata(obj)
+    return AgentSession(
+        id = id,
+        title = title,
+        repo = "",
+        branch = branchName,
+        status = mapAgentStatus(statusRaw),
+        model = obj.optStr("model").ifBlank { obj.optJSONObject("modelDetails")?.optStr("modelName").orEmpty() },
+        machine = MachineKind.CLOUD,
+        updatedAt = formatTime(iso),
+        source = "desktop-session",
+        webUrl = obj.optStr("url"),
+        summary = obj.optStr("summary").ifBlank { obj.optStr("prompt") }.take(180),
+        updatedAtIso = iso,
+        scope = if (meta != null) WorkScope.PROJECT else null,
+        envName = meta?.name.orEmpty(),
+        projectId = meta?.id.orEmpty(),
+        repoUrl = repoUrl,
+        groupLabel = meta?.name.orEmpty(),
+        classified = true
+    )
+}
+
+private fun projectMetadata(obj: JSONObject): ProjectHit? {
+    val raw = obj.opt("projectMetadata") ?: obj.opt("project_metadata") ?: return null
+    val meta = when (raw) {
+        is JSONObject -> raw
+        is String -> if (raw.trim().startsWith("{")) try { JSONObject(raw) } catch (_: Exception) { null } else null
+        else -> null
+    } ?: return null
+    if (meta.length() == 0) return null
+    val nested = meta.optJSONObject("project") ?: meta
+    val id = nested.optStr("id").ifBlank { nested.optStr("projectId") }.ifBlank { nested.optStr("project_id") }
+        .ifBlank { meta.optStr("id") }.ifBlank { meta.optStr("projectId") }
+    val name = nested.optStr("displayName").ifBlank { nested.optStr("name") }.ifBlank { nested.optStr("title") }
+        .ifBlank { meta.optStr("displayName") }.ifBlank { meta.optStr("name") }.ifBlank { meta.optStr("projectName") }
+    if (id.isBlank() && name.isBlank()) return null
+    return ProjectHit(id.ifBlank { name }, name.ifBlank { id })
+}
 
 private fun scanProjectFields(obj: JSONObject): Pair<String, String>? {
     val keys = obj.keys()

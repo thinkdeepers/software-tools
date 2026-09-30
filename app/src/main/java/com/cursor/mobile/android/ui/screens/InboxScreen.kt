@@ -109,11 +109,12 @@ fun InboxScreen(
         containerColor = MaterialTheme.colorScheme.background
     ) { padding ->
         val scope = AgentStore.scope
-        val visible = sessions.filter { it.scope == scope }
+        val projectSessions = sessions.filter { it.scope == WorkScope.PROJECT }
+        val projectGroups = projectSessions.groupBy { it.groupLabel.ifBlank { "未命名项目" } }
+        val repoList = AgentStore.repos
         val pending = sessions.count { !it.classified }
-        val groups = visible.groupBy { it.groupLabel.ifBlank { if (scope == WorkScope.PROJECT) "未命名项目" else "未命名仓库" } }
         Column(Modifier.fillMaxSize().padding(padding)) {
-        ScopeSwitch(scope, sessions.count { it.scope == WorkScope.PROJECT }, sessions.count { it.scope == WorkScope.REPOSITORY }) {
+        ScopeSwitch(scope, projectGroups.size, repoList.size) {
             AgentStore.choose(it)
         }
         LazyColumn(
@@ -137,8 +138,8 @@ fun InboxScreen(
                         Kicker("Cloud Agents")
                         Text("从口袋里指挥全部 Agent", style = MaterialTheme.typography.titleLarge)
                         Text(
-                            if (scope == WorkScope.PROJECT) "Projects · ${visible.size} 个项目会话"
-                            else "Repositories · ${visible.size} 个仓库会话",
+                            if (scope == WorkScope.PROJECT) "Projects · ${projectGroups.size} 个项目"
+                            else "Repositories · ${repoList.size} 个仓库",
                             style = MaterialTheme.typography.bodySmall,
                             color = CursorPalette.LightMuted
                         )
@@ -154,17 +155,17 @@ fun InboxScreen(
             }
             val summary = AgentStore.syncSummary
             val report = AgentStore.syncReport
-            if (summary.isNotBlank()) {
+            if (summary.isNotBlank() && scope == WorkScope.PROJECT && projectGroups.isEmpty()) {
+                item { Text(summary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            }
+            if (report.isNotBlank()) {
                 item {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(summary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        if (report.isNotBlank()) {
-                            TextButton(onClick = { showSyncDetail = !showSyncDetail }) {
-                                Text(if (showSyncDetail) "收起同步详情" else "查看同步详情")
-                            }
-                            if (showSyncDetail) {
-                                Text(report, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
+                    Column {
+                        TextButton(onClick = { showSyncDetail = !showSyncDetail }) {
+                            Text(if (showSyncDetail) "收起同步详情" else "查看同步详情")
+                        }
+                        if (showSyncDetail) {
+                            Text(report, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 }
@@ -177,27 +178,40 @@ fun InboxScreen(
                     }
                 }
             }
-            if (!loading && visible.isEmpty() && pending > 0) {
-                item { EmptyState("正在区分项目和仓库", "正在用登录会话补齐 project 字段和仓库地址。") }
+            if (!loading && scope == WorkScope.PROJECT && projectGroups.isEmpty() && pending > 0) {
+                item { EmptyState("正在补齐项目", "列表里的 projectMetadata 是空的，正在拉会话详情。") }
             }
-            if (!loading && visible.isEmpty() && pending == 0 && error.isNullOrBlank()) {
-                item {
-                    if (scope == WorkScope.PROJECT) {
-                        EmptyState(
-                            "还没有项目",
-                            summary.ifBlank { "服务器返回 0 条会话。" }
-                        )
-                    } else {
-                        EmptyState("还没有仓库会话", "带 repos.url 或 source.repository 的会话会归在这里。")
+            if (!loading && scope == WorkScope.PROJECT && projectGroups.isEmpty() && pending == 0 && error.isNullOrBlank()) {
+                item { EmptyState("还没有项目", summary.ifBlank { "projectMetadata 里还没有项目名称。" }) }
+            }
+            if (!loading && scope == WorkScope.REPOSITORY && repoList.isEmpty() && error.isNullOrBlank()) {
+                item { EmptyState("还没有仓库", "仓库来自会话的 repoUrl，每个地址只列一次。") }
+            }
+            if (scope == WorkScope.PROJECT) {
+                for ((label, grouped) in projectGroups) {
+                    item(key = "group-$label") {
+                        Text(label, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleMedium)
+                    }
+                    items(grouped, key = { it.id }) { s ->
+                        SessionCard(s) { onOpenChat(s.id) }
                     }
                 }
-            }
-            for ((label, grouped) in groups) {
-                item(key = "group-${scope.name}-$label") {
-                    Text(label, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleMedium)
-                }
-                items(grouped, key = { it.id }) { s ->
-                    SessionCard(s) { onOpenChat(s.id) }
+            } else {
+                items(repoList, key = { it.url.ifBlank { it.name } }) { repo ->
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(MaterialTheme.colorScheme.surface)
+                            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(20.dp))
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(repo.name, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyLarge)
+                        if (repo.url.isNotBlank()) {
+                            Text(repo.url, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
                 }
             }
             item { Box(Modifier.size(72.dp)) }

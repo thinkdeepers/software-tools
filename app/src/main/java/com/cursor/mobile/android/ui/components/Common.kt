@@ -149,9 +149,117 @@ fun MessageBody(
     val parts = remember(text) { splitMessage(text) }
     Column(verticalArrangement = Arrangement.spacedBy(partSpacing)) {
         parts.forEach { part ->
-            if (part.code) CodeScroll(part.text, color) else PlainScroll(part.text, color, style, textAlign)
+            if (part.code) CodeScroll(part.text, color) else MarkdownBlock(part.text, color, style, textAlign)
         }
     }
+}
+
+private sealed class MdLine {
+    data class Heading(val level: Int, val text: String) : MdLine()
+    data class Bullet(val text: String) : MdLine()
+    data class Paragraph(val text: String) : MdLine()
+}
+
+private fun markdownLines(raw: String): List<MdLine> {
+    val lines = normalizeBreaks(raw).split('\n')
+    val out = mutableListOf<MdLine>()
+    val paragraph = StringBuilder()
+    fun flush() {
+        val text = paragraph.toString().trim()
+        if (text.isNotBlank()) out += MdLine.Paragraph(text)
+        paragraph.clear()
+    }
+    lines.forEach { line ->
+        val trimmed = line.trim()
+        val heading = Regex("^(#{1,3})\\s+(.+)$").find(trimmed)
+        val bullet = Regex("^([-*+]|\\d+[.)])\\s+(.+)$").find(trimmed)
+        when {
+            trimmed.isEmpty() -> flush()
+            heading != null -> {
+                flush()
+                out += MdLine.Heading(heading.groupValues[1].length, heading.groupValues[2])
+            }
+            bullet != null -> {
+                flush()
+                out += MdLine.Bullet(bullet.groupValues[2])
+            }
+            else -> {
+                if (paragraph.isNotEmpty()) paragraph.append(' ')
+                paragraph.append(trimmed)
+            }
+        }
+    }
+    flush()
+    return out
+}
+
+@Composable
+private fun MarkdownBlock(
+    text: String,
+    color: Color,
+    style: TextStyle,
+    textAlign: androidx.compose.ui.text.style.TextAlign
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        markdownLines(text).forEach { line ->
+            when (line) {
+                is MdLine.Heading -> Text(
+                    inlineMarkdown(line.text, color),
+                    color = color,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = when (line.level) {
+                        1 -> 16.sp
+                        2 -> 15.sp
+                        else -> 14.sp
+                    },
+                    lineHeight = style.lineHeight,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                is MdLine.Bullet -> Text(
+                    inlineMarkdown("• ${line.text}", color),
+                    color = color,
+                    style = style,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                is MdLine.Paragraph -> Text(
+                    inlineMarkdown(line.text, color),
+                    color = color,
+                    style = style,
+                    textAlign = textAlign,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+    }
+}
+
+private fun inlineMarkdown(text: String, color: Color): androidx.compose.ui.text.AnnotatedString {
+    val builder = androidx.compose.ui.text.AnnotatedString.Builder()
+    val pattern = Regex("\\*\\*(.+?)\\*\\*|`([^`]+)`")
+    var index = 0
+    pattern.findAll(text).forEach { match ->
+        if (match.range.first > index) builder.append(text.substring(index, match.range.first))
+        val bold = match.groupValues[1]
+        val code = match.groupValues[2]
+        if (bold.isNotEmpty()) {
+            builder.pushStyle(androidx.compose.ui.text.SpanStyle(fontWeight = FontWeight.Bold, color = color))
+            builder.append(bold)
+            builder.pop()
+        } else {
+            builder.pushStyle(
+                androidx.compose.ui.text.SpanStyle(
+                    fontFamily = CodeFont,
+                    background = androidx.compose.ui.graphics.Color(0x14000000),
+                    color = color
+                )
+            )
+            builder.append(code)
+            builder.pop()
+        }
+        index = match.range.last + 1
+    }
+    if (index < text.length) builder.append(text.substring(index))
+    return builder.toAnnotatedString()
 }
 
 @Composable

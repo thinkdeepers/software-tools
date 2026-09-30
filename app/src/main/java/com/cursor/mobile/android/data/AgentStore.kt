@@ -63,7 +63,7 @@ object AgentStore {
             error = null
             try {
                 val sync = CursorSession.sync(token, AuthRepository.apiKey(context))
-                syncReport = sync.report + "\n" + desktopFieldReport(sync.composers)
+                syncReport = sync.report
                 syncSummary = summarizeSync(sync.httpCode, sync.composers.size, 0, 0)
                 if (sync.httpCode == 401 || sync.httpCode == 403) {
                     throw CursorApi.Unauthorized(syncSummary.ifBlank { "登录已失效（HTTP ${sync.httpCode}）" })
@@ -143,8 +143,11 @@ object AgentStore {
         if (reposLoaded) return
         val key = AuthRepository.apiKey(context) ?: return
         val loaded = withContext(Dispatchers.IO) { CursorApi.listRepos(key) }
-        repos.clear()
-        repos.addAll(loaded)
+        loaded.forEach { item ->
+            if (repos.none { (item.url.isNotBlank() && it.url == item.url) || it.name.equals(item.name, true) }) {
+                repos.add(item)
+            }
+        }
         reposLoaded = true
     }
 
@@ -241,10 +244,8 @@ object AgentStore {
             ) {
                 projects.add(ProjectRef(session.envName, session.projectId, session.repoUrl))
             }
-            if (session.scope == WorkScope.REPOSITORY && session.repo.isNotBlank() &&
-                repos.none { it.name.equals(session.repo, true) }
-            ) {
-                repos.add(RepoRef(session.repo, session.branch.ifBlank { "main" }, session.repoUrl))
+            if (session.repoUrl.isNotBlank() && repos.none { it.url == session.repoUrl || it.name.equals(shortRepo(session.repoUrl), true) }) {
+                repos.add(RepoRef(shortRepo(session.repoUrl), session.branch.ifBlank { "main" }, session.repoUrl))
             }
         }
     }
@@ -274,7 +275,7 @@ object AgentStore {
         code !in 200..299 -> "列表请求失败（HTTP $code）。"
         total == 0 -> "服务器返回 0 条会话。"
         projects > 0 -> ""
-        repos > 0 -> "带仓库地址的 $repos 条在 Repositories。Projects 只保留无仓库的协调项目或带项目标记的条目，计数在同步详情里。"
+        projects == 0 && total > 0 -> "还没有从 projectMetadata 分出项目。"
         else -> "同步到 $total 条会话，但没有可归类的项目或仓库。"
     }
 

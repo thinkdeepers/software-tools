@@ -168,15 +168,13 @@ object CursorSession {
         } else {
             listed.composers
         }
-        val sampleKeys = enriched.firstOrNull()?.let { jsonKeys(it) }.orEmpty().ifBlank { "无" }
-        val projectCount = enriched.count { jsonHasProject(it) }
         val report = buildString {
             notes.forEachIndexed { index, note ->
                 if (index > 0) append("\n")
                 append(note)
             }
-            append("\n解析：composer ${enriched.size} 条，其中带项目字段 $projectCount 条。")
-            append("\n首条字段：$sampleKeys")
+            append("\n")
+            append(projectMetadataReport(enriched))
         }
         ComposerSync(enriched, listed.projects, report, listed.code)
     }
@@ -265,10 +263,9 @@ object CursorSession {
             }
         }
         val note = buildString {
-            append("POST aiserver.v1.BackgroundComposerService/ListBackgroundComposers")
-            append("\nHTTP $lastCode，本页累计 ${merged.size} 条。")
-            append("\n响应摘要：${snippet(lastBody)}")
-            if (web != null) append("\n网页 list HTTP ${web.code}：${snippet(web.raw)}")
+            appendLine("ListBackgroundComposers")
+            appendLine("HTTP $lastCode")
+            append("composer ${merged.size} 条")
         }
         return Listed(merged.values.toList(), projects, lastCode, note)
     }
