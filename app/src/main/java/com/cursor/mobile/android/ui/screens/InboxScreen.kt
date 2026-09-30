@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
@@ -34,8 +35,10 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -72,6 +75,7 @@ fun InboxScreen(
     val sessions = AgentStore.sessions
     val loading = AgentStore.loading
     val error = AgentStore.error
+    var showSyncDetail by remember { mutableStateOf(false) }
     fun reload() {
         scope.launch {
             try {
@@ -148,13 +152,24 @@ fun InboxScreen(
                     }
                 }
             }
+            val summary = AgentStore.syncSummary
             val report = AgentStore.syncReport
-            if (report.isNotBlank()) {
+            if (summary.isNotBlank()) {
                 item {
-                    Text(report, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(summary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (report.isNotBlank()) {
+                            TextButton(onClick = { showSyncDetail = !showSyncDetail }) {
+                                Text(if (showSyncDetail) "收起同步详情" else "查看同步详情")
+                            }
+                            if (showSyncDetail) {
+                                Text(report, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    }
                 }
             }
-            if (!error.isNullOrBlank()) {
+            if (!error.isNullOrBlank() && error != summary) {
                 item {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
@@ -169,8 +184,8 @@ fun InboxScreen(
                 item {
                     if (scope == WorkScope.PROJECT) {
                         EmptyState(
-                            "还没有项目会话",
-                            report.ifBlank { "ListBackgroundComposers 没有返回带项目字段的会话。没有仓库不会被当成项目。" }
+                            "还没有项目",
+                            summary.ifBlank { "服务器没有返回带项目字段的会话。没有仓库不会被当成项目。" }
                         )
                     } else {
                         EmptyState("还没有仓库会话", "带 repos.url 或 source.repository 的会话会归在这里。")

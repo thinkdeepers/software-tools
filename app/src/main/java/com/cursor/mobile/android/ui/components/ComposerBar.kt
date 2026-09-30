@@ -15,8 +15,10 @@ import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -27,8 +29,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextField
-import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -38,8 +38,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.cursor.mobile.android.ui.theme.accentGradient
 
@@ -137,43 +139,55 @@ fun ComposerBar(
                 RoundedCornerShape(24.dp)
             )
             .padding(6.dp),
-        verticalAlignment = Alignment.Bottom,
+        verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(2.dp)
     ) {
-        IconButton(onClick = { attachMenu = true }) { Icon(Icons.Filled.Add, contentDescription = "附件/截图", tint = MaterialTheme.colorScheme.onSurfaceVariant) }
-        TextField(
+        IconButton(onClick = { attachMenu = true }, modifier = Modifier.size(36.dp)) {
+            Icon(Icons.Filled.Add, contentDescription = "附件/截图", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+        }
+        BasicTextField(
             value = value,
             onValueChange = onValueChange,
-            modifier = Modifier.weight(1f),
-            placeholder = { Text("描述任务…", style = MaterialTheme.typography.bodySmall) },
-            maxLines = 5,
-            colors = TextFieldDefaults.colors(
-                focusedContainerColor = Color.Transparent,
-                unfocusedContainerColor = Color.Transparent,
-                focusedIndicatorColor = Color.Transparent,
-                unfocusedIndicatorColor = Color.Transparent
-            )
+            modifier = Modifier.weight(1f).heightIn(min = 36.dp),
+            enabled = enabled,
+            textStyle = TextStyle(
+                color = MaterialTheme.colorScheme.onSurface,
+                fontSize = 14.sp,
+                lineHeight = 18.sp
+            ),
+            maxLines = 4,
+            decorationBox = { inner ->
+                Box(Modifier.padding(horizontal = 4.dp, vertical = 8.dp), contentAlignment = Alignment.CenterStart) {
+                    if (value.isEmpty()) {
+                        Text("描述任务…", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp, lineHeight = 18.sp)
+                    }
+                    inner()
+                }
+            }
         )
-        IconButton(onClick = {}) { Icon(Icons.Filled.Mic, contentDescription = "语音输入", tint = MaterialTheme.colorScheme.primary) }
+        IconButton(onClick = {}, modifier = Modifier.size(36.dp)) {
+            Icon(Icons.Filled.Mic, contentDescription = "语音输入", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+        }
         IconButton(
             onClick = onSend,
             enabled = canSend,
-            interactionSource = sendSource
+            interactionSource = sendSource,
+            modifier = Modifier.size(36.dp)
         ) {
             val sendModifier = if (canSend) {
                 Modifier
-                    .size(38.dp)
+                    .size(28.dp)
                     .clip(CircleShape)
                     .background(accentGradient())
             } else {
                 Modifier
-                    .size(38.dp)
+                    .size(28.dp)
                     .clip(CircleShape)
                     .background(MaterialTheme.colorScheme.surfaceContainer)
                     .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape)
             }
             Box(
-                modifier = sendModifier.padding(8.dp),
+                modifier = sendModifier,
                 contentAlignment = Alignment.Center
             ) {
                 Icon(

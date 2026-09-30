@@ -26,6 +26,7 @@ object AgentStore {
     var error by mutableStateOf<String?>(null)
     var accountLabel by mutableStateOf("")
     var syncReport by mutableStateOf("")
+    var syncSummary by mutableStateOf("")
     var scope by mutableStateOf(WorkScope.PROJECT)
         private set
 
@@ -48,6 +49,7 @@ object AgentStore {
         error = null
         accountLabel = ""
         syncReport = ""
+        syncSummary = ""
         reposLoaded = false
         projectsLoaded = false
         scopeTouched = false
@@ -62,11 +64,12 @@ object AgentStore {
             try {
                 val sync = CursorSession.sync(token, AuthRepository.apiKey(context))
                 syncReport = sync.report
+                syncSummary = summarizeSync(sync.httpCode, sync.composers.size, 0, 0)
                 if (sync.httpCode == 401 || sync.httpCode == 403) {
-                    throw CursorApi.Unauthorized(sync.report)
+                    throw CursorApi.Unauthorized(syncSummary.ifBlank { "登录已失效（HTTP ${sync.httpCode}）" })
                 }
                 if (sync.httpCode !in 200..299) {
-                    error = sync.report
+                    error = syncSummary
                     return@withLock
                 }
                 var merged = linkProjectNames(sync.composers.map { mapComposer(it) })
@@ -104,9 +107,10 @@ object AgentStore {
                     // 仓库目录失败时仍用会话上的仓库地址
                 }
                 absorbTargets()
+                val projectCount = sessions.count { it.scope == WorkScope.PROJECT }
+                val repoCount = sessions.count { it.scope == WorkScope.REPOSITORY }
+                syncSummary = summarizeSync(sync.httpCode, sessions.size, projectCount, repoCount)
                 if (!scopeTouched) {
-                    val projectCount = sessions.count { it.scope == WorkScope.PROJECT }
-                    val repoCount = sessions.count { it.scope == WorkScope.REPOSITORY }
                     scope = if (projectCount == 0 && repoCount > 0) WorkScope.REPOSITORY else WorkScope.PROJECT
                 }
             } catch (e: CursorApi.Unauthorized) {
@@ -262,6 +266,15 @@ object AgentStore {
             }
         }
         return started.modelSent
+    }
+
+    private fun summarizeSync(code: Int, total: Int, projects: Int, repos: Int): String = when {
+        code == 0 -> "没有连上 Cursor，列表没更新。"
+        code !in 200..299 -> "列表请求失败（HTTP $code）。"
+        total == 0 -> "服务器返回 0 条会话。"
+        projects > 0 -> ""
+        repos > 0 -> "同步到 $repos 条仓库会话。响应里没有单独的项目字段，所以 Projects 是空的，内容在 Repositories。"
+        else -> "同步到 $total 条会话，但没有可归类的项目或仓库。"
     }
 
     private fun cloudKey(context: Context): String {

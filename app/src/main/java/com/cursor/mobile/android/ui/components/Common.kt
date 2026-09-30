@@ -200,16 +200,20 @@ private fun CodeScroll(text: String, color: Color) {
     )
 }
 
-private val chatBody = TextStyle(fontSize = 14.sp, lineHeight = 17.sp)
+private val chatBody = TextStyle(fontSize = 13.sp, lineHeight = 17.sp)
 
 @Composable
 fun ChatBubble(msg: ChatMessage) {
     val user = msg.sender == Sender.USER
     val align = if (user) androidx.compose.ui.text.style.TextAlign.End else androidx.compose.ui.text.style.TextAlign.Start
     val background = when (msg.sender) {
-        Sender.USER -> MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
+        Sender.USER -> MaterialTheme.colorScheme.primaryContainer
         Sender.SYSTEM -> MaterialTheme.colorScheme.surfaceContainer
-        Sender.AGENT -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+        Sender.AGENT -> MaterialTheme.colorScheme.surface
+    }
+    val border = when (msg.sender) {
+        Sender.USER -> MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
+        else -> MaterialTheme.colorScheme.outline
     }
     val color = when (msg.sender) {
         Sender.SYSTEM -> MaterialTheme.colorScheme.onSurfaceVariant
@@ -218,10 +222,11 @@ fun ChatBubble(msg: ChatMessage) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 2.dp)
-            .clip(RoundedCornerShape(6.dp))
+            .padding(vertical = 3.dp)
+            .clip(RoundedCornerShape(12.dp))
             .background(background)
-            .padding(horizontal = 8.dp, vertical = 4.dp)
+            .border(1.dp, border, RoundedCornerShape(12.dp))
+            .padding(horizontal = 10.dp, vertical = 8.dp)
             .animateContentSize()
     ) {
         if (msg.text.isNotBlank()) {

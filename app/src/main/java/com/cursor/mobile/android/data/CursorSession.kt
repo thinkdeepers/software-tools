@@ -349,7 +349,7 @@ object CursorSession {
         } catch (_: Exception) {
             return Triple(emptyList(), emptyList(), null)
         }
-        val composers = firstArray(root, listOf("composers", "backgroundComposers", "background_composers", "items", "results"))
+        val composers = findComposers(root)
         val projects = jsonArray(root.optJSONArray("projects")).mapNotNull { obj ->
             val name = obj.optStr("displayName").ifBlank { obj.optStr("name") }.ifBlank { obj.optStr("projectName") }
             val id = obj.optStr("id").ifBlank { obj.optStr("projectId") }.ifBlank { obj.optStr("project_id") }
@@ -360,6 +360,31 @@ object CursorSession {
         val next = root.optStr("nextCursor").ifBlank { root.optStr("nextPageToken") }.ifBlank { root.optStr("cursor") }
             .takeIf { it.isNotBlank() && !it.equals("null", true) }
         return Triple(composers, projects, next)
+    }
+
+    private fun findComposers(root: JSONObject): List<JSONObject> {
+        val direct = firstArray(root, listOf("composers", "backgroundComposers", "background_composers", "items", "results"))
+        if (direct.isNotEmpty()) return direct
+        val found = mutableListOf<JSONObject>()
+        walkForComposers(root, 0, found)
+        return found
+    }
+
+    private fun walkForComposers(obj: JSONObject, depth: Int, out: MutableList<JSONObject>) {
+        if (depth > 3 || out.isNotEmpty()) return
+        val keys = obj.keys()
+        while (keys.hasNext()) {
+            if (out.isNotEmpty()) return
+            when (val value = obj.opt(keys.next())) {
+                is JSONArray -> {
+                    val items = jsonArray(value)
+                    if (items.any { composerId(it).isNotBlank() || it.has("repoUrl") || it.has("repo_url") || it.has("repository") }) {
+                        out += items
+                    }
+                }
+                is JSONObject -> walkForComposers(value, depth + 1, out)
+            }
+        }
     }
 
     private fun mergeObjects(primary: List<JSONObject>, extra: List<JSONObject>): List<JSONObject> {
