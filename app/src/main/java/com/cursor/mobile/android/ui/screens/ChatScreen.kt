@@ -1,8 +1,14 @@
 package com.cursor.mobile.android.ui.screens
 
+import android.net.Uri
+import android.provider.OpenableColumns
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,7 +16,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -40,6 +48,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.cursor.mobile.android.data.AgentStore
 import com.cursor.mobile.android.data.ChatMessage
@@ -49,6 +58,7 @@ import com.cursor.mobile.android.data.PrefsRepository
 import com.cursor.mobile.android.data.Sender
 import com.cursor.mobile.android.data.modelChoices
 import com.cursor.mobile.android.ui.components.ChatBubble
+import com.cursor.mobile.android.ui.components.ComposerAttachment
 import com.cursor.mobile.android.ui.components.ComposerBar
 import com.cursor.mobile.android.ui.components.ModelPicker
 import com.cursor.mobile.android.ui.components.ModelTierPicker
@@ -56,6 +66,16 @@ import com.cursor.mobile.android.ui.components.StatusChip
 import kotlinx.coroutines.launch
 
 private val slashCommands = listOf("/remote-control", "/fix-ci", "/review", "/move-to-cloud", "/summarize")
+
+private fun attachmentName(context: android.content.Context, uri: Uri): String {
+    context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+        if (cursor.moveToFirst()) {
+            val name = cursor.getString(0)
+            if (!name.isNullOrBlank()) return name
+        }
+    }
+    return uri.lastPathSegment ?: "附件"
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -69,6 +89,13 @@ fun ChatScreen(
     val scope = rememberCoroutineScope()
     val session = AgentStore.sessions.firstOrNull { it.id == sessionId }
     var input by remember { mutableStateOf("") }
+    val attachments = remember { mutableStateListOf<ComposerAttachment>() }
+    val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) attachments.add(ComposerAttachment(uri.toString(), attachmentName(context, uri)))
+    }
+    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) attachments.add(ComposerAttachment(uri.toString(), attachmentName(context, uri)))
+    }
     val persistedTier by PrefsRepository.tierFlow(context).collectAsState(ModelTier.BALANCED)
     val persistedModel by PrefsRepository.modelFlow(context).collectAsState(ModelTier.BALANCED.model)
     var picked by remember { mutableStateOf(false) }
@@ -161,17 +188,26 @@ fun ChatScreen(
                     onValueChange = { input = it },
                     model = savedModel,
                     enabled = !sending,
+                    attachments = attachments,
+                    onRemoveAttachment = { index -> if (index in attachments.indices) attachments.removeAt(index) },
+                    onPickPhoto = {
+                        photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                    },
+                    onPickFile = { filePicker.launch(arrayOf("*/*")) },
                     onSend = {
                         val text = input.trim()
-                        if (text.isEmpty() || sending) return@ComposerBar
+                        val names = attachments.map { it.name }
+                        if ((text.isEmpty() && names.isEmpty()) || sending) return@ComposerBar
+                        val outgoing = if (names.isEmpty()) text else listOf(text, names.joinToString("\n") { "附件：$it" }).filter { it.isNotBlank() }.joinToString("\n")
                         input = ""
+                        attachments.clear()
                         sending = true
-                        messages.add(ChatMessage("u${messages.size}", Sender.USER, text, "now"))
+                        messages.add(ChatMessage("u${messages.size}", Sender.USER, outgoing, "now"))
                         val streamId = "s${messages.size}"
                         messages.add(ChatMessage(streamId, Sender.AGENT, "", "now", isStreaming = true))
                         scope.launch {
                             try {
-                                val modelSent = AgentStore.followUp(context, sessionId, text, savedTier, savedModel) { token ->
+                                val modelSent = AgentStore.followUp(context, sessionId, outgoing, savedTier, savedModel) { token ->
                                     val idx = messages.indexOfFirst { it.id == streamId }
                                     if (idx >= 0) messages[idx] = messages[idx].copy(text = token)
                                 }
@@ -214,8 +250,13 @@ fun ChatScreen(
             modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 14.dp)
         ) {
             item {
-                Row(modifier = Modifier.padding(vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    slashCommands.take(3).forEach { cmd ->
+                Row(
+                    modifier = Modifier
+                        .padding(vertical = 10.dp)
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    slashCommands.forEach { cmd ->
                         SuggestChip(cmd) { input = "$cmd " }
                     }
                 }
@@ -275,7 +316,11 @@ private fun SuggestChip(cmd: String, onClick: () -> Unit) {
         fontFamily = com.cursor.mobile.android.ui.theme.CodeFont,
         style = MaterialTheme.typography.labelMedium,
         color = MaterialTheme.colorScheme.primary,
+        maxLines = 1,
+        softWrap = false,
+        overflow = TextOverflow.Clip,
         modifier = Modifier
+            .wrapContentWidth(unbounded = true)
             .clip(RoundedCornerShape(999.dp))
             .background(MaterialTheme.colorScheme.surface)
             .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(999.dp))

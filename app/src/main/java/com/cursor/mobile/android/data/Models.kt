@@ -23,8 +23,10 @@ data class AgentSession(
     val updatedAtIso: String = "",
     val scope: WorkScope? = null,
     val envName: String = "",
+    val projectId: String = "",
     val repoUrl: String = "",
-    val groupLabel: String = ""
+    val groupLabel: String = "",
+    val classified: Boolean = false
 )
 
 data class ChatMessage(
@@ -46,4 +48,4 @@ data class DiffFile(
 
 data class RepoRef(val name: String, val branch: String, val url: String = "", val isPrivate: Boolean = true)
 
-data class ProjectRef(val name: String, val id: String = "")
+data class ProjectRef(val name: String, val id: String = "", val repoUrl: String = "")

@@ -106,7 +106,7 @@ fun InboxScreen(
     ) { padding ->
         val scope = AgentStore.scope
         val visible = sessions.filter { it.scope == scope }
-        val pending = sessions.count { it.scope == null }
+        val pending = sessions.count { !it.classified }
         val groups = visible.groupBy { it.groupLabel.ifBlank { if (scope == WorkScope.PROJECT) "未命名项目" else "未命名仓库" } }
         Column(Modifier.fillMaxSize().padding(padding)) {
         ScopeSwitch(scope, sessions.count { it.scope == WorkScope.PROJECT }, sessions.count { it.scope == WorkScope.REPOSITORY }) {
@@ -157,12 +157,12 @@ fun InboxScreen(
                 }
             }
             if (!loading && visible.isEmpty() && pending > 0) {
-                item { EmptyState("正在区分项目和仓库", "会话详情里的 repos 和 env 还在同步，归类完成后会出现在对应分类。") }
+                item { EmptyState("正在区分项目和仓库", "正在拉会话详情里的 project 字段和 repos.url。") }
             }
             if (!loading && visible.isEmpty() && pending == 0 && error.isNullOrBlank()) {
                 item {
                     if (scope == WorkScope.PROJECT) {
-                        EmptyState("还没有项目会话", "没有仓库地址、带 env.name 或 project 字段的会话会归在这里。")
+                        EmptyState("还没有项目会话", "只收录带 project.id、projectId 或 coordinator 关联的会话。没有仓库不会被当成项目。")
                     } else {
                         EmptyState("还没有仓库会话", "带 repos.url 或 source.repository 的会话会归在这里。")
                     }

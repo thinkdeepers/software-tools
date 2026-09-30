@@ -67,7 +67,7 @@ object AgentStore {
                 }
                 if (bundle.account.isNotBlank()) accountLabel = bundle.account
                 loading = false
-                val enriched = enrichRepos(key, sessions.toList())
+                val enriched = linkProjectNames(enrichRepos(key, sessions.toList()))
                 enriched.forEach { updated ->
                     val index = sessions.indexOfFirst { it.id == updated.id }
                     if (index >= 0) sessions[index] = updated
@@ -80,7 +80,7 @@ object AgentStore {
                 try {
                     ensureProjects(context)
                 } catch (_: Exception) {
-                    // 项目目录失败时仍用会话上的 env.name
+                    // /v1/me 没有项目数组时，仍用会话详情里的 project 字段
                 }
                 absorbTargets()
                 if (!scopeTouched) {
@@ -128,8 +128,11 @@ object AgentStore {
         val key = AuthRepository.apiKey(context) ?: return
         val loaded = withContext(Dispatchers.IO) { CursorApi.listProjects(key) }
         loaded.forEach { item ->
-            if (projects.none { it.name.equals(item.name, true) }) projects.add(item)
+            if (projects.none { (item.id.isNotBlank() && it.id == item.id) || it.name.equals(item.name, true) }) {
+                projects.add(item)
+            }
         }
+        absorbTargets()
         projectsLoaded = true
     }
 
@@ -185,11 +188,11 @@ object AgentStore {
             mapped.copy(
                 latestRunId = runId.ifBlank { agent.optStr("latestRunId") },
                 scope = WorkScope.PROJECT,
-                repo = "",
-                repoUrl = "",
-                branch = "",
-                envName = request.projectName,
-                groupLabel = request.projectName.ifBlank { "未命名项目" }
+                envName = request.projectName.ifBlank { mapped.envName },
+                projectId = request.projectId.ifBlank { mapped.projectId },
+                repoUrl = normalizeRepoUrl(request.repo).ifBlank { mapped.repoUrl },
+                groupLabel = request.projectName.ifBlank { mapped.groupLabel },
+                classified = true
             )
         } else {
             val url = normalizeRepoUrl(request.repo)
@@ -201,7 +204,9 @@ object AgentStore {
                 repo = short,
                 repoUrl = url.ifBlank { mapped.repoUrl },
                 envName = "",
-                groupLabel = short.ifBlank { mapped.groupLabel }
+                projectId = "",
+                groupLabel = short.ifBlank { mapped.groupLabel },
+                classified = true
             )
         }
         val index = sessions.indexOfFirst { it.id == session.id }
@@ -213,9 +218,9 @@ object AgentStore {
     private fun absorbTargets() {
         sessions.forEach { session ->
             if (session.scope == WorkScope.PROJECT && session.envName.isNotBlank() &&
-                projects.none { it.name.equals(session.envName, true) }
+                projects.none { it.name.equals(session.envName, true) || (session.projectId.isNotBlank() && it.id == session.projectId) }
             ) {
-                projects.add(ProjectRef(session.envName))
+                projects.add(ProjectRef(session.envName, session.projectId, session.repoUrl))
             }
             if (session.scope == WorkScope.REPOSITORY && session.repo.isNotBlank() &&
                 repos.none { it.name.equals(session.repo, true) }
@@ -282,7 +287,7 @@ object AgentStore {
         val limited = AtomicBoolean(false)
         items.map { session ->
             async(Dispatchers.IO) {
-                if (session.repo.isNotBlank() || limited.get()) return@async session
+                if (limited.get()) return@async session
                 gate.withPermit {
                     if (limited.get()) return@withPermit session
                     try {

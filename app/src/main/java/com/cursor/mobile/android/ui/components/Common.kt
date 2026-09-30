@@ -378,27 +378,29 @@ fun TypingDots() {
 }
 
 @Composable
-fun EmptyState(title: String, hint: String) {
+fun EmptyState(title: String, hint: String, compact: Boolean = false) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(20.dp))
-            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(20.dp))
+            .clip(RoundedCornerShape(if (compact) 16.dp else 20.dp))
+            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(if (compact) 16.dp else 20.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
-            .padding(28.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+            .padding(if (compact) 12.dp else 28.dp),
+        horizontalAlignment = if (compact) Alignment.Start else Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(if (compact) 4.dp else 8.dp)
     ) {
-        Box(
-            modifier = Modifier
-                .size(52.dp)
-                .clip(RoundedCornerShape(18.dp))
-                .background(accentGradient()),
-            contentAlignment = Alignment.Center
-        ) {
-            Text("◈", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        if (!compact) {
+            Box(
+                modifier = Modifier
+                    .size(52.dp)
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(accentGradient()),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("◈", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            }
         }
-        Text(title, style = MaterialTheme.typography.titleMedium)
+        Text(title, style = if (compact) MaterialTheme.typography.titleSmall else MaterialTheme.typography.titleMedium)
         Text(hint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

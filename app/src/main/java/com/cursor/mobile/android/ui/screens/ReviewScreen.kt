@@ -8,19 +8,21 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
+import androidx.compose.foundation.clickable
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -31,6 +33,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.cursor.mobile.android.data.AgentStore
 import com.cursor.mobile.android.ui.components.EmptyState
@@ -51,13 +54,16 @@ fun ReviewScreen(sessionId: String, onBack: () -> Unit) {
             )
         },
         bottomBar = {
-            Row(Modifier.padding(14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(
-                    onClick = {},
-                    modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.buttonColors(containerColor = CursorPalette.BrandBlue)
-                ) { Text("Merge · Squash（占位）") }
-                OutlinedButton(onClick = {}) { Text("Request changes") }
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                CapsuleButton("Merge · Squash（占位）", filled = true)
+                CapsuleButton("Request changes", filled = false)
             }
         },
         containerColor = MaterialTheme.colorScheme.background
@@ -70,8 +76,8 @@ fun ReviewScreen(sessionId: String, onBack: () -> Unit) {
                         .clip(RoundedCornerShape(20.dp))
                         .background(MaterialTheme.colorScheme.surface)
                         .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(20.dp))
-                        .padding(horizontal = 14.dp, vertical = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     Kicker("Pull request")
                     Text(
@@ -99,7 +105,7 @@ fun ReviewScreen(sessionId: String, onBack: () -> Unit) {
                     Text("分支和 PR 来自 Cloud Agents。文件 diff 仍在 Cursor Web 查看。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
-            item { EmptyState("没有本地 diff", "打开会话链接可在 Cursor Web 看完整改动。") }
+            item { EmptyState("没有本地 diff", "打开会话链接可在 Cursor Web 看完整改动。", compact = true) }
             item {
                 Column(
                     modifier = Modifier
@@ -107,7 +113,7 @@ fun ReviewScreen(sessionId: String, onBack: () -> Unit) {
                         .clip(RoundedCornerShape(20.dp))
                         .background(MaterialTheme.colorScheme.surface)
                         .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(20.dp))
-                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                        .padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     Text("Artifacts（占位）", fontWeight = FontWeight.SemiBold)
@@ -117,6 +123,34 @@ fun ReviewScreen(sessionId: String, onBack: () -> Unit) {
             }
             item { Box(Modifier.size(8.dp)) }
         }
+    }
+}
+
+@Composable
+private fun CapsuleButton(label: String, filled: Boolean) {
+    Box(
+        modifier = Modifier
+            .height(40.dp)
+            .wrapContentWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .background(if (filled) CursorPalette.BrandBlue else MaterialTheme.colorScheme.surface)
+            .border(
+                1.dp,
+                if (filled) CursorPalette.BrandBlue else MaterialTheme.colorScheme.outline,
+                RoundedCornerShape(20.dp)
+            )
+            .clickable {}
+            .padding(horizontal = 14.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            label,
+            color = if (filled) Color.White else MaterialTheme.colorScheme.onSurface,
+            style = MaterialTheme.typography.labelLarge,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Clip
+        )
     }
 }
 

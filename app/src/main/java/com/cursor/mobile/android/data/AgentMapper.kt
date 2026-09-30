@@ -10,21 +10,19 @@ import java.time.format.DateTimeFormatter
 internal fun mapV1Agent(obj: JSONObject, modelLabel: String = ""): AgentSession {
     val envObj = obj.optJSONObject("env")
     val envType = envObj?.optStr("type").orEmpty()
-    val envName = envObj?.optStr("name").orEmpty()
-    val namedProject = projectName(obj)
+    val hit = readProject(obj)
     val repos = obj.optJSONArray("repos")
     val firstRepo = repos?.optJSONObject(0)
     val repoUrl = firstRepo?.optStr("url").orEmpty()
     val startingRef = firstRepo?.optStr("startingRef").orEmpty()
     val iso = obj.optStr("updatedAt").ifBlank { obj.optStr("createdAt") }
     val scope = when {
+        hit != null -> WorkScope.PROJECT
         repoUrl.isNotBlank() -> WorkScope.REPOSITORY
-        namedProject.isNotBlank() -> WorkScope.PROJECT
-        repos != null -> WorkScope.PROJECT
         else -> null
     }
     val short = shortRepo(repoUrl).takeUnless { repoUrl.isBlank() }.orEmpty()
-    val projectLabel = namedProject.ifBlank { envName }
+    val projectLabel = hit?.name.orEmpty()
     return AgentSession(
         id = obj.optStr("id"),
         title = obj.optStr("name").ifBlank { "未命名会话" },
@@ -39,13 +37,15 @@ internal fun mapV1Agent(obj: JSONObject, modelLabel: String = ""): AgentSession 
         summary = obj.optStr("summary"),
         updatedAtIso = iso,
         scope = scope,
-        envName = if (scope == WorkScope.PROJECT) projectLabel else "",
-        repoUrl = if (scope == WorkScope.REPOSITORY) repoUrl else "",
+        envName = projectLabel,
+        projectId = hit?.id.orEmpty(),
+        repoUrl = repoUrl,
         groupLabel = when (scope) {
             WorkScope.REPOSITORY -> short
-            WorkScope.PROJECT -> projectLabel.ifBlank { "未命名项目" }
+            WorkScope.PROJECT -> projectLabel
             null -> ""
-        }
+        },
+        classified = hit != null || obj.has("repos")
     )
 }
 
@@ -55,12 +55,11 @@ internal fun mapV0Agent(obj: JSONObject): AgentSession {
     val repository = source?.optStr("repository").orEmpty()
     val prUrl = source?.optStr("prUrl").orEmpty()
     val repoUrl = repository.ifBlank { prUrl.substringBefore("/pull").substringBefore("/pulls") }
-    val namedProject = projectName(obj).ifBlank { source?.optStr("project").orEmpty() }
+    val hit = readProject(obj)
     val iso = obj.optStr("updatedAt").ifBlank { obj.optStr("createdAt") }
     val scope = when {
+        hit != null -> WorkScope.PROJECT
         repository.isNotBlank() || prUrl.isNotBlank() -> WorkScope.REPOSITORY
-        namedProject.isNotBlank() -> WorkScope.PROJECT
-        source != null -> WorkScope.PROJECT
         else -> null
     }
     val short = shortRepo(repoUrl).takeUnless { repoUrl.isBlank() }.orEmpty()
@@ -82,13 +81,15 @@ internal fun mapV0Agent(obj: JSONObject): AgentSession {
         summary = obj.optStr("summary"),
         updatedAtIso = iso,
         scope = scope,
-        envName = if (scope == WorkScope.PROJECT) namedProject else "",
-        repoUrl = if (scope == WorkScope.REPOSITORY) repoUrl else "",
+        envName = hit?.name.orEmpty(),
+        projectId = hit?.id.orEmpty(),
+        repoUrl = repoUrl,
         groupLabel = when (scope) {
             WorkScope.REPOSITORY -> short.ifBlank { "未命名仓库" }
-            WorkScope.PROJECT -> namedProject.ifBlank { "未命名项目" }
+            WorkScope.PROJECT -> hit?.name.orEmpty()
             null -> ""
-        }
+        },
+        classified = true
     )
 }
 
@@ -109,11 +110,12 @@ internal fun mergeAgents(v1: List<JSONObject>, v0: List<JSONObject>): List<Agent
 
 internal fun applyDetail(session: AgentSession, detail: JSONObject): AgentSession {
     val mapped = mapV1Agent(detail, session.model)
-    val scope = mapped.scope ?: session.scope
+    val scope = if (mapped.classified) mapped.scope else session.scope
+    val projectId = mapped.projectId.ifBlank { session.projectId }
     return session.copy(
         title = mapped.title.takeUnless { it == "未命名会话" } ?: session.title,
-        repo = if (scope == WorkScope.REPOSITORY) mapped.repo.ifBlank { session.repo } else "",
-        branch = if (scope == WorkScope.REPOSITORY) mapped.branch.ifBlank { session.branch } else "",
+        repo = mapped.repo.ifBlank { session.repo },
+        branch = mapped.branch.ifBlank { session.branch },
         status = mapped.status,
         machine = mapped.machine,
         latestRunId = mapped.latestRunId.ifBlank { session.latestRunId },
@@ -123,8 +125,10 @@ internal fun applyDetail(session: AgentSession, detail: JSONObject): AgentSessio
         updatedAtIso = mapped.updatedAtIso.ifBlank { session.updatedAtIso },
         scope = scope,
         envName = if (scope == WorkScope.PROJECT) mapped.envName.ifBlank { session.envName } else "",
-        repoUrl = if (scope == WorkScope.REPOSITORY) mapped.repoUrl.ifBlank { session.repoUrl } else "",
-        groupLabel = mapped.groupLabel.ifBlank { session.groupLabel }
+        projectId = projectId,
+        repoUrl = mapped.repoUrl.ifBlank { session.repoUrl },
+        groupLabel = if (scope == WorkScope.PROJECT) mapped.envName.ifBlank { session.groupLabel } else mapped.groupLabel.ifBlank { session.groupLabel },
+        classified = true
     )
 }
 
@@ -143,45 +147,106 @@ internal fun applyRunGit(session: AgentSession, run: JSONObject): AgentSession {
         latestRunId = run.optStr("id").ifBlank { session.latestRunId },
         scope = scope,
         envName = if (scope == WorkScope.PROJECT) session.envName else "",
-        repoUrl = if (scope == WorkScope.REPOSITORY) session.repoUrl.ifBlank { normalizeRepoUrl(repo) } else "",
-        groupLabel = if (scope == WorkScope.REPOSITORY) short.ifBlank { session.groupLabel } else session.groupLabel
+        projectId = session.projectId,
+        repoUrl = if (scope == WorkScope.PROJECT) session.repoUrl else session.repoUrl.ifBlank { normalizeRepoUrl(repo) },
+        groupLabel = if (scope == WorkScope.REPOSITORY) short.ifBlank { session.groupLabel } else session.groupLabel,
+        classified = session.classified || learnedRepo
     )
 }
 
 private fun mergeScope(existing: AgentSession, incoming: AgentSession): AgentSession {
+    val projectId = existing.projectId.ifBlank { incoming.projectId }
+    val envName = existing.envName.ifBlank { incoming.envName }
     val scope = when {
+        existing.scope == WorkScope.PROJECT || incoming.scope == WorkScope.PROJECT || projectId.isNotBlank() -> WorkScope.PROJECT
         existing.scope == WorkScope.REPOSITORY || incoming.scope == WorkScope.REPOSITORY -> WorkScope.REPOSITORY
-        existing.scope == WorkScope.PROJECT || incoming.scope == WorkScope.PROJECT -> WorkScope.PROJECT
         else -> null
     }
     val repo = existing.repo.ifBlank { incoming.repo }
     val repoUrl = existing.repoUrl.ifBlank { incoming.repoUrl }
-    val envName = existing.envName.ifBlank { incoming.envName }
     return existing.copy(
         title = if (existing.title == "未命名会话") incoming.title else existing.title,
-        repo = if (scope == WorkScope.REPOSITORY) repo else "",
-        branch = if (scope == WorkScope.REPOSITORY) existing.branch.ifBlank { incoming.branch } else "",
+        repo = repo,
+        branch = existing.branch.ifBlank { incoming.branch },
         prUrl = existing.prUrl.ifBlank { incoming.prUrl },
         summary = existing.summary.ifBlank { incoming.summary },
         webUrl = existing.webUrl.ifBlank { incoming.webUrl },
         scope = scope,
         envName = if (scope == WorkScope.PROJECT) envName else "",
-        repoUrl = if (scope == WorkScope.REPOSITORY) repoUrl else "",
+        projectId = projectId,
+        repoUrl = repoUrl,
         groupLabel = when (scope) {
             WorkScope.REPOSITORY -> repo.ifBlank { existing.groupLabel.ifBlank { incoming.groupLabel } }
-            WorkScope.PROJECT -> envName.ifBlank { existing.groupLabel.ifBlank { incoming.groupLabel } }.ifBlank { "未命名项目" }
+            WorkScope.PROJECT -> envName.ifBlank { existing.groupLabel.ifBlank { incoming.groupLabel } }
             null -> ""
-        }
+        },
+        classified = existing.classified || incoming.classified
     )
 }
 
-private fun projectName(obj: JSONObject): String {
+private data class ProjectHit(val id: String, val name: String)
+
+private fun readProject(obj: JSONObject): ProjectHit? {
     val project = obj.optJSONObject("project")
-    val fromObject = project?.optStr("displayName").orEmpty()
+    val source = obj.optJSONObject("source")
+    val sourceProject = source?.optJSONObject("project")
+    val meta = obj.optJSONObject("metadata")
+    val linkedId = listOf(
+        "parentAgentId",
+        "parentBcId",
+        "coordinatorAgentId",
+        "coordinatorBcId",
+        "projectBcId",
+        "owningComposerBcId",
+        "rootAgentId"
+    ).firstNotNullOfOrNull { key -> obj.optStr(key).takeIf { it.isNotBlank() } }.orEmpty()
+    val id = project?.optStr("id").orEmpty()
+        .ifBlank { obj.optStr("projectId") }
+        .ifBlank { obj.optStr("project_id") }
+        .ifBlank { source?.optStr("projectId").orEmpty() }
+        .ifBlank { sourceProject?.optStr("id").orEmpty() }
+        .ifBlank { meta?.optStr("projectId").orEmpty() }
+        .ifBlank { linkedId }
+    val name = project?.optStr("displayName").orEmpty()
         .ifBlank { project?.optStr("name").orEmpty() }
-        .ifBlank { project?.optStr("id").orEmpty() }
-    if (fromObject.isNotBlank()) return fromObject
-    return obj.optStr("projectName").ifBlank { obj.optStr("projectId") }
+        .ifBlank { obj.optStr("projectName") }
+        .ifBlank { obj.optStr("project_name") }
+        .ifBlank { source?.opt("project")?.takeIf { it is String }?.toString().orEmpty() }
+        .ifBlank { sourceProject?.optStr("name").orEmpty() }
+        .ifBlank { sourceProject?.optStr("displayName").orEmpty() }
+        .ifBlank { meta?.optStr("projectName").orEmpty() }
+    val kind = obj.optStr("kind").ifBlank { obj.optStr("agentType") }.ifBlank { obj.optStr("role") }
+    val marked = kind.equals("project", true) || kind.equals("coordinator", true) || obj.optBoolean("isCoordinator", false)
+    val resolvedId = id.ifBlank { if (marked) obj.optStr("id") else "" }
+    if (resolvedId.isBlank() && name.isBlank() && !marked) return null
+    val label = name.ifBlank { resolvedId }.ifBlank { if (marked) obj.optStr("name") else "" }
+    if (label.isBlank()) return null
+    return ProjectHit(resolvedId.ifBlank { label }, label)
+}
+
+internal fun linkProjectNames(sessions: List<AgentSession>): List<AgentSession> {
+    val titles = sessions.associate { it.id to it.title }
+    val referenced = sessions.map { it.projectId }.filter { it.isNotBlank() }.toSet()
+    return sessions.map { session ->
+        val coordinator = session.id.isNotBlank() && session.id in referenced
+        if (session.scope != WorkScope.PROJECT && !coordinator) return@map session
+        val projectId = session.projectId.ifBlank { if (coordinator) session.id else "" }
+        val parentTitle = titles[projectId]
+            ?.takeIf { projectId != session.id && it.isNotBlank() && it != "未命名会话" }
+            .orEmpty()
+        val label = session.envName.ifBlank { parentTitle }.ifBlank {
+            if (projectId == session.id) session.title else projectId
+        }
+        session.copy(
+            scope = WorkScope.PROJECT,
+            projectId = projectId,
+            envName = label,
+            groupLabel = label.ifBlank { session.groupLabel },
+            repo = "",
+            branch = "",
+            classified = true
+        )
+    }
 }
 
 internal fun mapConversation(body: JSONObject): List<ChatMessage> {

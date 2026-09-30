@@ -117,7 +117,7 @@ fun NewAgentScreen(onBack: () -> Unit, onLaunched: (String) -> Unit, onSessionEx
         ) {
             Kicker("New agent · 先选分类，再选目标")
             Text("描述任务，Agent 在云端开工", style = MaterialTheme.typography.titleLarge)
-            Text("Projects 写入 env.name，Repositories 写入 repos.url。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Projects 用会话上的 project / projectId，Repositories 写入 repos.url。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
             Text("分类", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleMedium)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
@@ -138,8 +138,8 @@ fun NewAgentScreen(onBack: () -> Unit, onLaunched: (String) -> Unit, onSessionEx
             PickerRow(targetLabel, if (taskScope == WorkScope.REPOSITORY) selectedRepo?.branch else null) { targetOpen = true }
             if (choices.isEmpty()) {
                 Text(
-                    if (taskScope == WorkScope.PROJECT) "账号里还没有项目。项目来自 GET /v1/projects、/v1/environments，或会话上的 env.name。"
-                    else "账号里还没有仓库。仓库来自 GET /v1/repositories（失败时用 /v0/repositories）。",
+                    if (taskScope == WorkScope.PROJECT) "账号里还没有项目。项目来自同一账号 Cloud Agents 详情里的 project.id / projectId，不是 env.name。"
+                    else "账号里还没有仓库。仓库来自 GET /v1/repositories 的 items.url，没有再试 /v0/repositories。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -223,14 +223,15 @@ fun NewAgentScreen(onBack: () -> Unit, onLaunched: (String) -> Unit, onSessionEx
                     error = null
                     val request = if (taskScope == WorkScope.PROJECT) {
                         AgentRequest(
-                            repo = "",
-                            branch = "",
+                            repo = selectedProject?.repoUrl.orEmpty(),
+                            branch = "main",
                             prompt = prompt.trim(),
                             model = savedModel,
                             tier = savedTier,
                             machine = MachineKind.CLOUD,
                             scope = WorkScope.PROJECT,
-                            projectName = selectedProject?.name.orEmpty()
+                            projectName = selectedProject?.name.orEmpty(),
+                            projectId = selectedProject?.id?.ifBlank { selectedProject?.name }.orEmpty()
                         )
                     } else {
                         val repo = selectedRepo

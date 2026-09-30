@@ -8,7 +8,8 @@ data class AgentRequest(
     val tier: ModelTier,
     val machine: MachineKind = MachineKind.CLOUD,
     val scope: WorkScope = WorkScope.REPOSITORY,
-    val projectName: String = ""
+    val projectName: String = "",
+    val projectId: String = ""
 ) {
     fun selection(catalog: List<RemoteModel>): ModelSelection = selectModel(tier, model, catalog)
 }
