@@ -53,6 +53,7 @@ import com.cursor.mobile.android.data.CursorApi
 import com.cursor.mobile.android.data.MachineKind
 import com.cursor.mobile.android.ui.components.EmptyState
 import com.cursor.mobile.android.ui.components.Kicker
+import com.cursor.mobile.android.ui.components.MessageBody
 import com.cursor.mobile.android.ui.components.StatusChip
 import com.cursor.mobile.android.ui.theme.CursorPalette
 import com.cursor.mobile.android.ui.theme.accentGradient
@@ -173,8 +174,17 @@ private fun SessionCard(s: AgentSession, onClick: () -> Unit) {
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
-            Text(s.title, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f).padding(end = 8.dp))
+            Column(Modifier.weight(1f).padding(end = 8.dp)) {
+                MessageBody(
+                    s.title,
+                    MaterialTheme.colorScheme.onSurface,
+                    MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold)
+                )
+            }
             StatusChip(s.status)
+        }
+        if (s.summary.isNotBlank() && s.summary != s.title) {
+            MessageBody(s.summary, MaterialTheme.colorScheme.onSurfaceVariant, MaterialTheme.typography.bodySmall)
         }
         Text(
             listOf(s.repo.ifBlank { "未关联仓库" }, s.branch.ifBlank { "分支同步中" }).joinToString(" · "),

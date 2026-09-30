@@ -7,16 +7,27 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import com.cursor.mobile.android.data.ModelTier
+import com.cursor.mobile.android.data.RemoteModel
+import com.cursor.mobile.android.data.modelLabel
 
 @Composable
 fun ModelTierPicker(selected: ModelTier, modelLabel: String = selected.model, onSelect: (ModelTier) -> Unit) {
@@ -56,5 +67,67 @@ fun ModelTierPicker(selected: ModelTier, modelLabel: String = selected.model, on
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+    }
+}
+
+@Composable
+fun ModelPicker(
+    selectedId: String,
+    models: List<RemoteModel>,
+    onSelect: (RemoteModel) -> Unit
+) {
+    var open by rememberSaveable { mutableStateOf(false) }
+    val label = modelLabel(selectedId, models)
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(999.dp))
+            .clickable { open = true }
+            .padding(horizontal = 14.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(label, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+        Text("▾", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+    if (open) {
+        Dialog(onDismissRequest = { open = false }) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 420.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp))
+                    .verticalScroll(rememberScrollState())
+                    .padding(vertical = 8.dp)
+            ) {
+                Text(
+                    "选择模型",
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+                )
+                models.forEach { model ->
+                    val selected = model.matches(selectedId)
+                    Text(
+                        if (selected) "✓  ${model.displayName}" else model.displayName,
+                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                onSelect(model)
+                                open = false
+                            }
+                            .background(
+                                if (selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)
+                                else MaterialTheme.colorScheme.surface
+                            )
+                            .padding(horizontal = 16.dp, vertical = 14.dp)
+                    )
+                }
+            }
+        }
     }
 }

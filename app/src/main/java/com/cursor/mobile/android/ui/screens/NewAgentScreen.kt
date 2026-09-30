@@ -52,8 +52,9 @@ import com.cursor.mobile.android.data.CursorApi
 import com.cursor.mobile.android.data.MachineKind
 import com.cursor.mobile.android.data.ModelTier
 import com.cursor.mobile.android.data.PrefsRepository
-import com.cursor.mobile.android.data.suggestedModelId
+import com.cursor.mobile.android.data.modelChoices
 import com.cursor.mobile.android.ui.components.Kicker
+import com.cursor.mobile.android.ui.components.ModelPicker
 import com.cursor.mobile.android.ui.components.ModelTierPicker
 import com.cursor.mobile.android.ui.theme.CursorPalette
 import kotlinx.coroutines.launch
@@ -63,12 +64,20 @@ import kotlinx.coroutines.launch
 fun NewAgentScreen(onBack: () -> Unit, onLaunched: (String) -> Unit, onSessionExpired: (String) -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val savedTier by PrefsRepository.tierFlow(context).collectAsState(ModelTier.BALANCED)
-    val savedModel by PrefsRepository.modelFlow(context).collectAsState(ModelTier.BALANCED.model)
+    val persistedTier by PrefsRepository.tierFlow(context).collectAsState(ModelTier.BALANCED)
+    val persistedModel by PrefsRepository.modelFlow(context).collectAsState(ModelTier.BALANCED.model)
+    var picked by remember { mutableStateOf(false) }
+    var savedTier by remember { mutableStateOf(ModelTier.BALANCED) }
+    var savedModel by remember { mutableStateOf(ModelTier.BALANCED.model) }
+    LaunchedEffect(persistedTier, persistedModel) {
+        if (!picked) {
+            savedTier = persistedTier
+            savedModel = persistedModel
+        }
+    }
     var repo by remember { mutableStateOf("") }
     var branch by remember { mutableStateOf("main") }
     var repoMenu by remember { mutableStateOf(false) }
-    var modelMenu by remember { mutableStateOf(false) }
     var prompt by remember { mutableStateOf("") }
     var launching by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -76,6 +85,7 @@ fun NewAgentScreen(onBack: () -> Unit, onLaunched: (String) -> Unit, onSessionEx
     val catalog = AgentStore.catalog
     LaunchedEffect(Unit) {
         try {
+            AgentStore.ensureModels(context)
             AgentStore.ensureRepos(context)
             if (repo.isBlank()) repo = AgentStore.repos.firstOrNull()?.name.orEmpty()
         } catch (e: CursorApi.Unauthorized) {
@@ -135,37 +145,16 @@ fun NewAgentScreen(onBack: () -> Unit, onLaunched: (String) -> Unit, onSessionEx
             )
             Text("模型 · 强度", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleMedium)
             ModelTierPicker(savedTier, savedModel) { tier ->
-                scope.launch { PrefsRepository.saveSelection(context, tier, suggestedModelId(tier, catalog.toList())) }
+                picked = true
+                savedTier = tier
+                scope.launch { PrefsRepository.saveSelection(context, tier, savedModel) }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Box {
-                    PickerRow(savedModel, null) { modelMenu = true }
-                    DropdownMenu(expanded = modelMenu, onDismissRequest = { modelMenu = false }) {
-                        if (catalog.isEmpty()) {
-                            ModelTier.entries.forEach { tier ->
-                                DropdownMenuItem(
-                                    text = { Text(tier.model) },
-                                    onClick = {
-                                        modelMenu = false
-                                        scope.launch { PrefsRepository.saveSelection(context, savedTier, tier.model) }
-                                    }
-                                )
-                            }
-                        } else {
-                            catalog.forEach { model ->
-                                DropdownMenuItem(
-                                    text = { Text(model.displayName) },
-                                    onClick = {
-                                        modelMenu = false
-                                        scope.launch { PrefsRepository.saveSelection(context, savedTier, model.id) }
-                                    }
-                                )
-                            }
-                        }
-                    }
-                }
-                PickerRow("Cloud", null) {}
+            ModelPicker(savedModel, modelChoices(catalog.toList())) { model ->
+                picked = true
+                savedModel = model.id
+                scope.launch { PrefsRepository.saveSelection(context, savedTier, model.id) }
             }
+            PickerRow("Cloud", null) {}
 
             OutlinedTextField(
                 value = prompt,

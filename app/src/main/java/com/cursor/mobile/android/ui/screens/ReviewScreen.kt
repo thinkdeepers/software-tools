@@ -35,6 +35,7 @@ import androidx.compose.ui.unit.dp
 import com.cursor.mobile.android.data.AgentStore
 import com.cursor.mobile.android.ui.components.EmptyState
 import com.cursor.mobile.android.ui.components.Kicker
+import com.cursor.mobile.android.ui.components.MessageBody
 import com.cursor.mobile.android.ui.theme.CursorPalette
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -81,7 +82,11 @@ fun ReviewScreen(sessionId: String, onBack: () -> Unit) {
                         Text(session?.prUrl ?: "", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                     }
                     if (!session?.summary.isNullOrBlank()) {
-                        Text(session?.summary ?: "", style = MaterialTheme.typography.bodySmall)
+                        MessageBody(
+                            session?.summary ?: "",
+                            MaterialTheme.colorScheme.onSurfaceVariant,
+                            MaterialTheme.typography.bodySmall
+                        )
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         CiPill("CI 通过", CursorPalette.Success)

@@ -39,23 +39,45 @@ data class RemoteModel(
 
 data class ModelSelection(val id: String, val params: List<Pair<String, String>>)
 
+fun localModels(): List<RemoteModel> = listOf(
+    RemoteModel("composer-2", "Composer 2", aliases = listOf("Composer 2.5", "composer", "composer-latest")),
+    RemoteModel("claude-4.5-sonnet-thinking", "Claude Sonnet 4.5", aliases = listOf("Claude Sonnet 4.5")),
+    RemoteModel("gpt-5.2", "GPT-5", aliases = listOf("GPT-5", "gpt-5")),
+    RemoteModel("gemini-2.5-pro", "Gemini 2.5 Pro", aliases = listOf("Gemini 2.5 Pro"))
+)
+
+fun modelChoices(catalog: List<RemoteModel>): List<RemoteModel> =
+    catalog.ifEmpty { localModels() }
+
+fun modelLabel(selected: String, catalog: List<RemoteModel>): String =
+    modelChoices(catalog).firstOrNull { it.matches(selected) }?.displayName ?: selected.ifBlank { "选择模型" }
+
 fun selectModel(tier: ModelTier, preferred: String, catalog: List<RemoteModel>): ModelSelection {
-    val chosen = catalog.firstOrNull { it.matches(preferred) } ?: modelForTier(tier, catalog)
-    if (chosen == null) {
-        val id = when (tier) {
-            ModelTier.SPEED -> "composer-2"
-            ModelTier.BALANCED -> "claude-4.5-sonnet-thinking"
-            ModelTier.MAX -> "gpt-5.2"
-        }
-        val params = mutableListOf("thinking" to effortValue(tier))
-        if (tier == ModelTier.SPEED) params += "fast" to "true"
-        return ModelSelection(id, params)
+    val pool = if (catalog.isNotEmpty()) catalog else localModels()
+    val chosen = pool.firstOrNull { it.matches(preferred) }
+    if (chosen != null) {
+        val params = paramsFor(chosen, tier)
+        val withTier = if (params.isEmpty() && chosen.parameters.isEmpty()) fallbackParams(tier) else params
+        return ModelSelection(chosen.id, withTier)
     }
-    return ModelSelection(chosen.id, paramsFor(chosen, tier))
+    val id = preferred.takeIf { it.isNotBlank() && ' ' !in it } ?: fallbackId(tier)
+    return ModelSelection(id, fallbackParams(tier))
 }
 
 fun suggestedModelId(tier: ModelTier, catalog: List<RemoteModel>): String =
     modelForTier(tier, catalog)?.id ?: tier.model
+
+private fun fallbackId(tier: ModelTier): String = when (tier) {
+    ModelTier.SPEED -> "composer-2"
+    ModelTier.BALANCED -> "claude-4.5-sonnet-thinking"
+    ModelTier.MAX -> "gpt-5.2"
+}
+
+private fun fallbackParams(tier: ModelTier): List<Pair<String, String>> {
+    val params = mutableListOf("thinking" to effortValue(tier))
+    params += "fast" to if (tier == ModelTier.SPEED) "true" else "false"
+    return params
+}
 
 private fun effortValue(tier: ModelTier): String = when (tier) {
     ModelTier.SPEED -> "low"

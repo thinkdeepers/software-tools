@@ -7,11 +7,15 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -19,13 +23,16 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.cursor.mobile.android.data.AgentStatus
@@ -98,6 +105,90 @@ fun Kicker(text: String) {
     }
 }
 
+private data class TextPart(val code: Boolean, val text: String)
+
+private fun normalizeBreaks(raw: String): String =
+    raw.replace("\r\n", "\n")
+        .replace('\r', '\n')
+        .replace("\\r\\n", "\n")
+        .replace("\\n", "\n")
+        .replace("\\t", "\t")
+
+private fun splitMessage(raw: String): List<TextPart> {
+    val text = normalizeBreaks(raw)
+    if (text.isEmpty()) return emptyList()
+    val parts = mutableListOf<TextPart>()
+    val fence = Regex("```[a-zA-Z0-9_-]*\\n?")
+    var index = 0
+    var code = false
+    while (index < text.length) {
+        val match = fence.find(text, index) ?: break
+        val chunk = text.substring(index, match.range.first)
+        if (chunk.isNotBlank()) parts += TextPart(code, chunk.trim('\n'))
+        code = !code
+        index = match.range.last + 1
+    }
+    val tail = text.substring(index)
+    if (tail.isNotBlank()) parts += TextPart(code, tail.trim('\n'))
+    if (parts.isEmpty()) parts += TextPart(looksLikeCode(text), text)
+    if (parts.size == 1 && !parts[0].code && looksLikeCode(parts[0].text)) {
+        return listOf(TextPart(true, parts[0].text))
+    }
+    return parts
+}
+
+private fun looksLikeCode(text: String): Boolean {
+    val trimmed = text.trim()
+    return trimmed.startsWith("diff ") || trimmed.startsWith("@@") || trimmed.contains("\n@@")
+}
+
+@Composable
+fun MessageBody(text: String, color: Color, style: TextStyle) {
+    val parts = remember(text) { splitMessage(text) }
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        parts.forEach { part ->
+            if (part.code) CodeScroll(part.text, color) else PlainScroll(part.text, color, style)
+        }
+    }
+}
+
+@Composable
+private fun PlainScroll(text: String, color: Color, style: TextStyle) {
+    val base = style.fontSize.value
+    val line = if (base.isNaN()) 22.sp else (base + 8f).sp
+    Text(
+        text,
+        color = color,
+        style = style.copy(lineHeight = line),
+        softWrap = true,
+        overflow = TextOverflow.Visible,
+        maxLines = Int.MAX_VALUE
+    )
+}
+
+@Composable
+private fun CodeScroll(text: String, color: Color) {
+    val long = text.length > 700 || text.count { it == '\n' } >= 12
+    val vertical = rememberScrollState()
+    val horizontal = rememberScrollState()
+    Text(
+        text,
+        color = color,
+        fontFamily = CodeFont,
+        fontSize = 12.sp,
+        lineHeight = 18.sp,
+        softWrap = false,
+        overflow = TextOverflow.Visible,
+        maxLines = Int.MAX_VALUE,
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.background.copy(alpha = 0.55f))
+            .then(if (long) Modifier.height(220.dp).verticalScroll(vertical) else Modifier)
+            .horizontalScroll(horizontal)
+            .padding(8.dp)
+    )
+}
+
 @Composable
 fun ChatBubble(msg: ChatMessage) {
     val maxBubble = (LocalConfiguration.current.screenWidthDp * 0.72f).dp
@@ -133,24 +224,23 @@ private fun UserBubble(msg: ChatMessage, maxBubble: androidx.compose.ui.unit.Dp)
         if (msg.time.isNotBlank()) {
             Text("你 · ${msg.time}", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.8f))
         }
-        Text(msg.text, color = Color.White, style = MaterialTheme.typography.bodyMedium)
+        MessageBody(msg.text, Color.White, MaterialTheme.typography.bodyMedium)
     }
 }
 
 @Composable
 private fun SystemChip(msg: ChatMessage, maxBubble: androidx.compose.ui.unit.Dp) {
-    Text(
-        msg.text,
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    Column(
         modifier = Modifier
             .widthIn(max = maxBubble)
             .wrapContentWidth()
-            .clip(RoundedCornerShape(999.dp))
+            .clip(RoundedCornerShape(16.dp))
             .background(MaterialTheme.colorScheme.surfaceContainer)
-            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(999.dp))
+            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp))
             .padding(horizontal = 8.dp, vertical = 6.dp)
-    )
+    ) {
+        MessageBody(msg.text, MaterialTheme.colorScheme.onSurfaceVariant, MaterialTheme.typography.labelSmall)
+    }
 }
 
 @Composable
@@ -188,7 +278,7 @@ private fun AgentBubble(msg: ChatMessage, maxBubble: androidx.compose.ui.unit.Dp
                 if (msg.isStreaming) TypingDots()
             }
             if (msg.text.isNotBlank()) {
-                Text(msg.text, style = MaterialTheme.typography.bodyMedium)
+                MessageBody(msg.text, MaterialTheme.colorScheme.onSurface, MaterialTheme.typography.bodyMedium)
             }
             if (msg.attachment != null) MiniCodeCard(msg.attachment)
         }
@@ -213,7 +303,7 @@ fun MiniCodeCard(text: String) {
                 .clip(RoundedCornerShape(999.dp))
                 .background(accentGradient())
         )
-        Text(text, fontFamily = CodeFont, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface)
+        MessageBody(text, MaterialTheme.colorScheme.onSurface, TextStyle(fontFamily = CodeFont, fontSize = 12.sp, lineHeight = 18.sp))
     }
 }
 

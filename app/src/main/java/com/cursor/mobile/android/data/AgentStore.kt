@@ -68,6 +68,22 @@ object AgentStore {
         }
     }
 
+    suspend fun ensureModels(context: Context) {
+        if (catalog.isNotEmpty()) return
+        val key = AuthRepository.apiKey(context) ?: return
+        try {
+            val models = withContext(Dispatchers.IO) { CursorApi.listModels(key) }
+            if (models.isNotEmpty()) {
+                catalog.clear()
+                catalog.addAll(models)
+            }
+        } catch (e: CursorApi.Unauthorized) {
+            throw e
+        } catch (_: Exception) {
+            // 列表失败时界面用本地模型，选择仍然可点
+        }
+    }
+
     suspend fun ensureRepos(context: Context) {
         if (reposLoaded) return
         val key = AuthRepository.apiKey(context) ?: return

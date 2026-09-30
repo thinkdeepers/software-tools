@@ -1,8 +1,5 @@
 package com.cursor.mobile.android.ui.screens
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -21,8 +18,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.RateReview
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -52,9 +47,10 @@ import com.cursor.mobile.android.data.CursorApi
 import com.cursor.mobile.android.data.ModelTier
 import com.cursor.mobile.android.data.PrefsRepository
 import com.cursor.mobile.android.data.Sender
-import com.cursor.mobile.android.data.suggestedModelId
+import com.cursor.mobile.android.data.modelChoices
 import com.cursor.mobile.android.ui.components.ChatBubble
 import com.cursor.mobile.android.ui.components.ComposerBar
+import com.cursor.mobile.android.ui.components.ModelPicker
 import com.cursor.mobile.android.ui.components.ModelTierPicker
 import com.cursor.mobile.android.ui.components.StatusChip
 import kotlinx.coroutines.launch
@@ -73,16 +69,37 @@ fun ChatScreen(
     val scope = rememberCoroutineScope()
     val session = AgentStore.sessions.firstOrNull { it.id == sessionId }
     var input by remember { mutableStateOf("") }
-    val savedTier by PrefsRepository.tierFlow(context).collectAsState(ModelTier.BALANCED)
-    val savedModel by PrefsRepository.modelFlow(context).collectAsState(ModelTier.BALANCED.model)
-    var tierOpen by remember { mutableStateOf(false) }
-    var modelMenu by remember { mutableStateOf(false) }
+    val persistedTier by PrefsRepository.tierFlow(context).collectAsState(ModelTier.BALANCED)
+    val persistedModel by PrefsRepository.modelFlow(context).collectAsState(ModelTier.BALANCED.model)
+    var picked by remember { mutableStateOf(false) }
+    var savedTier by remember { mutableStateOf(ModelTier.BALANCED) }
+    var savedModel by remember { mutableStateOf(ModelTier.BALANCED.model) }
+    LaunchedEffect(persistedTier, persistedModel) {
+        if (!picked) {
+            savedTier = persistedTier
+            savedModel = persistedModel
+        }
+    }
     val messages = remember(sessionId) { mutableStateListOf<ChatMessage>() }
     var loading by remember(sessionId) { mutableStateOf(true) }
     var loadError by remember(sessionId) { mutableStateOf<String?>(null) }
     var sending by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val catalog = AgentStore.catalog
+
+    LaunchedEffect(Unit) {
+        try {
+            AgentStore.ensureModels(context)
+        } catch (e: CursorApi.Unauthorized) {
+            onSessionExpired(e.message ?: "登录已失效")
+        }
+    }
+
+    LaunchedEffect(sessionId, loading, messages.size, messages.lastOrNull()?.text) {
+        if (!loading && messages.isNotEmpty()) {
+            listState.scrollToItem(0)
+        }
+    }
 
     LaunchedEffect(sessionId) {
         loading = true
@@ -127,42 +144,17 @@ fun ChatScreen(
         bottomBar = {
             Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Box {
-                        ModelPill("${savedTier.label} · $savedModel") { tierOpen = true }
-                        DropdownMenu(expanded = modelMenu, onDismissRequest = { modelMenu = false }) {
-                            val choices = catalog.ifEmpty { null }
-                            if (choices == null) {
-                                ModelTier.entries.forEach { tier ->
-                                    DropdownMenuItem(
-                                        text = { Text(tier.model) },
-                                        onClick = {
-                                            modelMenu = false
-                                            scope.launch { PrefsRepository.saveSelection(context, savedTier, tier.model) }
-                                        }
-                                    )
-                                }
-                            } else {
-                                choices.forEach { model ->
-                                    DropdownMenuItem(
-                                        text = { Text(model.displayName) },
-                                        onClick = {
-                                            modelMenu = false
-                                            scope.launch { PrefsRepository.saveSelection(context, savedTier, model.id) }
-                                        }
-                                    )
-                                }
-                            }
-                        }
+                    ModelPicker(savedModel, modelChoices(catalog.toList())) { model ->
+                        picked = true
+                        savedModel = model.id
+                        scope.launch { PrefsRepository.saveSelection(context, savedTier, model.id) }
                     }
                     MachinePill("Cloud")
                 }
-                AnimatedVisibility(visible = tierOpen) {
-                    ModelTierPicker(savedTier, savedModel) { tier ->
-                        scope.launch {
-                            PrefsRepository.saveSelection(context, tier, suggestedModelId(tier, catalog.toList()))
-                        }
-                        tierOpen = false
-                    }
+                ModelTierPicker(savedTier, savedModel) { tier ->
+                    picked = true
+                    savedTier = tier
+                    scope.launch { PrefsRepository.saveSelection(context, tier, savedModel) }
                 }
                 ComposerBar(
                     value = input,
@@ -195,7 +187,7 @@ fun ChatScreen(
                                         )
                                     )
                                 }
-                                if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
+                                if (messages.isNotEmpty()) listState.scrollToItem(0)
                             } catch (e: CursorApi.Unauthorized) {
                                 onSessionExpired(e.message ?: "登录已失效")
                             } catch (e: Exception) {
@@ -218,14 +210,27 @@ fun ChatScreen(
     ) { padding ->
         LazyColumn(
             state = listState,
-            modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 14.dp),
-            verticalArrangement = Arrangement.Top
+            reverseLayout = true,
+            modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 14.dp)
         ) {
-            if (loading) {
-                item {
-                    Box(Modifier.padding(vertical = 18.dp), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+            item {
+                Row(modifier = Modifier.padding(vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    slashCommands.take(3).forEach { cmd ->
+                        SuggestChip(cmd) { input = "$cmd " }
                     }
+                }
+            }
+            items(messages.asReversed(), key = { it.id }) { message ->
+                ChatBubble(message)
+            }
+            if (!loading && messages.isEmpty() && loadError.isNullOrBlank()) {
+                item {
+                    Text(
+                        "这条会话还没有消息。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 8.dp)
+                    )
                 }
             }
             if (!loadError.isNullOrBlank()) {
@@ -238,47 +243,14 @@ fun ChatScreen(
                     )
                 }
             }
-            if (!loading && messages.isEmpty() && loadError.isNullOrBlank()) {
+            if (loading) {
                 item {
-                    Text(
-                        "这条会话还没有消息。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(vertical = 8.dp)
-                    )
-                }
-            }
-            items(messages, key = { it.id }) { message ->
-                AnimatedVisibility(visible = true, enter = fadeIn() + slideInVertically { it / 4 }) {
-                    ChatBubble(message)
-                }
-            }
-            item {
-                Row(modifier = Modifier.padding(vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    slashCommands.take(3).forEach { cmd ->
-                        SuggestChip(cmd) { input = "$cmd " }
+                    Box(Modifier.padding(vertical = 18.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
                     }
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun ModelPill(model: String, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .clip(RoundedCornerShape(999.dp))
-            .background(MaterialTheme.colorScheme.primaryContainer)
-            .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f), RoundedCornerShape(999.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 7.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        Text("◆", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelSmall)
-        Text(model, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onPrimaryContainer, fontWeight = FontWeight.SemiBold)
-        Text("▾", color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.6f), style = MaterialTheme.typography.labelSmall)
     }
 }
 
