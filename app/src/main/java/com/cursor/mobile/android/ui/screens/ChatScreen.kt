@@ -7,6 +7,9 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -42,6 +45,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -195,7 +199,14 @@ fun ChatScreen(
             }
         },
         bottomBar = {
-            Column(Modifier.padding(horizontal = ChatPagePadding, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            val density = LocalDensity.current
+            val imePx = WindowInsets.ime.getBottom(density)
+            val navPx = WindowInsets.navigationBars.getBottom(density)
+            val keyboardLift = if (imePx > navPx) with(density) { (imePx - navPx).toDp() + 8.dp } else 0.dp
+            Column(
+                Modifier.padding(bottom = keyboardLift).padding(horizontal = ChatPagePadding, vertical = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
                 Row(
                     modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),

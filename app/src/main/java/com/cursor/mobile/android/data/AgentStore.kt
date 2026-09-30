@@ -63,7 +63,7 @@ object AgentStore {
             error = null
             try {
                 val sync = CursorSession.sync(token, AuthRepository.apiKey(context))
-                syncReport = sync.report
+                syncReport = sync.report + "\n" + desktopFieldReport(sync.composers)
                 syncSummary = summarizeSync(sync.httpCode, sync.composers.size, 0, 0)
                 if (sync.httpCode == 401 || sync.httpCode == 403) {
                     throw CursorApi.Unauthorized(syncSummary.ifBlank { "登录已失效（HTTP ${sync.httpCode}）" })
@@ -72,7 +72,7 @@ object AgentStore {
                     error = syncSummary
                     return@withLock
                 }
-                var merged = linkProjectNames(sync.composers.map { mapComposer(it) })
+                var merged = linkProjectNames(mapDesktopComposers(sync.composers))
                 val key = AuthRepository.apiKey(context)
                 if (key != null) {
                     try {
@@ -274,7 +274,7 @@ object AgentStore {
         code !in 200..299 -> "列表请求失败（HTTP $code）。"
         total == 0 -> "服务器返回 0 条会话。"
         projects > 0 -> ""
-        repos > 0 -> "同步到 $repos 条仓库会话。响应里没有单独的项目字段，所以 Projects 是空的，内容在 Repositories。"
+        repos > 0 -> "带仓库地址的 $repos 条在 Repositories。Projects 只保留无仓库的协调项目或带项目标记的条目，计数在同步详情里。"
         else -> "同步到 $total 条会话，但没有可归类的项目或仓库。"
     }
 

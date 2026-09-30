@@ -49,30 +49,76 @@ internal fun mapV1Agent(obj: JSONObject, modelLabel: String = ""): AgentSession 
     )
 }
 
-// 桌面 Agents 的 Projects 就是 ListBackgroundComposers / background-composer/list 返回的 composer。
-// 真实字段是 bcId、name、repoUrl / repo_url、branchName / branch、isArchived、updatedAt。
-// 有 project、projectId、parentBcId、coordinatorBcId 时按那个名字把多条会话归成一组；
-// 这些字段经常没有。这时不能把有 repoUrl 的会话挪去 Repositories，否则 Projects 会是空的。
-// 没有上级项目时，这条 composer 自己就是项目，用 name 当组名。
-// Repositories 只收 Cloud Agents API 里带 repos.url、且不是这些桌面 composer 的会话。
-internal fun mapComposer(obj: JSONObject): AgentSession {
+// 桌面左侧 Projects 不是「每条 composer 的 name」。
+// ListBackgroundComposers 里多数条目带 repoUrl / repository，那些是 Repositories，按仓库短名分组。
+// Projects 只收：composerType、type、kind、isProject、isCoordinator 标成项目的条目，
+// 或者整批里占少数、且没有仓库地址的协调项目（名字用它自己的 name，这才是左侧项目名）。
+// 分不清单批时，不要把全部会话放进 Projects。
+internal fun mapDesktopComposers(items: List<JSONObject>): List<AgentSession> {
+    val repoUrls = items.map { readRepoUrl(it) }
+    val marked = items.map { explicitProject(it) }
+    val noRepo = repoUrls.count { it.isBlank() }
+    val withRepo = items.size - noRepo
+    val noRepoAreProjects = marked.none { it } && noRepo in 1..12 && withRepo > noRepo
+    return items.mapIndexed { index, obj ->
+        mapComposer(obj, repoUrls[index], marked[index], noRepoAreProjects)
+    }
+}
+
+internal fun desktopFieldReport(items: List<JSONObject>): String {
+    if (items.isEmpty()) return "composer 0 条，无法对照桌面 Projects。"
+    val keyCounts = linkedMapOf<String, Int>()
+    val typeCounts = linkedMapOf<String, Int>()
+    items.forEach { obj ->
+        val keys = obj.keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            if (!obj.isNull(key)) keyCounts[key] = (keyCounts[key] ?: 0) + 1
+        }
+        listOf("composerType", "composer_type", "type", "kind", "role", "source").forEach { key ->
+            val value = when (val raw = obj.opt(key)) {
+                is String -> raw
+                is JSONObject -> raw.optStr("type").ifBlank { "object" }
+                else -> ""
+            }
+            if (value.isNotBlank() && value != "null") {
+                val label = "$key=$value"
+                typeCounts[label] = (typeCounts[label] ?: 0) + 1
+            }
+        }
+    }
+    val repo = items.count { readRepoUrl(it).isNotBlank() }
+    val flags = items.count { explicitProject(it) }
+    val keys = keyCounts.entries.sortedByDescending { it.value }.take(18)
+        .joinToString(" ") { "${it.key}:${it.value}" }
+    val types = if (typeCounts.isEmpty()) "无" else typeCounts.entries.joinToString(" ") { "${it.key}:${it.value}" }
+    return "判别：共 ${items.size} 条，有仓库地址 $repo，无仓库 ${items.size - repo}，显式项目标记 $flags。Projects 只用无仓库的少数协调项或显式标记，其余进 Repositories。字段：$keys。类型：$types。"
+}
+
+internal fun mapComposer(obj: JSONObject): AgentSession = mapComposer(obj, readRepoUrl(obj), explicitProject(obj), false)
+
+private fun mapComposer(obj: JSONObject, repoUrl: String, marked: Boolean, noRepoAreProjects: Boolean): AgentSession {
     val id = obj.optStr("bcId").ifBlank { obj.optStr("bc_id") }.ifBlank { obj.optStr("composerId") }.ifBlank { obj.optStr("id") }
     val hit = readProject(obj)
-    val repoUrl = readRepoUrl(obj)
     val branchName = obj.optStr("branchName").ifBlank { obj.optStr("branch_name") }
         .ifBlank { obj.optStr("branch") }.ifBlank { obj.optStr("startingRef") }.ifBlank { obj.optStr("ref") }
         .ifBlank { obj.optJSONObject("source")?.optStr("ref").orEmpty() }
     val iso = readInstant(obj)
     val title = obj.optStr("name").ifBlank { obj.optStr("title") }.ifBlank { obj.optStr("summary") }.ifBlank { "未命名会话" }
-    val label = hit?.name?.takeIf { it.isNotBlank() } ?: title
-    val projectId = hit?.id?.takeIf { it.isNotBlank() } ?: id
     val archived = obj.optBoolean("isArchived", false) || obj.optBoolean("is_archived", false)
     val statusRaw = obj.optStr("status").ifBlank { obj.optStr("composerStatus") }.ifBlank { if (archived) "ARCHIVED" else "" }
+    val project = repoUrl.isBlank() && (marked || noRepoAreProjects)
+    val short = shortRepo(repoUrl).takeUnless { repoUrl.isBlank() }.orEmpty()
+    val label = if (project) {
+        hit?.name?.takeIf { it.isNotBlank() } ?: title
+    } else {
+        short.ifBlank { "未命名仓库" }
+    }
     return AgentSession(
         id = id,
         title = title,
-        repo = "",
-        branch = branchName,
+        repo = if (project) "" else short,
+        branch = if (project) "" else branchName,
         status = mapAgentStatus(statusRaw),
         model = obj.optStr("model"),
         machine = MachineKind.CLOUD,
@@ -81,13 +127,31 @@ internal fun mapComposer(obj: JSONObject): AgentSession {
         webUrl = obj.optStr("url"),
         summary = obj.optStr("summary"),
         updatedAtIso = iso,
-        scope = WorkScope.PROJECT,
-        envName = label,
-        projectId = projectId,
+        scope = if (project) WorkScope.PROJECT else if (repoUrl.isNotBlank()) WorkScope.REPOSITORY else null,
+        envName = if (project) label else "",
+        projectId = if (project) hit?.id?.takeIf { it.isNotBlank() } ?: id else "",
         repoUrl = repoUrl,
-        groupLabel = label,
-        classified = true
+        groupLabel = if (project || repoUrl.isNotBlank()) label else "",
+        classified = project || repoUrl.isNotBlank()
     )
+}
+
+private fun explicitProject(obj: JSONObject): Boolean {
+    val kind = obj.optStr("kind").ifBlank { obj.optStr("agentType") }.ifBlank { obj.optStr("role") }
+        .ifBlank { obj.optStr("composerType") }.ifBlank { obj.optStr("composer_type") }
+    val typeOnly = obj.optStr("type")
+    val sourceText = obj.opt("source")?.takeIf { it is String }?.toString().orEmpty()
+    if (kind.equals("project", true) || kind.equals("coordinator", true)) return true
+    if (typeOnly.equals("project", true) || typeOnly.equals("coordinator", true)) return true
+    if (sourceText.equals("project", true) || sourceText.equals("coordinator", true)) return true
+    if (obj.optBoolean("isProject", false) || obj.optBoolean("is_project", false)) return true
+    if (obj.optBoolean("isCoordinator", false) || obj.optBoolean("is_coordinator", false)) return true
+    val project = obj.optJSONObject("project")
+    if (project != null && (project.optStr("name").isNotBlank() || project.optStr("displayName").isNotBlank() || project.optStr("id").isNotBlank())) {
+        return true
+    }
+    if (obj.optStr("projectName").isNotBlank() || obj.optStr("projectDisplayName").isNotBlank()) return true
+    return false
 }
 
 internal fun mapV0Agent(obj: JSONObject): AgentSession {
@@ -151,8 +215,8 @@ internal fun mergeAgents(v1: List<JSONObject>, v0: List<JSONObject>): List<Agent
 
 internal fun applyDetail(session: AgentSession, detail: JSONObject): AgentSession {
     val mapped = mapV1Agent(detail, session.model)
-    val scope = if (session.scope == WorkScope.PROJECT || session.source == "desktop-session") {
-        WorkScope.PROJECT
+    val scope = if (session.source == "desktop-session") {
+        session.scope
     } else if (mapped.classified) {
         mapped.scope
     } else {
