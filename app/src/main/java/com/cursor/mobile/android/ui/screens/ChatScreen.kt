@@ -125,8 +125,8 @@ fun ChatScreen(
                         Text(session?.title ?: "对话", maxLines = 1, style = MaterialTheme.typography.titleMedium)
                         Text(
                             listOf(
-                                session?.repo?.ifBlank { "未关联仓库" } ?: "未关联仓库",
-                                session?.branch?.ifBlank { "分支同步中" } ?: "分支同步中"
+                                if (session?.scope == com.cursor.mobile.android.data.WorkScope.PROJECT) "Projects" else "Repositories",
+                                session?.groupLabel?.ifBlank { null } ?: session?.repo?.ifBlank { null } ?: "未归类"
                             ).joinToString(" · "),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant

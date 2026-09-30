@@ -75,7 +75,10 @@ fun ReviewScreen(sessionId: String, onBack: () -> Unit) {
                 ) {
                     Kicker("Pull request")
                     Text(
-                        listOf(session?.branch?.ifBlank { null } ?: "分支未知", session?.repo?.ifBlank { null } ?: "仓库未知").joinToString(" · "),
+                        listOf(
+                            if (session?.scope == com.cursor.mobile.android.data.WorkScope.PROJECT) "Projects" else "Repositories",
+                            session?.groupLabel?.ifBlank { null } ?: session?.repo?.ifBlank { null } ?: "未归类"
+                        ).joinToString(" · "),
                         style = MaterialTheme.typography.titleMedium
                     )
                     if (!session?.prUrl.isNullOrBlank()) {

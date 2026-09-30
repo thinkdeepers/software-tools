@@ -141,7 +141,7 @@ object CursorApi {
                 return buildList {
                     for (i in 0 until items.length()) {
                         val url = items.optJSONObject(i)?.optStr("url").orEmpty()
-                        if (url.isNotBlank()) add(RepoRef(shortRepo(url), "main"))
+                        if (url.isNotBlank()) add(RepoRef(shortRepo(url), "main", url))
                     }
                 }
             }
@@ -166,20 +166,45 @@ object CursorApi {
                     val name = obj.optStr("name")
                     if (owner.isNotBlank() && name.isNotBlank()) "https://github.com/$owner/$name" else ""
                 }
-                if (url.isNotBlank()) add(RepoRef(shortRepo(url), "main"))
+                if (url.isNotBlank()) add(RepoRef(shortRepo(url), "main", url))
             }
         }
+    }
+
+    fun listProjects(apiKey: String): List<ProjectRef> {
+        val found = linkedMapOf<String, ProjectRef>()
+        listOf("/v1/projects", "/v1/environments").forEach { path ->
+            val res = try {
+                get(path, apiKey)
+            } catch (_: IOException) {
+                return@forEach
+            }
+            if (res.code !in 200..299) return@forEach
+            parseNamedItems(res.body).forEach { item ->
+                found.putIfAbsent(item.name.lowercase(), item)
+            }
+        }
+        return found.values.toList()
     }
 
     fun createAgent(apiKey: String, request: AgentRequest, selection: ModelSelection): JSONObject {
         val body = JSONObject()
         body.put("prompt", JSONObject().put("text", request.prompt))
         body.put("model", selection.toJson())
-        val repoUrl = normalizeRepoUrl(request.repo)
-        if (repoUrl.isNotBlank()) {
-            val repo = JSONObject().put("url", repoUrl)
-            if (request.branch.isNotBlank()) repo.put("startingRef", request.branch)
-            body.put("repos", JSONArray().put(repo))
+        if (request.scope == WorkScope.PROJECT) {
+            body.put(
+                "env",
+                JSONObject()
+                    .put("type", "cloud")
+                    .put("name", request.projectName)
+            )
+        } else {
+            val repoUrl = normalizeRepoUrl(request.repo)
+            if (repoUrl.isNotBlank()) {
+                val repo = JSONObject().put("url", repoUrl)
+                if (request.branch.isNotBlank()) repo.put("startingRef", request.branch)
+                body.put("repos", JSONArray().put(repo))
+            }
         }
         val res = post("/v1/agents", apiKey, body)
         if (res.code == 401 || res.code == 403) throw Unauthorized(explain(res.code, res.body))
@@ -435,6 +460,25 @@ object CursorApi {
 internal fun JSONObject.optStr(key: String): String {
     if (!has(key) || isNull(key)) return ""
     return optString(key).takeUnless { it == "null" }.orEmpty()
+}
+
+private fun parseNamedItems(body: String): List<ProjectRef> {
+    val root = try {
+        JSONObject(body)
+    } catch (_: Exception) {
+        return emptyList()
+    }
+    val arrays = listOf("items", "projects", "environments", "data")
+        .mapNotNull { key -> root.optJSONArray(key) }
+    val objects = arrays.flatMap { arr ->
+        buildList {
+            for (i in 0 until arr.length()) arr.optJSONObject(i)?.let { add(it) }
+        }
+    }
+    return objects.mapNotNull { obj ->
+        val name = obj.optStr("displayName").ifBlank { obj.optStr("name") }.ifBlank { obj.optStr("slug") }
+        if (name.isBlank()) null else ProjectRef(name, obj.optStr("id"))
+    }
 }
 
 private fun ModelSelection.toJson(): JSONObject {

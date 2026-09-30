@@ -8,38 +8,71 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
 internal fun mapV1Agent(obj: JSONObject, modelLabel: String = ""): AgentSession {
-    val env = obj.optJSONObject("env")?.optStr("type").orEmpty()
+    val envObj = obj.optJSONObject("env")
+    val envType = envObj?.optStr("type").orEmpty()
+    val envName = envObj?.optStr("name").orEmpty()
+    val namedProject = projectName(obj)
     val repos = obj.optJSONArray("repos")
     val firstRepo = repos?.optJSONObject(0)
     val repoUrl = firstRepo?.optStr("url").orEmpty()
     val startingRef = firstRepo?.optStr("startingRef").orEmpty()
     val iso = obj.optStr("updatedAt").ifBlank { obj.optStr("createdAt") }
+    val scope = when {
+        repoUrl.isNotBlank() -> WorkScope.REPOSITORY
+        namedProject.isNotBlank() -> WorkScope.PROJECT
+        repos != null -> WorkScope.PROJECT
+        else -> null
+    }
+    val short = shortRepo(repoUrl).takeUnless { repoUrl.isBlank() }.orEmpty()
+    val projectLabel = namedProject.ifBlank { envName }
     return AgentSession(
         id = obj.optStr("id"),
         title = obj.optStr("name").ifBlank { "未命名会话" },
-        repo = shortRepo(repoUrl).takeUnless { repoUrl.isBlank() }.orEmpty(),
-        branch = startingRef,
+        repo = if (scope == WorkScope.REPOSITORY) short else "",
+        branch = if (scope == WorkScope.REPOSITORY) startingRef else "",
         status = mapAgentStatus(obj.optStr("status")),
         model = modelLabel,
-        machine = mapMachine(env),
+        machine = mapMachine(envType),
         updatedAt = formatTime(iso),
         latestRunId = obj.optStr("latestRunId"),
         webUrl = obj.optStr("url"),
         summary = obj.optStr("summary"),
-        updatedAtIso = iso
+        updatedAtIso = iso,
+        scope = scope,
+        envName = if (scope == WorkScope.PROJECT) projectLabel else "",
+        repoUrl = if (scope == WorkScope.REPOSITORY) repoUrl else "",
+        groupLabel = when (scope) {
+            WorkScope.REPOSITORY -> short
+            WorkScope.PROJECT -> projectLabel.ifBlank { "未命名项目" }
+            null -> ""
+        }
     )
 }
 
 internal fun mapV0Agent(obj: JSONObject): AgentSession {
     val source = obj.optJSONObject("source")
     val target = obj.optJSONObject("target")
-    val repoUrl = source?.optStr("repository").orEmpty()
+    val repository = source?.optStr("repository").orEmpty()
+    val prUrl = source?.optStr("prUrl").orEmpty()
+    val repoUrl = repository.ifBlank { prUrl.substringBefore("/pull").substringBefore("/pulls") }
+    val namedProject = projectName(obj).ifBlank { source?.optStr("project").orEmpty() }
     val iso = obj.optStr("updatedAt").ifBlank { obj.optStr("createdAt") }
+    val scope = when {
+        repository.isNotBlank() || prUrl.isNotBlank() -> WorkScope.REPOSITORY
+        namedProject.isNotBlank() -> WorkScope.PROJECT
+        source != null -> WorkScope.PROJECT
+        else -> null
+    }
+    val short = shortRepo(repoUrl).takeUnless { repoUrl.isBlank() }.orEmpty()
     return AgentSession(
         id = obj.optStr("id"),
         title = obj.optStr("name").ifBlank { obj.optStr("summary").ifBlank { "未命名会话" } },
-        repo = shortRepo(repoUrl).takeUnless { repoUrl.isBlank() }.orEmpty(),
-        branch = target?.optStr("branchName").orEmpty().ifBlank { source?.optStr("ref").orEmpty() },
+        repo = if (scope == WorkScope.REPOSITORY) short else "",
+        branch = if (scope == WorkScope.REPOSITORY) {
+            target?.optStr("branchName").orEmpty().ifBlank { source?.optStr("ref").orEmpty() }
+        } else {
+            ""
+        },
         status = mapAgentStatus(obj.optStr("status")),
         model = "",
         machine = MachineKind.CLOUD,
@@ -47,7 +80,15 @@ internal fun mapV0Agent(obj: JSONObject): AgentSession {
         webUrl = target?.optStr("url").orEmpty(),
         prUrl = target?.optStr("prUrl").orEmpty(),
         summary = obj.optStr("summary"),
-        updatedAtIso = iso
+        updatedAtIso = iso,
+        scope = scope,
+        envName = if (scope == WorkScope.PROJECT) namedProject else "",
+        repoUrl = if (scope == WorkScope.REPOSITORY) repoUrl else "",
+        groupLabel = when (scope) {
+            WorkScope.REPOSITORY -> short.ifBlank { "未命名仓库" }
+            WorkScope.PROJECT -> namedProject.ifBlank { "未命名项目" }
+            null -> ""
+        }
     )
 }
 
@@ -61,35 +102,29 @@ internal fun mergeAgents(v1: List<JSONObject>, v0: List<JSONObject>): List<Agent
         val session = mapV0Agent(obj)
         if (session.id.isBlank()) return@forEach
         val existing = byId[session.id]
-        byId[session.id] = if (existing == null) {
-            session
-        } else {
-            existing.copy(
-                title = if (existing.title == "未命名会话") session.title else existing.title,
-                repo = existing.repo.ifBlank { session.repo },
-                branch = existing.branch.ifBlank { session.branch },
-                prUrl = existing.prUrl.ifBlank { session.prUrl },
-                summary = existing.summary.ifBlank { session.summary },
-                webUrl = existing.webUrl.ifBlank { session.webUrl }
-            )
-        }
+        byId[session.id] = if (existing == null) session else mergeScope(existing, session)
     }
     return byId.values.sortedByDescending { it.updatedAtIso }
 }
 
 internal fun applyDetail(session: AgentSession, detail: JSONObject): AgentSession {
     val mapped = mapV1Agent(detail, session.model)
+    val scope = mapped.scope ?: session.scope
     return session.copy(
         title = mapped.title.takeUnless { it == "未命名会话" } ?: session.title,
-        repo = mapped.repo.ifBlank { session.repo },
-        branch = mapped.branch.ifBlank { session.branch },
+        repo = if (scope == WorkScope.REPOSITORY) mapped.repo.ifBlank { session.repo } else "",
+        branch = if (scope == WorkScope.REPOSITORY) mapped.branch.ifBlank { session.branch } else "",
         status = mapped.status,
         machine = mapped.machine,
         latestRunId = mapped.latestRunId.ifBlank { session.latestRunId },
         webUrl = mapped.webUrl.ifBlank { session.webUrl },
         summary = mapped.summary.ifBlank { session.summary },
         updatedAt = mapped.updatedAt.ifBlank { session.updatedAt },
-        updatedAtIso = mapped.updatedAtIso.ifBlank { session.updatedAtIso }
+        updatedAtIso = mapped.updatedAtIso.ifBlank { session.updatedAtIso },
+        scope = scope,
+        envName = if (scope == WorkScope.PROJECT) mapped.envName.ifBlank { session.envName } else "",
+        repoUrl = if (scope == WorkScope.REPOSITORY) mapped.repoUrl.ifBlank { session.repoUrl } else "",
+        groupLabel = mapped.groupLabel.ifBlank { session.groupLabel }
     )
 }
 
@@ -98,12 +133,55 @@ internal fun applyRunGit(session: AgentSession, run: JSONObject): AgentSession {
     val branch = branchObj?.optStr("branch").orEmpty()
     val repo = branchObj?.optStr("repoUrl").orEmpty()
     val pr = branchObj?.optStr("prUrl").orEmpty()
+    val learnedRepo = repo.isNotBlank() && session.scope != WorkScope.PROJECT
+    val scope = if (learnedRepo) WorkScope.REPOSITORY else session.scope
+    val short = session.repo.ifBlank { shortRepo(repo).takeUnless { repo.isBlank() }.orEmpty() }
     return session.copy(
-        repo = session.repo.ifBlank { shortRepo(repo).takeUnless { repo.isBlank() }.orEmpty() },
-        branch = branch.ifBlank { session.branch },
+        repo = if (scope == WorkScope.REPOSITORY) short else "",
+        branch = if (scope == WorkScope.REPOSITORY) branch.ifBlank { session.branch } else "",
         prUrl = pr.ifBlank { session.prUrl },
-        latestRunId = run.optStr("id").ifBlank { session.latestRunId }
+        latestRunId = run.optStr("id").ifBlank { session.latestRunId },
+        scope = scope,
+        envName = if (scope == WorkScope.PROJECT) session.envName else "",
+        repoUrl = if (scope == WorkScope.REPOSITORY) session.repoUrl.ifBlank { normalizeRepoUrl(repo) } else "",
+        groupLabel = if (scope == WorkScope.REPOSITORY) short.ifBlank { session.groupLabel } else session.groupLabel
     )
+}
+
+private fun mergeScope(existing: AgentSession, incoming: AgentSession): AgentSession {
+    val scope = when {
+        existing.scope == WorkScope.REPOSITORY || incoming.scope == WorkScope.REPOSITORY -> WorkScope.REPOSITORY
+        existing.scope == WorkScope.PROJECT || incoming.scope == WorkScope.PROJECT -> WorkScope.PROJECT
+        else -> null
+    }
+    val repo = existing.repo.ifBlank { incoming.repo }
+    val repoUrl = existing.repoUrl.ifBlank { incoming.repoUrl }
+    val envName = existing.envName.ifBlank { incoming.envName }
+    return existing.copy(
+        title = if (existing.title == "未命名会话") incoming.title else existing.title,
+        repo = if (scope == WorkScope.REPOSITORY) repo else "",
+        branch = if (scope == WorkScope.REPOSITORY) existing.branch.ifBlank { incoming.branch } else "",
+        prUrl = existing.prUrl.ifBlank { incoming.prUrl },
+        summary = existing.summary.ifBlank { incoming.summary },
+        webUrl = existing.webUrl.ifBlank { incoming.webUrl },
+        scope = scope,
+        envName = if (scope == WorkScope.PROJECT) envName else "",
+        repoUrl = if (scope == WorkScope.REPOSITORY) repoUrl else "",
+        groupLabel = when (scope) {
+            WorkScope.REPOSITORY -> repo.ifBlank { existing.groupLabel.ifBlank { incoming.groupLabel } }
+            WorkScope.PROJECT -> envName.ifBlank { existing.groupLabel.ifBlank { incoming.groupLabel } }.ifBlank { "未命名项目" }
+            null -> ""
+        }
+    )
+}
+
+private fun projectName(obj: JSONObject): String {
+    val project = obj.optJSONObject("project")
+    val fromObject = project?.optStr("displayName").orEmpty()
+        .ifBlank { project?.optStr("name").orEmpty() }
+        .ifBlank { project?.optStr("id").orEmpty() }
+    if (fromObject.isNotBlank()) return fromObject
+    return obj.optStr("projectName").ifBlank { obj.optStr("projectId") }
 }
 
 internal fun mapConversation(body: JSONObject): List<ChatMessage> {

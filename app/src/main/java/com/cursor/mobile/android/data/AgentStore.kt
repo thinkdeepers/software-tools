@@ -20,22 +20,36 @@ import java.util.concurrent.atomic.AtomicBoolean
 object AgentStore {
     val sessions = mutableStateListOf<AgentSession>()
     val repos = mutableStateListOf<RepoRef>()
+    val projects = mutableStateListOf<ProjectRef>()
     val catalog = mutableStateListOf<RemoteModel>()
     var loading by mutableStateOf(false)
     var error by mutableStateOf<String?>(null)
     var accountLabel by mutableStateOf("")
+    var scope by mutableStateOf(WorkScope.PROJECT)
+        private set
 
     private val gate = Mutex()
     private var reposLoaded = false
+    private var projectsLoaded = false
+    private var scopeTouched = false
+
+    fun choose(next: WorkScope) {
+        scope = next
+        scopeTouched = true
+    }
 
     fun clear() {
         sessions.clear()
         repos.clear()
+        projects.clear()
         catalog.clear()
         loading = false
         error = null
         accountLabel = ""
         reposLoaded = false
+        projectsLoaded = false
+        scopeTouched = false
+        scope = WorkScope.PROJECT
     }
 
     suspend fun refresh(context: Context) {
@@ -57,6 +71,22 @@ object AgentStore {
                 enriched.forEach { updated ->
                     val index = sessions.indexOfFirst { it.id == updated.id }
                     if (index >= 0) sessions[index] = updated
+                }
+                try {
+                    ensureRepos(context)
+                } catch (_: Exception) {
+                    // 仓库目录失败时仍用会话上的 repos.url
+                }
+                try {
+                    ensureProjects(context)
+                } catch (_: Exception) {
+                    // 项目目录失败时仍用会话上的 env.name
+                }
+                absorbTargets()
+                if (!scopeTouched) {
+                    val projectCount = sessions.count { it.scope == WorkScope.PROJECT }
+                    val repoCount = sessions.count { it.scope == WorkScope.REPOSITORY }
+                    scope = if (projectCount == 0 && repoCount > 0) WorkScope.REPOSITORY else WorkScope.PROJECT
                 }
             } catch (e: CursorApi.Unauthorized) {
                 throw e
@@ -93,6 +123,16 @@ object AgentStore {
         reposLoaded = true
     }
 
+    suspend fun ensureProjects(context: Context) {
+        if (projectsLoaded) return
+        val key = AuthRepository.apiKey(context) ?: return
+        val loaded = withContext(Dispatchers.IO) { CursorApi.listProjects(key) }
+        loaded.forEach { item ->
+            if (projects.none { it.name.equals(item.name, true) }) projects.add(item)
+        }
+        projectsLoaded = true
+    }
+
     suspend fun loadMessages(context: Context, agentId: String): List<ChatMessage> {
         val key = AuthRepository.apiKey(context) ?: throw CursorApi.Unauthorized("未登录")
         hydrate(context, agentId)
@@ -124,6 +164,7 @@ object AgentStore {
         }
         val index = sessions.indexOfFirst { it.id == agentId }
         if (index >= 0) sessions[index] = updated else sessions.add(0, updated)
+        absorbTargets()
     }
 
     suspend fun create(context: Context, request: AgentRequest): String {
@@ -139,14 +180,49 @@ object AgentStore {
         val body = withContext(Dispatchers.IO) { CursorApi.createAgent(key, request, selection) }
         val agent = body.optJSONObject("agent") ?: body
         val runId = body.optJSONObject("run")?.optStr("id").orEmpty()
-        val session = mapV1Agent(agent, selection.id).copy(
-            latestRunId = runId.ifBlank { agent.optStr("latestRunId") },
-            branch = request.branch.ifBlank { mapV1Agent(agent).branch },
-            repo = shortRepo(normalizeRepoUrl(request.repo)).ifBlank { mapV1Agent(agent).repo }
-        )
+        val mapped = mapV1Agent(agent, selection.id)
+        val session = if (request.scope == WorkScope.PROJECT) {
+            mapped.copy(
+                latestRunId = runId.ifBlank { agent.optStr("latestRunId") },
+                scope = WorkScope.PROJECT,
+                repo = "",
+                repoUrl = "",
+                branch = "",
+                envName = request.projectName,
+                groupLabel = request.projectName.ifBlank { "未命名项目" }
+            )
+        } else {
+            val url = normalizeRepoUrl(request.repo)
+            val short = shortRepo(url).ifBlank { mapped.repo }
+            mapped.copy(
+                latestRunId = runId.ifBlank { agent.optStr("latestRunId") },
+                scope = WorkScope.REPOSITORY,
+                branch = request.branch.ifBlank { mapped.branch },
+                repo = short,
+                repoUrl = url.ifBlank { mapped.repoUrl },
+                envName = "",
+                groupLabel = short.ifBlank { mapped.groupLabel }
+            )
+        }
         val index = sessions.indexOfFirst { it.id == session.id }
         if (index >= 0) sessions[index] = session else sessions.add(0, session)
+        absorbTargets()
         return session.id
+    }
+
+    private fun absorbTargets() {
+        sessions.forEach { session ->
+            if (session.scope == WorkScope.PROJECT && session.envName.isNotBlank() &&
+                projects.none { it.name.equals(session.envName, true) }
+            ) {
+                projects.add(ProjectRef(session.envName))
+            }
+            if (session.scope == WorkScope.REPOSITORY && session.repo.isNotBlank() &&
+                repos.none { it.name.equals(session.repo, true) }
+            ) {
+                repos.add(RepoRef(session.repo, session.branch.ifBlank { "main" }, session.repoUrl))
+            }
+        }
     }
 
     suspend fun followUp(

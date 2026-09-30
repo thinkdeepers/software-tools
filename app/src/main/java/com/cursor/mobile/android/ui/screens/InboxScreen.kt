@@ -47,10 +47,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.cursor.mobile.android.data.AgentSession
-import com.cursor.mobile.android.data.AgentStatus
 import com.cursor.mobile.android.data.AgentStore
 import com.cursor.mobile.android.data.CursorApi
 import com.cursor.mobile.android.data.MachineKind
+import com.cursor.mobile.android.data.WorkScope
 import com.cursor.mobile.android.ui.components.EmptyState
 import com.cursor.mobile.android.ui.components.Kicker
 import com.cursor.mobile.android.ui.components.MessageBody
@@ -104,8 +104,16 @@ fun InboxScreen(
         },
         containerColor = MaterialTheme.colorScheme.background
     ) { padding ->
+        val scope = AgentStore.scope
+        val visible = sessions.filter { it.scope == scope }
+        val pending = sessions.count { it.scope == null }
+        val groups = visible.groupBy { it.groupLabel.ifBlank { if (scope == WorkScope.PROJECT) "未命名项目" else "未命名仓库" } }
+        Column(Modifier.fillMaxSize().padding(padding)) {
+        ScopeSwitch(scope, sessions.count { it.scope == WorkScope.PROJECT }, sessions.count { it.scope == WorkScope.REPOSITORY }) {
+            AgentStore.choose(it)
+        }
         LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp),
+            modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             item {
@@ -125,7 +133,8 @@ fun InboxScreen(
                         Kicker("Cloud Agents")
                         Text("从口袋里指挥全部 Agent", style = MaterialTheme.typography.titleLarge)
                         Text(
-                            "已同步 ${sessions.size} 个会话 · ${sessions.count { it.status == AgentStatus.WORKING }} 个运行中",
+                            if (scope == WorkScope.PROJECT) "Projects · ${visible.size} 个项目会话"
+                            else "Repositories · ${visible.size} 个仓库会话",
                             style = MaterialTheme.typography.bodySmall,
                             color = CursorPalette.LightMuted
                         )
@@ -147,14 +156,59 @@ fun InboxScreen(
                     }
                 }
             }
-            if (!loading && sessions.isEmpty() && error.isNullOrBlank()) {
-                item { EmptyState("还没有 Cloud Agent", "登录后的会话会分页拉到这里。也可以右下角发起一个。") }
+            if (!loading && visible.isEmpty() && pending > 0) {
+                item { EmptyState("正在区分项目和仓库", "会话详情里的 repos 和 env 还在同步，归类完成后会出现在对应分类。") }
             }
-            items(sessions, key = { it.id }) { s ->
-                SessionCard(s) { onOpenChat(s.id) }
+            if (!loading && visible.isEmpty() && pending == 0 && error.isNullOrBlank()) {
+                item {
+                    if (scope == WorkScope.PROJECT) {
+                        EmptyState("还没有项目会话", "没有仓库地址、带 env.name 或 project 字段的会话会归在这里。")
+                    } else {
+                        EmptyState("还没有仓库会话", "带 repos.url 或 source.repository 的会话会归在这里。")
+                    }
+                }
+            }
+            for ((label, grouped) in groups) {
+                item(key = "group-${scope.name}-$label") {
+                    Text(label, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleMedium)
+                }
+                items(grouped, key = { it.id }) { s ->
+                    SessionCard(s) { onOpenChat(s.id) }
+                }
             }
             item { Box(Modifier.size(72.dp)) }
         }
+        }
+    }
+}
+
+@Composable
+private fun ScopeSwitch(selected: WorkScope, projects: Int, repositories: Int, onSelect: (WorkScope) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        ScopeChip("Projects", projects, selected == WorkScope.PROJECT, Modifier.weight(1f)) { onSelect(WorkScope.PROJECT) }
+        ScopeChip("Repositories", repositories, selected == WorkScope.REPOSITORY, Modifier.weight(1f)) { onSelect(WorkScope.REPOSITORY) }
+    }
+}
+
+@Composable
+private fun ScopeChip(label: String, count: Int, active: Boolean, modifier: Modifier, onClick: () -> Unit) {
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(16.dp))
+            .background(if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface)
+            .border(1.dp, if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp)
+    ) {
+        Text(label, fontWeight = FontWeight.SemiBold, color = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface)
+        Text(
+            "$count",
+            style = MaterialTheme.typography.labelSmall,
+            color = if (active) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 
@@ -187,7 +241,11 @@ private fun SessionCard(s: AgentSession, onClick: () -> Unit) {
             MessageBody(s.summary, MaterialTheme.colorScheme.onSurfaceVariant, MaterialTheme.typography.bodySmall)
         }
         Text(
-            listOf(s.repo.ifBlank { "未关联仓库" }, s.branch.ifBlank { "分支同步中" }).joinToString(" · "),
+            when (s.scope) {
+                WorkScope.PROJECT -> s.groupLabel.ifBlank { "Project" }
+                WorkScope.REPOSITORY -> listOf(s.repo.ifBlank { s.groupLabel }, s.branch.ifBlank { "分支同步中" }).joinToString(" · ")
+                null -> "正在识别分类"
+            },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )

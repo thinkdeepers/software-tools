@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -18,8 +19,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -46,12 +45,16 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import com.cursor.mobile.android.data.AgentRequest
 import com.cursor.mobile.android.data.AgentStore
 import com.cursor.mobile.android.data.CursorApi
 import com.cursor.mobile.android.data.MachineKind
 import com.cursor.mobile.android.data.ModelTier
 import com.cursor.mobile.android.data.PrefsRepository
+import com.cursor.mobile.android.data.ProjectRef
+import com.cursor.mobile.android.data.RepoRef
+import com.cursor.mobile.android.data.WorkScope
 import com.cursor.mobile.android.data.modelChoices
 import com.cursor.mobile.android.ui.components.Kicker
 import com.cursor.mobile.android.ui.components.ModelPicker
@@ -75,23 +78,26 @@ fun NewAgentScreen(onBack: () -> Unit, onLaunched: (String) -> Unit, onSessionEx
             savedModel = persistedModel
         }
     }
-    var repo by remember { mutableStateOf("") }
+    var taskScope by remember { mutableStateOf(AgentStore.scope) }
+    var selectedProject by remember { mutableStateOf<ProjectRef?>(null) }
+    var selectedRepo by remember { mutableStateOf<RepoRef?>(null) }
     var branch by remember { mutableStateOf("main") }
-    var repoMenu by remember { mutableStateOf(false) }
+    var targetOpen by remember { mutableStateOf(false) }
     var prompt by remember { mutableStateOf("") }
     var launching by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val repos = AgentStore.repos
+    val projects = AgentStore.projects
     val catalog = AgentStore.catalog
     LaunchedEffect(Unit) {
         try {
             AgentStore.ensureModels(context)
             AgentStore.ensureRepos(context)
-            if (repo.isBlank()) repo = AgentStore.repos.firstOrNull()?.name.orEmpty()
+            AgentStore.ensureProjects(context)
         } catch (e: CursorApi.Unauthorized) {
             onSessionExpired(e.message ?: "登录已失效")
         } catch (_: Exception) {
-            // 仓库列表失败时仍可手填 owner/repo
+            // 目录失败时仍显示会话里已经同步到的项目或仓库
         }
     }
 
@@ -109,40 +115,64 @@ fun NewAgentScreen(onBack: () -> Unit, onLaunched: (String) -> Unit, onSessionEx
             modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp).verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Kicker("New agent · 选仓库 / 模型 / 机器")
+            Kicker("New agent · 先选分类，再选目标")
             Text("描述任务，Agent 在云端开工", style = MaterialTheme.typography.titleLarge)
-            Text("会调用 POST /v1/agents，模型强度写入 model.params。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Projects 写入 env.name，Repositories 写入 repos.url。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
-            Text("仓库", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleMedium)
-            Box {
-                PickerRow(repo.ifBlank { "选择或填写仓库" }, branch) { if (repos.isNotEmpty()) repoMenu = true }
-                DropdownMenu(expanded = repoMenu, onDismissRequest = { repoMenu = false }) {
-                    repos.forEach {
-                        DropdownMenuItem(
-                            text = { Text("${it.name} · ${it.branch}") },
-                            onClick = { repo = it.name; branch = it.branch; repoMenu = false }
-                        )
-                    }
-                }
+            Text("分类", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleMedium)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                CategoryChip("Projects", taskScope == WorkScope.PROJECT, Modifier.weight(1f)) { taskScope = WorkScope.PROJECT }
+                CategoryChip("Repositories", taskScope == WorkScope.REPOSITORY, Modifier.weight(1f)) { taskScope = WorkScope.REPOSITORY }
             }
-            OutlinedTextField(
-                value = repo,
-                onValueChange = { repo = it },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                shape = RoundedCornerShape(18.dp),
-                label = { Text("owner/repo 或 GitHub URL") },
-                colors = fieldColors()
+            Text(
+                if (taskScope == WorkScope.PROJECT) "Project" else "Repository",
+                fontWeight = FontWeight.SemiBold,
+                style = MaterialTheme.typography.titleMedium
             )
-            OutlinedTextField(
-                value = branch,
-                onValueChange = { branch = it },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                shape = RoundedCornerShape(18.dp),
-                label = { Text("起始分支") },
-                colors = fieldColors()
-            )
+            val targetLabel = if (taskScope == WorkScope.PROJECT) {
+                selectedProject?.name ?: "选择 Project"
+            } else {
+                selectedRepo?.name ?: "选择 Repository"
+            }
+            val choices = if (taskScope == WorkScope.PROJECT) projects.map { it.name } else repos.map { it.name }
+            PickerRow(targetLabel, if (taskScope == WorkScope.REPOSITORY) selectedRepo?.branch else null) { targetOpen = true }
+            if (choices.isEmpty()) {
+                Text(
+                    if (taskScope == WorkScope.PROJECT) "账号里还没有项目。项目来自 GET /v1/projects、/v1/environments，或会话上的 env.name。"
+                    else "账号里还没有仓库。仓库来自 GET /v1/repositories（失败时用 /v0/repositories）。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (targetOpen) {
+                TargetDialog(
+                    title = if (taskScope == WorkScope.PROJECT) "选择 Project" else "选择 Repository",
+                    options = choices,
+                    selected = targetLabel,
+                    onDismiss = { targetOpen = false },
+                    onSelect = { name ->
+                        if (taskScope == WorkScope.PROJECT) {
+                            selectedProject = projects.firstOrNull { it.name == name } ?: ProjectRef(name)
+                        } else {
+                            val repo = repos.firstOrNull { it.name == name }
+                            selectedRepo = repo
+                            branch = repo?.branch?.ifBlank { "main" } ?: "main"
+                        }
+                        targetOpen = false
+                    }
+                )
+            }
+            if (taskScope == WorkScope.REPOSITORY) {
+                OutlinedTextField(
+                    value = branch,
+                    onValueChange = { branch = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    shape = RoundedCornerShape(18.dp),
+                    label = { Text("起始分支 startingRef") },
+                    colors = fieldColors()
+                )
+            }
             Text("模型 · 强度", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleMedium)
             ModelTierPicker(savedTier, savedModel) { tier ->
                 picked = true
@@ -181,25 +211,42 @@ fun NewAgentScreen(onBack: () -> Unit, onLaunched: (String) -> Unit, onSessionEx
                         error = "请填写任务描述"
                         return@Button
                     }
-                    if (repo.isBlank()) {
-                        error = "请填写仓库，例如 owner/repo"
+                    if (taskScope == WorkScope.PROJECT && selectedProject == null) {
+                        error = "请先选择一个 Project"
+                        return@Button
+                    }
+                    if (taskScope == WorkScope.REPOSITORY && selectedRepo == null) {
+                        error = "请先选择一个 Repository"
                         return@Button
                     }
                     launching = true
                     error = null
+                    val request = if (taskScope == WorkScope.PROJECT) {
+                        AgentRequest(
+                            repo = "",
+                            branch = "",
+                            prompt = prompt.trim(),
+                            model = savedModel,
+                            tier = savedTier,
+                            machine = MachineKind.CLOUD,
+                            scope = WorkScope.PROJECT,
+                            projectName = selectedProject?.name.orEmpty()
+                        )
+                    } else {
+                        val repo = selectedRepo
+                        AgentRequest(
+                            repo = repo?.url?.ifBlank { repo.name }.orEmpty(),
+                            branch = branch.ifBlank { repo?.branch?.ifBlank { "main" } ?: "main" },
+                            prompt = prompt.trim(),
+                            model = savedModel,
+                            tier = savedTier,
+                            machine = MachineKind.CLOUD,
+                            scope = WorkScope.REPOSITORY
+                        )
+                    }
                     scope.launch {
                         try {
-                            val id = AgentStore.create(
-                                context,
-                                AgentRequest(
-                                    repo = repo,
-                                    branch = branch.ifBlank { "main" },
-                                    prompt = prompt.trim(),
-                                    model = savedModel,
-                                    tier = savedTier,
-                                    machine = MachineKind.CLOUD
-                                )
-                            )
+                            val id = AgentStore.create(context, request)
                             onLaunched(id)
                         } catch (e: CursorApi.Unauthorized) {
                             onSessionExpired(e.message ?: "登录已失效")
@@ -218,7 +265,7 @@ fun NewAgentScreen(onBack: () -> Unit, onLaunched: (String) -> Unit, onSessionEx
                 if (launching) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.White)
                 else Text("启动云端 Agent", fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(vertical = 4.dp))
             }
-            Text("高速 / 均衡 / 最强会写进 model.id 和 model.params。", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("高速 / 均衡 / 最强会写进 model.id 和 model.params。分类只带当前选中的项目或仓库。", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -230,6 +277,65 @@ private fun fieldColors() = OutlinedTextFieldDefaults.colors(
     focusedContainerColor = MaterialTheme.colorScheme.surface,
     unfocusedContainerColor = MaterialTheme.colorScheme.surface
 )
+
+@Composable
+private fun CategoryChip(label: String, active: Boolean, modifier: Modifier, onClick: () -> Unit) {
+    Text(
+        label,
+        fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
+        color = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+        modifier = modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface)
+            .border(1.dp, if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline, RoundedCornerShape(999.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 10.dp)
+    )
+}
+
+@Composable
+private fun TargetDialog(
+    title: String,
+    options: List<String>,
+    selected: String,
+    onDismiss: () -> Unit,
+    onSelect: (String) -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 420.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(MaterialTheme.colorScheme.surface)
+                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp))
+                .verticalScroll(rememberScrollState())
+                .padding(vertical = 8.dp)
+        ) {
+            Text(title, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp))
+            if (options.isEmpty()) {
+                Text(
+                    "这个分类还是空的。",
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            options.forEach { name ->
+                val active = name == selected
+                Text(
+                    if (active) "✓  $name" else name,
+                    fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
+                    color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onSelect(name) }
+                        .padding(horizontal = 16.dp, vertical = 14.dp)
+                )
+            }
+        }
+    }
+}
 
 @Composable
 private fun PickerRow(main: String, sub: String?, onClick: () -> Unit) {

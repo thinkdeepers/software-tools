@@ -22,7 +22,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.ExitToApp
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.DrawerValue
@@ -58,6 +60,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.cursor.mobile.android.data.AgentStore
 import com.cursor.mobile.android.data.AuthRepository
+import com.cursor.mobile.android.data.WorkScope
 import com.cursor.mobile.android.ui.navigation.Routes
 import com.cursor.mobile.android.ui.screens.ChatScreen
 import com.cursor.mobile.android.ui.screens.InboxScreen
@@ -207,17 +210,17 @@ private fun MainScaffold(
                     }
                     Spacer(Modifier.height(16.dp))
                     DrawerEntry("收件箱 Inbox", selected == Routes.INBOX, Icons.Filled.Home) { open(Routes.INBOX) }
+                    Text("分类", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp, bottom = 4.dp))
+                    DrawerEntry("Projects", selected == Routes.INBOX && AgentStore.scope == WorkScope.PROJECT, Icons.Filled.Folder) {
+                        AgentStore.choose(WorkScope.PROJECT)
+                        open(Routes.INBOX)
+                    }
+                    DrawerEntry("Repositories", selected == Routes.INBOX && AgentStore.scope == WorkScope.REPOSITORY, Icons.Filled.Code) {
+                        AgentStore.choose(WorkScope.REPOSITORY)
+                        open(Routes.INBOX)
+                    }
                     DrawerEntry("发起 Agent", selected == Routes.NEW_AGENT, Icons.Filled.Add) { open(Routes.NEW_AGENT) }
                     DrawerEntry("设置", selected == Routes.SETTINGS, Icons.Filled.Settings) { open(Routes.SETTINGS) }
-                    Spacer(Modifier.height(12.dp))
-                    Text("仓库", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    if (AgentStore.repos.isEmpty()) {
-                        Text("同步后显示", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(vertical = 3.dp))
-                    } else {
-                        AgentStore.repos.take(8).forEach {
-                            Text("◈ ${it.name} (${it.branch})", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(vertical = 3.dp))
-                        }
-                    }
                     if (loggedIn) {
                         Spacer(Modifier.height(12.dp))
                         Text(
