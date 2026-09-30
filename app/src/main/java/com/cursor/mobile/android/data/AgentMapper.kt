@@ -49,26 +49,30 @@ internal fun mapV1Agent(obj: JSONObject, modelLabel: String = ""): AgentSession 
     )
 }
 
+// 桌面 Agents 的 Projects 就是 ListBackgroundComposers / background-composer/list 返回的 composer。
+// 真实字段是 bcId、name、repoUrl / repo_url、branchName / branch、isArchived、updatedAt。
+// 有 project、projectId、parentBcId、coordinatorBcId 时按那个名字把多条会话归成一组；
+// 这些字段经常没有。这时不能把有 repoUrl 的会话挪去 Repositories，否则 Projects 会是空的。
+// 没有上级项目时，这条 composer 自己就是项目，用 name 当组名。
+// Repositories 只收 Cloud Agents API 里带 repos.url、且不是这些桌面 composer 的会话。
 internal fun mapComposer(obj: JSONObject): AgentSession {
     val id = obj.optStr("bcId").ifBlank { obj.optStr("bc_id") }.ifBlank { obj.optStr("composerId") }.ifBlank { obj.optStr("id") }
     val hit = readProject(obj)
     val repoUrl = readRepoUrl(obj)
-    val branchName = obj.optStr("branch").ifBlank { obj.optStr("startingRef") }.ifBlank { obj.optStr("ref") }
+    val branchName = obj.optStr("branchName").ifBlank { obj.optStr("branch_name") }
+        .ifBlank { obj.optStr("branch") }.ifBlank { obj.optStr("startingRef") }.ifBlank { obj.optStr("ref") }
         .ifBlank { obj.optJSONObject("source")?.optStr("ref").orEmpty() }
     val iso = readInstant(obj)
-    val scope = when {
-        hit != null -> WorkScope.PROJECT
-        repoUrl.isNotBlank() -> WorkScope.REPOSITORY
-        else -> null
-    }
-    val short = shortRepo(repoUrl).takeUnless { repoUrl.isBlank() }.orEmpty()
+    val title = obj.optStr("name").ifBlank { obj.optStr("title") }.ifBlank { obj.optStr("summary") }.ifBlank { "未命名会话" }
+    val label = hit?.name?.takeIf { it.isNotBlank() } ?: title
+    val projectId = hit?.id?.takeIf { it.isNotBlank() } ?: id
     val archived = obj.optBoolean("isArchived", false) || obj.optBoolean("is_archived", false)
     val statusRaw = obj.optStr("status").ifBlank { obj.optStr("composerStatus") }.ifBlank { if (archived) "ARCHIVED" else "" }
     return AgentSession(
         id = id,
-        title = obj.optStr("name").ifBlank { obj.optStr("title") }.ifBlank { obj.optStr("summary") }.ifBlank { "未命名会话" },
-        repo = if (scope == WorkScope.REPOSITORY) short else "",
-        branch = if (scope == WorkScope.REPOSITORY) branchName else "",
+        title = title,
+        repo = "",
+        branch = branchName,
         status = mapAgentStatus(statusRaw),
         model = obj.optStr("model"),
         machine = MachineKind.CLOUD,
@@ -77,15 +81,11 @@ internal fun mapComposer(obj: JSONObject): AgentSession {
         webUrl = obj.optStr("url"),
         summary = obj.optStr("summary"),
         updatedAtIso = iso,
-        scope = scope,
-        envName = if (scope == WorkScope.PROJECT) hit?.name.orEmpty() else "",
-        projectId = hit?.id.orEmpty(),
+        scope = WorkScope.PROJECT,
+        envName = label,
+        projectId = projectId,
         repoUrl = repoUrl,
-        groupLabel = when (scope) {
-            WorkScope.REPOSITORY -> short.ifBlank { "未命名仓库" }
-            WorkScope.PROJECT -> hit?.name.orEmpty()
-            null -> ""
-        },
+        groupLabel = label,
         classified = true
     )
 }
@@ -151,7 +151,13 @@ internal fun mergeAgents(v1: List<JSONObject>, v0: List<JSONObject>): List<Agent
 
 internal fun applyDetail(session: AgentSession, detail: JSONObject): AgentSession {
     val mapped = mapV1Agent(detail, session.model)
-    val scope = if (mapped.classified) mapped.scope else session.scope
+    val scope = if (session.scope == WorkScope.PROJECT || session.source == "desktop-session") {
+        WorkScope.PROJECT
+    } else if (mapped.classified) {
+        mapped.scope
+    } else {
+        session.scope
+    }
     val projectId = mapped.projectId.ifBlank { session.projectId }
     return session.copy(
         title = mapped.title.takeUnless { it == "未命名会话" } ?: session.title,

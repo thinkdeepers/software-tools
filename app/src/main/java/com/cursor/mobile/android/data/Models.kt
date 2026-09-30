@@ -29,13 +29,18 @@ data class AgentSession(
     val classified: Boolean = false
 )
 
+data class MessageFile(val name: String, val mime: String, val error: String? = null)
+
+data class PromptImage(val base64: String, val mimeType: String)
+
 data class ChatMessage(
     val id: String,
     val sender: Sender,
     val text: String,
     val time: String,
     val isStreaming: Boolean = false,
-    val attachment: String? = null
+    val attachment: String? = null,
+    val files: List<MessageFile> = emptyList()
 )
 
 data class DiffFile(

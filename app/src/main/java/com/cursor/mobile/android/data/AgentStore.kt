@@ -255,11 +255,12 @@ object AgentStore {
         text: String,
         tier: ModelTier,
         modelName: String,
+        images: List<PromptImage> = emptyList(),
         onDelta: (String) -> Unit
     ): Boolean {
         val key = cloudKey(context)
         val selection = selectModel(tier, modelName, catalog.toList())
-        val started = withContext(Dispatchers.IO) { CursorApi.startRun(key, agentId, text, selection) }
+        val started = withContext(Dispatchers.IO) { CursorApi.startRun(key, agentId, text, selection, images) }
         withContext(Dispatchers.IO) {
             CursorApi.collectRunText(key, agentId, started.runId) { delta ->
                 withContext(Dispatchers.Main) { onDelta(delta) }

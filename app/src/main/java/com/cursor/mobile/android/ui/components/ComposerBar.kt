@@ -23,7 +23,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -45,7 +44,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.cursor.mobile.android.ui.theme.accentGradient
 
-data class ComposerAttachment(val uri: String, val name: String)
+data class ComposerAttachment(val uri: String, val name: String, val mime: String)
 
 @Composable
 fun ComposerBar(
@@ -100,7 +99,7 @@ fun ComposerBar(
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         if (attachments.isNotEmpty()) {
             Row(
-                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                modifier = Modifier.padding(horizontal = ChatTextPadding).horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 attachments.forEachIndexed { index, item ->
@@ -114,11 +113,11 @@ fun ComposerBar(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            item.name,
+                            "${item.name} · ${item.mime}",
                             style = MaterialTheme.typography.labelMedium,
                             maxLines = 1,
                             softWrap = false,
-                            overflow = TextOverflow.Clip
+                            overflow = TextOverflow.Ellipsis
                         )
                         IconButton(onClick = { onRemoveAttachment(index) }, modifier = Modifier.size(28.dp)) {
                             Icon(Icons.Filled.Close, contentDescription = "移除附件", modifier = Modifier.size(14.dp))
@@ -127,52 +126,51 @@ fun ComposerBar(
                 }
             }
         }
-    Row(
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(24.dp))
+            .heightIn(min = 40.dp)
+            .clip(RoundedCornerShape(16.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
             .border(
                 1.dp,
                 if (value.isNotBlank()) MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)
                 else MaterialTheme.colorScheme.outline,
-                RoundedCornerShape(24.dp)
-            )
-            .padding(6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(2.dp)
+                RoundedCornerShape(16.dp)
+            ),
+        contentAlignment = Alignment.CenterStart
     ) {
-        IconButton(onClick = { attachMenu = true }, modifier = Modifier.size(36.dp)) {
-            Icon(Icons.Filled.Add, contentDescription = "附件/截图", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
-        }
         BasicTextField(
             value = value,
             onValueChange = onValueChange,
-            modifier = Modifier.weight(1f).heightIn(min = 36.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = ChatTextPadding, vertical = 8.dp),
             enabled = enabled,
             textStyle = TextStyle(
                 color = MaterialTheme.colorScheme.onSurface,
-                fontSize = 14.sp,
-                lineHeight = 18.sp
+                fontSize = 13.sp,
+                lineHeight = 17.sp
             ),
             maxLines = 4,
             decorationBox = { inner ->
-                Box(Modifier.padding(horizontal = 4.dp, vertical = 8.dp), contentAlignment = Alignment.CenterStart) {
+                Box(contentAlignment = Alignment.CenterStart) {
                     if (value.isEmpty()) {
-                        Text("描述任务…", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp, lineHeight = 18.sp)
+                        Text("描述任务…", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, lineHeight = 17.sp)
                     }
                     inner()
                 }
             }
         )
-        IconButton(onClick = {}, modifier = Modifier.size(36.dp)) {
-            Icon(Icons.Filled.Mic, contentDescription = "语音输入", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+        IconButton(
+            onClick = { attachMenu = true },
+            modifier = Modifier.align(Alignment.CenterStart).padding(start = 2.dp).size(22.dp)
+        ) {
+            Icon(Icons.Filled.Add, contentDescription = "附件", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(14.dp))
         }
         IconButton(
             onClick = onSend,
             enabled = canSend,
             interactionSource = sendSource,
-            modifier = Modifier.size(36.dp)
+            modifier = Modifier.align(Alignment.CenterEnd).padding(end = 4.dp).size(28.dp)
         ) {
             val sendModifier = if (canSend) {
                 Modifier

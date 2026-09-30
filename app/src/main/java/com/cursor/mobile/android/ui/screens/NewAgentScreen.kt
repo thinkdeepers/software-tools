@@ -138,7 +138,7 @@ fun NewAgentScreen(onBack: () -> Unit, onLaunched: (String) -> Unit, onSessionEx
             PickerRow(targetLabel, if (taskScope == WorkScope.REPOSITORY) selectedRepo?.branch else null) { targetOpen = true }
             if (choices.isEmpty()) {
                 Text(
-                    if (taskScope == WorkScope.PROJECT) "账号里还没有项目。项目来自登录会话的 ListBackgroundComposers，按 project.id、projectId、parentBcId 或 coordinator 归组。"
+                    if (taskScope == WorkScope.PROJECT) "账号里还没有项目。Projects 是桌面会话里的 composer，有上级项目时按它分组，否则用 composer 的 name。"
                     else "账号里还没有仓库。仓库来自 GET /v1/repositories 的 items.url，没有再试 /v0/repositories。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant

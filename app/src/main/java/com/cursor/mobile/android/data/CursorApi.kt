@@ -216,14 +216,31 @@ object CursorApi {
         return JSONObject(res.body)
     }
 
-    fun startRun(apiKey: String, agentId: String, text: String, selection: ModelSelection): RunStart {
+    fun startRun(
+        apiKey: String,
+        agentId: String,
+        text: String,
+        selection: ModelSelection,
+        images: List<PromptImage> = emptyList()
+    ): RunStart {
         val path = "/v1/agents/${Uri.encode(agentId)}/runs"
+        val prompt = JSONObject().put("text", text)
+        if (images.isNotEmpty()) {
+            val arr = JSONArray()
+            images.forEach { image ->
+                arr.put(JSONObject().put("data", image.base64).put("mimeType", image.mimeType))
+            }
+            prompt.put("images", arr)
+        }
         val body = JSONObject()
-            .put("prompt", JSONObject().put("text", text))
+            .put("prompt", prompt)
             .put("model", selection.toJson())
         var res = post(path, apiKey, body)
         if (res.code == 401 || res.code == 403) throw Unauthorized(explain(res.code, res.body))
         var modelSent = true
+        if (res.code == 400 && images.isNotEmpty() && res.body.contains("image", ignoreCase = true)) {
+            throw ApiException("图片没有被 Cloud Agents 接受（HTTP 400）。${explain(res.code, res.body)}")
+        }
         if (res.code == 400 && modelRejected(res.body)) {
             body.remove("model")
             val retry = post(path, apiKey, body)

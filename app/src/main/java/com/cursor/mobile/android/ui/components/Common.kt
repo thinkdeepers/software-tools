@@ -200,12 +200,13 @@ private fun CodeScroll(text: String, color: Color) {
     )
 }
 
+val ChatPagePadding = 8.dp
+val ChatTextPadding = 28.dp
 private val chatBody = TextStyle(fontSize = 13.sp, lineHeight = 17.sp)
 
 @Composable
 fun ChatBubble(msg: ChatMessage) {
-    val user = msg.sender == Sender.USER
-    val align = if (user) androidx.compose.ui.text.style.TextAlign.End else androidx.compose.ui.text.style.TextAlign.Start
+    val align = androidx.compose.ui.text.style.TextAlign.Justify
     val background = when (msg.sender) {
         Sender.USER -> MaterialTheme.colorScheme.primaryContainer
         Sender.SYSTEM -> MaterialTheme.colorScheme.surfaceContainer
@@ -226,11 +227,28 @@ fun ChatBubble(msg: ChatMessage) {
             .clip(RoundedCornerShape(12.dp))
             .background(background)
             .border(1.dp, border, RoundedCornerShape(12.dp))
-            .padding(horizontal = 10.dp, vertical = 8.dp)
+            .padding(horizontal = ChatTextPadding, vertical = 8.dp)
             .animateContentSize()
     ) {
         if (msg.text.isNotBlank()) {
             MessageBody(msg.text, color, chatBody, partSpacing = 2.dp, textAlign = align)
+        }
+        msg.files.forEach { file ->
+            Text(
+                "${file.name} · ${file.mime}",
+                color = color,
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+            if (!file.error.isNullOrBlank()) {
+                Text(
+                    file.error,
+                    color = MaterialTheme.colorScheme.error,
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp
+                )
+            }
         }
         if (msg.isStreaming) {
             Box(Modifier.padding(top = 2.dp).align(Alignment.Start)) { TypingDots() }

@@ -48,18 +48,42 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.cursor.mobile.android.data.AgentStore
 import com.cursor.mobile.android.data.ChatMessage
+import com.cursor.mobile.android.data.MessageFile
+import com.cursor.mobile.android.data.PromptImage
 import com.cursor.mobile.android.data.CursorApi
 import com.cursor.mobile.android.data.ModelTier
 import com.cursor.mobile.android.data.PrefsRepository
 import com.cursor.mobile.android.data.Sender
 import com.cursor.mobile.android.data.modelChoices
 import com.cursor.mobile.android.ui.components.ChatBubble
+import com.cursor.mobile.android.ui.components.ChatPagePadding
+import com.cursor.mobile.android.ui.components.ChatTextPadding
 import com.cursor.mobile.android.ui.components.ComposerAttachment
 import com.cursor.mobile.android.ui.components.ComposerBar
 import com.cursor.mobile.android.ui.components.ModelPicker
 import com.cursor.mobile.android.ui.components.ModelTierInline
 import com.cursor.mobile.android.ui.components.StatusChip
 import kotlinx.coroutines.launch
+
+private fun attachmentMime(context: android.content.Context, uri: Uri): String =
+    context.contentResolver.getType(uri)?.takeIf { it.isNotBlank() } ?: "application/octet-stream"
+
+private fun prepareAttachment(context: android.content.Context, item: ComposerAttachment): Pair<MessageFile, PromptImage?> {
+    val mime = item.mime.ifBlank { "application/octet-stream" }
+    val allowed = setOf("image/png", "image/jpeg", "image/gif", "image/webp")
+    if (mime !in allowed) {
+        return MessageFile(item.name, mime, "Cloud Agents 只接受 png、jpeg、gif、webp，这个文件没有提交") to null
+    }
+    val bytes = try {
+        context.contentResolver.openInputStream(Uri.parse(item.uri))?.use { it.readBytes() }
+    } catch (e: Exception) {
+        return MessageFile(item.name, mime, "读不到文件：${e.message ?: "无法读取"}") to null
+    }
+    if (bytes == null || bytes.isEmpty()) return MessageFile(item.name, mime, "文件是空的，没有提交") to null
+    if (bytes.size > 15 * 1024 * 1024) return MessageFile(item.name, mime, "图片超过 15MB，没有提交") to null
+    val encoded = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+    return MessageFile(item.name, mime) to PromptImage(encoded, mime)
+}
 
 private fun attachmentName(context: android.content.Context, uri: Uri): String {
     context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
@@ -85,10 +109,10 @@ fun ChatScreen(
     var input by remember { mutableStateOf("") }
     val attachments = remember { mutableStateListOf<ComposerAttachment>() }
     val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        if (uri != null) attachments.add(ComposerAttachment(uri.toString(), attachmentName(context, uri)))
+        if (uri != null) attachments.add(ComposerAttachment(uri.toString(), attachmentName(context, uri), attachmentMime(context, uri)))
     }
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) attachments.add(ComposerAttachment(uri.toString(), attachmentName(context, uri)))
+        if (uri != null) attachments.add(ComposerAttachment(uri.toString(), attachmentName(context, uri), attachmentMime(context, uri)))
     }
     val persistedTier by PrefsRepository.tierFlow(context).collectAsState(ModelTier.BALANCED)
     val persistedModel by PrefsRepository.modelFlow(context).collectAsState(ModelTier.BALANCED.model)
@@ -171,7 +195,7 @@ fun ChatScreen(
             }
         },
         bottomBar = {
-            Column(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(Modifier.padding(horizontal = ChatPagePadding, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -201,18 +225,25 @@ fun ChatScreen(
                     onPickFile = { filePicker.launch(arrayOf("*/*")) },
                     onSend = {
                         val text = input.trim()
-                        val names = attachments.map { it.name }
-                        if ((text.isEmpty() && names.isEmpty()) || sending) return@ComposerBar
-                        val outgoing = if (names.isEmpty()) text else listOf(text, names.joinToString("\n") { "附件：$it" }).filter { it.isNotBlank() }.joinToString("\n")
+                        val picked = attachments.toList()
+                        if ((text.isEmpty() && picked.isEmpty()) || sending) return@ComposerBar
+                        val prepared = picked.map { prepareAttachment(context, it) }
+                        val files = prepared.map { it.first }
+                        val images = prepared.mapNotNull { it.second }
                         input = ""
                         attachments.clear()
+                        val userId = "u${messages.size}"
+                        messages.add(ChatMessage(userId, Sender.USER, text, "now", files = files))
+                        if (text.isEmpty() && images.isEmpty()) {
+                            return@ComposerBar
+                        }
+                        val apiText = text.ifBlank { "请看图片" }
                         sending = true
-                        messages.add(ChatMessage("u${messages.size}", Sender.USER, outgoing, "now"))
                         val streamId = "s${messages.size}"
                         messages.add(ChatMessage(streamId, Sender.AGENT, "", "now", isStreaming = true))
                         scope.launch {
                             try {
-                                val modelSent = AgentStore.followUp(context, sessionId, outgoing, savedTier, savedModel) { token ->
+                                val modelSent = AgentStore.followUp(context, sessionId, apiText, savedTier, savedModel, images) { token ->
                                     val idx = messages.indexOfFirst { it.id == streamId }
                                     if (idx >= 0) messages[idx] = messages[idx].copy(text = token)
                                 }
@@ -232,12 +263,16 @@ fun ChatScreen(
                             } catch (e: CursorApi.Unauthorized) {
                                 onSessionExpired(e.message ?: "登录已失效")
                             } catch (e: Exception) {
+                                val reason = e.message ?: "发送失败"
+                                val userIdx = messages.indexOfFirst { it.id == userId }
+                                if (userIdx >= 0 && files.isNotEmpty()) {
+                                    messages[userIdx] = messages[userIdx].copy(
+                                        files = files.map { file -> file.copy(error = file.error ?: reason) }
+                                    )
+                                }
                                 val idx = messages.indexOfFirst { it.id == streamId }
                                 if (idx >= 0) {
-                                    messages[idx] = messages[idx].copy(
-                                        isStreaming = false,
-                                        text = e.message ?: "发送失败"
-                                    )
+                                    messages[idx] = messages[idx].copy(isStreaming = false, text = reason)
                                 }
                             } finally {
                                 sending = false
@@ -252,7 +287,7 @@ fun ChatScreen(
         LazyColumn(
             state = listState,
             reverseLayout = true,
-            modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 12.dp)
+            modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = ChatPagePadding)
         ) {
             items(messages.asReversed(), key = { it.id }) { message ->
                 ChatBubble(message)

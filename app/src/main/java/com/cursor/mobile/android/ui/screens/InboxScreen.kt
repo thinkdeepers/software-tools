@@ -185,7 +185,7 @@ fun InboxScreen(
                     if (scope == WorkScope.PROJECT) {
                         EmptyState(
                             "还没有项目",
-                            summary.ifBlank { "服务器没有返回带项目字段的会话。没有仓库不会被当成项目。" }
+                            summary.ifBlank { "服务器返回 0 条会话。" }
                         )
                     } else {
                         EmptyState("还没有仓库会话", "带 repos.url 或 source.repository 的会话会归在这里。")
