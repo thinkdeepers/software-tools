@@ -25,6 +25,7 @@ object AgentStore {
     var loading by mutableStateOf(false)
     var error by mutableStateOf<String?>(null)
     var accountLabel by mutableStateOf("")
+    var syncReport by mutableStateOf("")
     var scope by mutableStateOf(WorkScope.PROJECT)
         private set
 
@@ -46,6 +47,7 @@ object AgentStore {
         loading = false
         error = null
         accountLabel = ""
+        syncReport = ""
         reposLoaded = false
         projectsLoaded = false
         scopeTouched = false
@@ -58,7 +60,15 @@ object AgentStore {
             loading = true
             error = null
             try {
-                val sync = CursorSession.sync(token)
+                val sync = CursorSession.sync(token, AuthRepository.apiKey(context))
+                syncReport = sync.report
+                if (sync.httpCode == 401 || sync.httpCode == 403) {
+                    throw CursorApi.Unauthorized(sync.report)
+                }
+                if (sync.httpCode !in 200..299) {
+                    error = sync.report
+                    return@withLock
+                }
                 var merged = linkProjectNames(sync.composers.map { mapComposer(it) })
                 val key = AuthRepository.apiKey(context)
                 if (key != null) {

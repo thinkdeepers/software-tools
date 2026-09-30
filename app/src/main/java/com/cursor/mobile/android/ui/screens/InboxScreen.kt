@@ -148,6 +148,12 @@ fun InboxScreen(
                     }
                 }
             }
+            val report = AgentStore.syncReport
+            if (report.isNotBlank()) {
+                item {
+                    Text(report, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
             if (!error.isNullOrBlank()) {
                 item {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -162,7 +168,10 @@ fun InboxScreen(
             if (!loading && visible.isEmpty() && pending == 0 && error.isNullOrBlank()) {
                 item {
                     if (scope == WorkScope.PROJECT) {
-                        EmptyState("还没有项目会话", "只收录登录会话里带 project.id、projectId、parentBcId 或 coordinator 的会话，并按这个项目归组。没有仓库不会被当成项目。")
+                        EmptyState(
+                            "还没有项目会话",
+                            report.ifBlank { "ListBackgroundComposers 没有返回带项目字段的会话。没有仓库不会被当成项目。" }
+                        )
                     } else {
                         EmptyState("还没有仓库会话", "带 repos.url 或 source.repository 的会话会归在这里。")
                     }

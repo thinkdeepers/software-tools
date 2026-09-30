@@ -28,7 +28,14 @@ object CursorSession {
 
     data class Handshake(val uuid: String, val verifier: String, val url: String)
     data class Tokens(val accessToken: String, val refreshToken: String)
-    data class ComposerSync(val composers: List<JSONObject>, val projects: List<ProjectRef>)
+    data class ComposerSync(
+        val composers: List<JSONObject>,
+        val projects: List<ProjectRef>,
+        val report: String,
+        val httpCode: Int
+    )
+
+    data class MintResult(val apiKey: String?, val email: String, val detail: String)
 
     private class RateLimited : Exception()
 
@@ -74,20 +81,42 @@ object CursorSession {
         throw CursorApi.ApiException("登录超时。请在浏览器里用和电脑端相同的 Cursor 账号完成确认，然后回到应用重试。")
     }
 
-    fun exchangeApiKey(accessToken: String): String? {
+    fun mintCloudCredential(accessToken: String): MintResult {
         val res = try {
-            post("$API2/auth/exchange_user_api_key", accessToken, JSONObject(), 20_000)
-        } catch (_: IOException) {
-            return null
+            post(
+                "$API2/aiserver.v1.DashboardService/CreateUserApiKey",
+                accessToken,
+                JSONObject().put("name", "Cursor Mobile"),
+                25_000
+            )
+        } catch (e: IOException) {
+            return MintResult(null, "", "换发失败：无法连接 api2.cursor.sh（${e.message ?: "网络错误"}）")
         }
-        if (res.code !in 200..299) return null
-        val minted = try {
-            JSONObject(res.body).optStr("accessToken").ifBlank { JSONObject(res.body).optStr("access_token") }
-        } catch (_: Exception) {
-            ""
+        val head = "POST aiserver.v1.DashboardService/CreateUserApiKey\n${summarize(res)}"
+        if (res.code !in 200..299) {
+            return MintResult(null, "", "换发 Cloud Agents 凭证失败，登录未完成。\n$head")
         }
-        if (minted.isBlank() || minted == accessToken) return null
-        return minted
+        val key = readApiKey(res.body)
+        if (key.isNullOrBlank()) {
+            return MintResult(null, "", "换发接口返回了 HTTP ${res.code}，但没有 apiKey。登录未完成。\n$head")
+        }
+        val email = accountEmail(accessToken)
+        val verify = CursorApi.verifyKey(key)
+        if (verify != null) {
+            return MintResult(null, email, "凭证已签发，但 Cloud Agents API 拒绝了它，登录未完成。\n$head\n$verify")
+        }
+        return MintResult(key, email, head)
+    }
+
+    fun sessionFromApiKey(apiKey: String): Pair<String?, String> {
+        val res = try {
+            post("$API2/auth/exchange_user_api_key", apiKey, JSONObject(), 20_000)
+        } catch (e: IOException) {
+            return null to "POST /auth/exchange_user_api_key 网络失败：${e.message ?: "网络错误"}"
+        }
+        val token = tokensOf(res.body)?.accessToken
+        val note = "POST /auth/exchange_user_api_key\n${summarize(res)}"
+        return if (token.isNullOrBlank()) null to note else token to note
     }
 
     fun accountEmail(accessToken: String): String {
@@ -118,10 +147,38 @@ object CursorSession {
         return payload.optStr("email").ifBlank { payload.optStr("userEmail") }.ifBlank { payload.optStr("user_email") }
     }
 
-    suspend fun sync(accessToken: String): ComposerSync = withContext(Dispatchers.IO) {
-        val listed = fetchListed(accessToken)
-        val enriched = enrich(accessToken, listed.first)
-        ComposerSync(enriched, listed.second)
+    suspend fun sync(accessToken: String, apiKey: String?): ComposerSync = withContext(Dispatchers.IO) {
+        val notes = mutableListOf<String>()
+        var token = accessToken
+        var listed = fetchListed(token)
+        notes += listed.note
+        if (listed.code == 401 || listed.code == 403) {
+            if (!apiKey.isNullOrBlank()) {
+                val (fresh, note) = sessionFromApiKey(apiKey)
+                notes += "用已保存的 Cloud Agents 凭证重新换会话：\n$note"
+                if (!fresh.isNullOrBlank()) {
+                    token = fresh
+                    listed = fetchListed(token)
+                    notes += listed.note
+                }
+            }
+        }
+        val enriched = if (listed.code in 200..299 && listed.composers.isNotEmpty()) {
+            enrich(token, listed.composers)
+        } else {
+            listed.composers
+        }
+        val sampleKeys = enriched.firstOrNull()?.let { jsonKeys(it) }.orEmpty().ifBlank { "无" }
+        val projectCount = enriched.count { jsonHasProject(it) }
+        val report = buildString {
+            notes.forEachIndexed { index, note ->
+                if (index > 0) append("\n")
+                append(note)
+            }
+            append("\n解析：composer ${enriched.size} 条，其中带项目字段 $projectCount 条。")
+            append("\n首条字段：$sampleKeys")
+        }
+        ComposerSync(enriched, listed.projects, report, listed.code)
     }
 
     private suspend fun enrich(accessToken: String, items: List<JSONObject>): List<JSONObject> = coroutineScope {
@@ -146,48 +203,79 @@ object CursorSession {
         }.awaitAll()
     }
 
-    private fun fetchListed(accessToken: String): Pair<List<JSONObject>, List<ProjectRef>> {
-        var n = 100
-        var composers = emptyList<JSONObject>()
-        var projects = emptyList<ProjectRef>()
-        var apiError: CursorApi.ApiException? = null
-        var pages = 0
-        while (pages < 4) {
-            pages += 1
+    private data class Listed(
+        val composers: List<JSONObject>,
+        val projects: List<ProjectRef>,
+        val code: Int,
+        val note: String
+    )
+
+    private fun fetchListed(accessToken: String): Listed {
+        val merged = LinkedHashMap<String, JSONObject>()
+        val projects = mutableListOf<ProjectRef>()
+        var lastCode = 0
+        var lastBody = ""
+        var cursor: String? = null
+        val seenCursors = mutableSetOf<String>()
+        var page = 0
+        while (page < 20) {
+            page += 1
+            val body = JSONObject().put("n", 100).put("includeStatus", true).put("includeArchived", true)
+            if (!cursor.isNullOrBlank()) body.put("cursor", cursor)
             val res = try {
                 post(
                     "$API2/aiserver.v1.BackgroundComposerService/ListBackgroundComposers",
                     accessToken,
-                    JSONObject().put("n", n).put("includeStatus", true).put("includeArchived", true),
+                    body,
                     45_000
                 )
             } catch (e: IOException) {
-                throw CursorApi.ApiException("无法连接 Cursor 会话服务，请检查网络（${e.message ?: "网络错误"}）")
+                return Listed(emptyList(), emptyList(), 0, "ListBackgroundComposers 网络失败：${e.message ?: "网络错误"}")
             }
-            if (res.code == 401 || res.code == 403) {
-                throw CursorApi.Unauthorized("登录已失效，请重新用 Cursor 账号登录。")
-            }
-            if (res.code !in 200..299) {
-                apiError = CursorApi.ApiException("拉取会话失败（HTTP ${res.code}）。${snippet(res.body)}")
-                break
-            }
+            lastCode = res.code
+            lastBody = res.body
+            if (res.code !in 200..299) break
             val parsed = parseList(res.body)
-            composers = parsed.first
-            projects = parsed.second
-            apiError = null
-            if (composers.size < n) break
-            n *= 2
+            parsed.first.forEach { obj ->
+                val id = composerId(obj).ifBlank { "row-${merged.size}" }
+                val existing = merged[id]
+                merged[id] = if (existing == null) obj else overlay(existing, obj)
+            }
+            parsed.second.forEach { item ->
+                if (projects.none { (item.id.isNotBlank() && it.id == item.id) || it.name.equals(item.name, true) }) {
+                    projects += item
+                }
+            }
+            val next = parsed.third
+            if (next.isNullOrBlank() || next == cursor || !seenCursors.add(next)) break
+            if (parsed.first.isEmpty()) break
+            cursor = next
         }
-        val web = fetchWebList(accessToken, n.coerceAtMost(400))
-        if (web != null) {
-            composers = mergeObjects(composers, web.first)
-            projects = (projects + web.second).distinctBy { it.id.ifBlank { it.name } }
+        val web = fetchWebList(accessToken, 100)
+        if (web != null && web.code in 200..299) {
+            web.composers.forEach { obj ->
+                val id = composerId(obj).ifBlank { "web-${merged.size}" }
+                val existing = merged[id]
+                merged[id] = if (existing == null) obj else overlay(existing, obj)
+            }
+            web.projects.forEach { item ->
+                if (projects.none { (item.id.isNotBlank() && it.id == item.id) || it.name.equals(item.name, true) }) {
+                    projects += item
+                }
+            }
         }
-        if (composers.isEmpty() && projects.isEmpty() && apiError != null) throw apiError!!
-        return composers to projects
+        val note = buildString {
+            append("POST aiserver.v1.BackgroundComposerService/ListBackgroundComposers")
+            append("\nHTTP $lastCode，本页累计 ${merged.size} 条。")
+            append("\n响应摘要：${snippet(lastBody)}")
+            if (web != null) append("\n网页 list HTTP ${web.code}：${snippet(web.raw)}")
+        }
+        return Listed(merged.values.toList(), projects, lastCode, note)
     }
 
-    private fun fetchWebList(accessToken: String, n: Int): Pair<List<JSONObject>, List<ProjectRef>>? {
+    private data class WebList(val composers: List<JSONObject>, val projects: List<ProjectRef>, val code: Int, val raw: String)
+
+    private fun fetchWebList(accessToken: String, n: Int): WebList? {
         val userId = jwtPayload(accessToken)?.optStr("sub").orEmpty().ifBlank {
             jwtPayload(accessToken)?.optStr("userId").orEmpty()
         }
@@ -213,12 +301,8 @@ object CursorSession {
         } catch (_: IOException) {
             return null
         }
-        if (res.code !in 200..299) return null
-        return try {
-            parseList(res.body)
-        } catch (_: Exception) {
-            null
-        }
+        val parsed = parseList(res.body)
+        return WebList(parsed.first, parsed.second, res.code, res.body)
     }
 
     private fun fetchDetail(accessToken: String, bcId: String): JSONObject? {
@@ -256,20 +340,26 @@ object CursorSession {
         }
     }
 
-    private fun parseList(body: String): Pair<List<JSONObject>, List<ProjectRef>> {
+    private fun parseList(body: String): Triple<List<JSONObject>, List<ProjectRef>, String?> {
         val trimmed = body.trim()
-        if (trimmed.startsWith("[")) return jsonArray(JSONArray(trimmed)) to emptyList()
-        val root = JSONObject(trimmed)
+        if (trimmed.startsWith("[")) return Triple(jsonArray(JSONArray(trimmed)), emptyList(), null)
+        if (!trimmed.startsWith("{")) return Triple(emptyList(), emptyList(), null)
+        val root = try {
+            JSONObject(trimmed)
+        } catch (_: Exception) {
+            return Triple(emptyList(), emptyList(), null)
+        }
         val composers = firstArray(root, listOf("composers", "backgroundComposers", "background_composers", "items", "results"))
         val projects = jsonArray(root.optJSONArray("projects")).mapNotNull { obj ->
-            if (composerId(obj).isNotBlank() && !obj.has("displayName") && !obj.has("name")) return@mapNotNull null
             val name = obj.optStr("displayName").ifBlank { obj.optStr("name") }.ifBlank { obj.optStr("projectName") }
             val id = obj.optStr("id").ifBlank { obj.optStr("projectId") }.ifBlank { obj.optStr("project_id") }
             if (name.isBlank() && id.isBlank()) return@mapNotNull null
             if (composerId(obj).isNotBlank() && name.isBlank()) return@mapNotNull null
             ProjectRef(name.ifBlank { id }, id.ifBlank { name }, obj.optStr("repoUrl").ifBlank { obj.optStr("repository") })
         }
-        return composers to projects
+        val next = root.optStr("nextCursor").ifBlank { root.optStr("nextPageToken") }.ifBlank { root.optStr("cursor") }
+            .takeIf { it.isNotBlank() && !it.equals("null", true) }
+        return Triple(composers, projects, next)
     }
 
     private fun mergeObjects(primary: List<JSONObject>, extra: List<JSONObject>): List<JSONObject> {
@@ -344,7 +434,13 @@ object CursorSession {
         conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
         conn.setRequestProperty("Accept", "application/json")
         conn.setRequestProperty("Accept-Encoding", "identity")
-        conn.setRequestProperty("User-Agent", "CursorMobile-Android/8")
+        conn.setRequestProperty("User-Agent", "CursorMobile-Android/9")
+        conn.instanceFollowRedirects = false
+        if (url.contains("/aiserver.v1.")) {
+            conn.setRequestProperty("Connect-Protocol-Version", "1")
+            conn.setRequestProperty("x-cursor-client-type", "sdk")
+            conn.setRequestProperty("x-cursor-client-version", "1.0.34")
+        }
         if (!bearer.isNullOrBlank()) conn.setRequestProperty("Authorization", "Bearer $bearer")
         extraHeaders.forEach { (key, value) -> conn.setRequestProperty(key, value) }
         return try {
@@ -368,7 +464,8 @@ object CursorSession {
         conn.readTimeout = readMs
         conn.setRequestProperty("Accept", "application/json")
         conn.setRequestProperty("Accept-Encoding", "identity")
-        conn.setRequestProperty("User-Agent", "CursorMobile-Android/8")
+        conn.setRequestProperty("User-Agent", "CursorMobile-Android/9")
+        conn.instanceFollowRedirects = false
         if (!bearer.isNullOrBlank()) conn.setRequestProperty("Authorization", "Bearer $bearer")
         extraHeaders.forEach { (key, value) -> conn.setRequestProperty(key, value) }
         return try {
@@ -386,7 +483,16 @@ object CursorSession {
         }
         val ok = code in 200..299
         val stream = if (ok) conn.inputStream else conn.errorStream
-        val body = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+        val raw = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+        val type = conn.contentType.orEmpty()
+        val location = if (code in 300..399) conn.getHeaderField("Location").orEmpty() else ""
+        val body = buildString {
+            if (location.isNotBlank()) append("redirect ").append(location).append(' ')
+            if (type.isNotBlank() && !raw.trim().startsWith("{") && !raw.trim().startsWith("[")) {
+                append('[').append(type).append("] ")
+            }
+            append(raw)
+        }
         return CursorApi.HttpResult(code, body)
     }
 
@@ -449,5 +555,24 @@ object CursorSession {
     private fun enc(value: String): String = URLEncoder.encode(value, Charsets.UTF_8.name())
 
     private fun snippet(body: String): String =
-        body.trim().replace("\\s+".toRegex(), " ").take(160)
+        body.trim().replace("\\s+".toRegex(), " ").let { if (it.isBlank()) "空响应" else it.take(420) }
+
+    private fun summarize(res: CursorApi.HttpResult): String = "HTTP ${res.code} ${snippet(res.body)}"
+
+    private fun readApiKey(body: String): String? {
+        val obj = try {
+            JSONObject(body)
+        } catch (_: Exception) {
+            return null
+        }
+        val key = obj.optStr("apiKey").ifBlank { obj.optStr("api_key") }
+        return key.takeIf { it.isNotBlank() }
+    }
+
+    private fun jsonKeys(obj: JSONObject): String {
+        val names = mutableListOf<String>()
+        val keys = obj.keys()
+        while (keys.hasNext() && names.size < 40) names += keys.next()
+        return names.joinToString(", ")
+    }
 }

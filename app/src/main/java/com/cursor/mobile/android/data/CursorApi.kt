@@ -20,8 +20,16 @@ object CursorApi {
     data class RunStart(val runId: String, val modelSent: Boolean)
 
     fun verifyKey(apiKey: String): String? {
+        val basic = verifyKeyOnce(apiKey, bearer = false)
+        if (basic == null) return null
+        val bearer = verifyKeyOnce(apiKey, bearer = true)
+        if (bearer == null) return null
+        return basic
+    }
+
+    private fun verifyKeyOnce(apiKey: String, bearer: Boolean): String? {
         val res = try {
-            get("/v1/agents?limit=1", apiKey)
+            if (bearer) getBearer("/v1/agents?limit=1", apiKey) else get("/v1/agents?limit=1", apiKey)
         } catch (e: IOException) {
             return "无法连接 api.cursor.com，请检查网络（${e.message ?: "网络错误"}）"
         }
@@ -34,6 +42,23 @@ object CursorApi {
             }
         }
         return explain(res.code, res.body)
+    }
+
+    private fun getBearer(path: String, token: String): HttpResult {
+        val conn = (URL(BASE + path).openConnection() as HttpURLConnection)
+        conn.requestMethod = "GET"
+        conn.connectTimeout = 15_000
+        conn.readTimeout = 30_000
+        conn.instanceFollowRedirects = false
+        conn.setRequestProperty("Authorization", "Bearer $token")
+        conn.setRequestProperty("Accept", "application/json")
+        conn.setRequestProperty("Accept-Encoding", "identity")
+        conn.setRequestProperty("User-Agent", "CursorMobile-Android/9")
+        return try {
+            finish(conn)
+        } finally {
+            conn.disconnect()
+        }
     }
 
     fun listAgentPage(apiKey: String, version: String, cursor: String?, arrayKey: String, extra: String = ""): Pair<List<JSONObject>, String?> {

@@ -288,6 +288,7 @@ private fun readProject(obj: JSONObject): ProjectHit? {
         .ifBlank { meta?.optStr("projectId").orEmpty() }
         .ifBlank { linkedId }
         .ifBlank { projectText }
+        .ifBlank { scanProjectFields(obj)?.first.orEmpty() }
     val name = project?.optStr("displayName").orEmpty()
         .ifBlank { project?.optStr("name").orEmpty() }
         .ifBlank { obj.optStr("projectName") }
@@ -298,6 +299,7 @@ private fun readProject(obj: JSONObject): ProjectHit? {
         .ifBlank { meta?.optStr("projectName").orEmpty() }
         .ifBlank { obj.optStr("projectDisplayName") }
         .ifBlank { projectText }
+        .ifBlank { scanProjectFields(obj)?.second.orEmpty() }
     val kind = obj.optStr("kind").ifBlank { obj.optStr("agentType") }.ifBlank { obj.optStr("role") }
         .ifBlank { obj.optStr("composerType") }.ifBlank { obj.optStr("composer_type") }
     val typeOnly = obj.optStr("type")
@@ -315,6 +317,38 @@ private fun readProject(obj: JSONObject): ProjectHit? {
 }
 
 internal fun jsonHasProject(obj: JSONObject): Boolean = readProject(obj) != null
+
+private fun scanProjectFields(obj: JSONObject): Pair<String, String>? {
+    val keys = obj.keys()
+    while (keys.hasNext()) {
+        val key = keys.next()
+        if (!key.contains("project", true)) continue
+        if (key.equals("isProject", true) || key.equals("is_project", true)) continue
+        when (val value = obj.opt(key)) {
+            is String -> {
+                if (value.isBlank() || value == "null" || value.equals("true", true) || value.equals("false", true)) continue
+                return value to value
+            }
+            is JSONObject -> {
+                val id = value.optStr("id").ifBlank { value.optStr("projectId") }.ifBlank { value.optStr("bcId") }
+                val name = value.optStr("displayName").ifBlank { value.optStr("name") }.ifBlank { value.optStr("title") }.ifBlank { id }
+                if (name.isNotBlank()) return id.ifBlank { name } to name
+            }
+            is JSONArray -> {
+                val first = value.optJSONObject(0) ?: value.optString(0).takeIf { it.isNotBlank() && it != "null" }
+                when (first) {
+                    is JSONObject -> {
+                        val id = first.optStr("id").ifBlank { first.optStr("projectId") }
+                        val name = first.optStr("displayName").ifBlank { first.optStr("name") }.ifBlank { id }
+                        if (name.isNotBlank()) return id.ifBlank { name } to name
+                    }
+                    is String -> return first to first
+                }
+            }
+        }
+    }
+    return null
+}
 
 private fun readRepoUrl(obj: JSONObject): String {
     listOf("repoUrl", "repo_url", "repositoryUrl", "repository_url").forEach { key ->

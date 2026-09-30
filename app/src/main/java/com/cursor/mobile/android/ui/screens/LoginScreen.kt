@@ -8,6 +8,8 @@ import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -58,8 +60,8 @@ fun LoginScreen(onLoggedIn: () -> Unit, initialError: String? = null) {
 
     Scaffold(containerColor = MaterialTheme.colorScheme.background) { padding ->
         Column(
-            modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 20.dp),
-            verticalArrangement = Arrangement.Center,
+            modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 20.dp, vertical = 28.dp).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.Top,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Box(
@@ -106,6 +108,25 @@ fun LoginScreen(onLoggedIn: () -> Unit, initialError: String? = null) {
             ) {
                 if (waiting) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.White)
                 else Text("用 Cursor 账号登录", fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(vertical = 4.dp))
+            }
+            if (AuthRepository.hasPendingSession(context) && !waiting) {
+                Text(
+                    "浏览器登录已保存，但还没有换发出 Cloud Agents 凭证。点下面重试；失败原因会留在这页，不会当成登录完成。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 12.dp)
+                )
+                TextButton(
+                    onClick = {
+                        error = null
+                        waiting = true
+                        job = scope.launch {
+                            val failure = AuthRepository.retryMint(context)
+                            waiting = false
+                            if (failure == null) onLoggedIn() else error = failure
+                        }
+                    }
+                ) { Text("重试换发凭证") }
             }
             if (waiting) {
                 Text(

@@ -15,7 +15,9 @@ object AuthRepository {
     private const val KEY_API_KEY = "cursor_api_key"
     private const val KEY_EMAIL = "cursor_account_email"
 
-    fun isLoggedIn(context: Context): Boolean = accessToken(context) != null
+    fun isLoggedIn(context: Context): Boolean = accessToken(context) != null && apiKey(context) != null
+
+    fun hasPendingSession(context: Context): Boolean = accessToken(context) != null && apiKey(context) == null
 
     fun accessToken(context: Context): String? =
         prefs(context).getString(KEY_ACCESS, null)?.takeIf { it.isNotBlank() }
@@ -53,21 +55,30 @@ object AuthRepository {
         } catch (e: Exception) {
             return e.message ?: "登录失败"
         }
-        val minted = withContext(Dispatchers.IO) {
-            try {
-                CursorSession.exchangeApiKey(tokens.accessToken)
-            } catch (_: Exception) {
-                null
-            }
+        return finishMint(context, tokens.accessToken, tokens.refreshToken)
+    }
+
+    suspend fun retryMint(context: Context): String? {
+        val token = accessToken(context) ?: return "没有已保存的登录会话。请先点「用 Cursor 账号登录」。"
+        val refresh = prefs(context).getString(KEY_REFRESH, null).orEmpty()
+        return finishMint(context, token, refresh)
+    }
+
+    private suspend fun finishMint(context: Context, access: String, refresh: String): String? {
+        val minted = try {
+            withContext(Dispatchers.IO) { CursorSession.mintCloudCredential(access) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            saveSession(context, access, refresh, null, "")
+            return e.message ?: "换发 Cloud Agents 凭证失败"
         }
-        val email = withContext(Dispatchers.IO) {
-            try {
-                CursorSession.accountEmail(tokens.accessToken)
-            } catch (_: Exception) {
-                ""
-            }
-        }.ifBlank { CursorSession.emailFromToken(tokens.accessToken) }
-        saveSession(context, tokens.accessToken, tokens.refreshToken, minted, email)
+        val email = minted.email.ifBlank { CursorSession.emailFromToken(access) }
+        if (minted.apiKey.isNullOrBlank()) {
+            saveSession(context, access, refresh, null, email)
+            return minted.detail
+        }
+        saveSession(context, access, refresh, minted.apiKey, email)
         return null
     }
 

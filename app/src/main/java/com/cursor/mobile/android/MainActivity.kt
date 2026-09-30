@@ -224,7 +224,7 @@ private fun MainScaffold(
                     if (loggedIn) {
                         Spacer(Modifier.height(12.dp))
                         Text(
-                            AuthRepository.accountLabel(context).ifBlank { "已登录" },
+                            "${AuthRepository.accountLabel(context).ifBlank { "已登录" }} · Cloud Agents 凭证已保存",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
