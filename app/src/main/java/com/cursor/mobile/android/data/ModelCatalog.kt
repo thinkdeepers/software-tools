@@ -7,9 +7,118 @@ enum class ModelTier(val label: String, val hint: String, val model: String) {
 
     companion object {
         fun fromModel(model: String): ModelTier =
-            entries.firstOrNull { it.model == model } ?: BALANCED
+            entries.firstOrNull { it.model.equals(model, true) } ?: BALANCED
 
         fun fromName(name: String): ModelTier =
             entries.firstOrNull { it.name == name } ?: BALANCED
     }
+}
+
+data class ModelParam(val id: String, val values: List<String>)
+
+data class ModelVariant(
+    val displayName: String,
+    val params: List<Pair<String, String>>,
+    val isDefault: Boolean
+)
+
+data class RemoteModel(
+    val id: String,
+    val displayName: String,
+    val aliases: List<String> = emptyList(),
+    val parameters: List<ModelParam> = emptyList(),
+    val variants: List<ModelVariant> = emptyList()
+) {
+    fun matches(name: String): Boolean {
+        if (name.isBlank()) return false
+        return id.equals(name, true) ||
+            displayName.equals(name, true) ||
+            aliases.any { it.equals(name, true) }
+    }
+}
+
+data class ModelSelection(val id: String, val params: List<Pair<String, String>>)
+
+fun selectModel(tier: ModelTier, preferred: String, catalog: List<RemoteModel>): ModelSelection {
+    val chosen = catalog.firstOrNull { it.matches(preferred) } ?: modelForTier(tier, catalog)
+    if (chosen == null) {
+        val id = when (tier) {
+            ModelTier.SPEED -> "composer-2"
+            ModelTier.BALANCED -> "claude-4.5-sonnet-thinking"
+            ModelTier.MAX -> "gpt-5.2"
+        }
+        val params = mutableListOf("thinking" to effortValue(tier))
+        if (tier == ModelTier.SPEED) params += "fast" to "true"
+        return ModelSelection(id, params)
+    }
+    return ModelSelection(chosen.id, paramsFor(chosen, tier))
+}
+
+fun suggestedModelId(tier: ModelTier, catalog: List<RemoteModel>): String =
+    modelForTier(tier, catalog)?.id ?: tier.model
+
+private fun effortValue(tier: ModelTier): String = when (tier) {
+    ModelTier.SPEED -> "low"
+    ModelTier.BALANCED -> "medium"
+    ModelTier.MAX -> "high"
+}
+
+private fun modelForTier(tier: ModelTier, catalog: List<RemoteModel>): RemoteModel? {
+    if (catalog.isEmpty()) return null
+    fun find(pred: (RemoteModel) -> Boolean) = catalog.firstOrNull(pred)
+    return when (tier) {
+        ModelTier.SPEED ->
+            find { it.id.contains("composer", true) || it.displayName.contains("composer", true) }
+                ?: catalog.first()
+        ModelTier.BALANCED ->
+            find { it.id.contains("sonnet", true) || it.displayName.contains("sonnet", true) }
+                ?: catalog.first()
+        ModelTier.MAX ->
+            find {
+                it.id.contains("gpt-5", true) || it.id.contains("opus", true) ||
+                    it.displayName.contains("gpt-5", true) || it.displayName.contains("opus", true)
+            } ?: catalog.last()
+    }
+}
+
+private fun paramsFor(model: RemoteModel, tier: ModelTier): List<Pair<String, String>> {
+    val out = mutableListOf<Pair<String, String>>()
+    val effort = effortValue(tier)
+    val effortParam = model.parameters.firstOrNull {
+        val id = it.id.lowercase()
+        id == "thinking" || id == "effort" || id.contains("reason")
+    }
+    if (effortParam != null) {
+        val value = effortParam.values.firstOrNull { it.equals(effort, true) }
+            ?: when (tier) {
+                ModelTier.SPEED -> effortParam.values.firstOrNull()
+                ModelTier.BALANCED -> effortParam.values.getOrNull(effortParam.values.size / 2)
+                ModelTier.MAX -> effortParam.values.lastOrNull()
+            }
+        if (value != null) out += effortParam.id to value
+    }
+    val fast = model.parameters.firstOrNull { it.id.equals("fast", true) }
+    if (fast != null) {
+        val want = if (tier == ModelTier.SPEED) "true" else "false"
+        val value = fast.values.firstOrNull { it.equals(want, true) } ?: fast.values.firstOrNull()
+        if (value != null) out += fast.id to value
+    }
+    if (out.isEmpty()) {
+        val variant = when (tier) {
+            ModelTier.SPEED -> model.variants.firstOrNull { variant ->
+                variant.params.any { it.first.equals("fast", true) && it.second.equals("true", true) } ||
+                    variant.displayName.contains("fast", true)
+            }
+            ModelTier.MAX -> model.variants.firstOrNull { variant ->
+                variant.params.any { (id, value) ->
+                    val key = id.lowercase()
+                    (key == "thinking" || key == "effort" || key.contains("reason")) &&
+                        (value.equals("high", true) || value.equals("max", true) || value.equals("xhigh", true))
+                } || variant.displayName.contains("high", true) || variant.displayName.contains("max", true)
+            }
+            ModelTier.BALANCED -> model.variants.firstOrNull { it.isDefault }
+        } ?: model.variants.firstOrNull { it.isDefault }
+        if (variant != null) out += variant.params
+    }
+    return out
 }

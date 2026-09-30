@@ -56,8 +56,8 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.cursor.mobile.android.data.AgentStore
 import com.cursor.mobile.android.data.AuthRepository
-import com.cursor.mobile.android.data.FakeRepository
 import com.cursor.mobile.android.ui.navigation.Routes
 import com.cursor.mobile.android.ui.screens.ChatScreen
 import com.cursor.mobile.android.ui.screens.InboxScreen
@@ -84,6 +84,7 @@ fun CursorMobileApp() {
     var darkTheme by remember { mutableStateOf(false) }
     var notifications by remember { mutableStateOf(true) }
     var loggedIn by remember { mutableStateOf(AuthRepository.isLoggedIn(context)) }
+    var loginError by remember { mutableStateOf<String?>(null) }
     var showSplash by remember { mutableStateOf(true) }
     LaunchedEffect(Unit) {
         delay(1100)
@@ -99,9 +100,17 @@ fun CursorMobileApp() {
                     notifications = notifications,
                     onToggleNotifications = { notifications = it },
                     loggedIn = loggedIn,
+                    loginError = loginError,
                     onLoggedIn = { loggedIn = true },
                     onLogout = {
                         AuthRepository.clear(context)
+                        AgentStore.clear()
+                        loggedIn = false
+                    },
+                    onSessionExpired = { message ->
+                        AuthRepository.clear(context)
+                        AgentStore.clear()
+                        loginError = message
                         loggedIn = false
                     }
                 )
@@ -156,8 +165,10 @@ private fun MainScaffold(
     notifications: Boolean,
     onToggleNotifications: (Boolean) -> Unit,
     loggedIn: Boolean,
+    loginError: String?,
     onLoggedIn: () -> Unit,
-    onLogout: () -> Unit
+    onLogout: () -> Unit,
+    onSessionExpired: (String) -> Unit
 ) {
     val context = LocalContext.current
     val nav = rememberNavController()
@@ -199,9 +210,13 @@ private fun MainScaffold(
                     DrawerEntry("发起 Agent", selected == Routes.NEW_AGENT, Icons.Filled.Add) { open(Routes.NEW_AGENT) }
                     DrawerEntry("设置", selected == Routes.SETTINGS, Icons.Filled.Settings) { open(Routes.SETTINGS) }
                     Spacer(Modifier.height(12.dp))
-                    Text("仓库（占位）", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    FakeRepository.repos.forEach {
-                        Text("◈ ${it.name} (${it.branch})", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(vertical = 3.dp))
+                    Text("仓库", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (AgentStore.repos.isEmpty()) {
+                        Text("同步后显示", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(vertical = 3.dp))
+                    } else {
+                        AgentStore.repos.take(8).forEach {
+                            Text("◈ ${it.name} (${it.branch})", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(vertical = 3.dp))
+                        }
                     }
                     if (loggedIn) {
                         Spacer(Modifier.height(12.dp))
@@ -225,26 +240,46 @@ private fun MainScaffold(
     ) {
         NavHost(navController = nav, startDestination = if (loggedIn) Routes.INBOX else Routes.LOGIN) {
             composable(Routes.LOGIN) {
-                LoginScreen(onLoggedIn = {
-                    onLoggedIn()
-                    nav.navigate(Routes.INBOX) {
-                        popUpTo(Routes.LOGIN) { inclusive = true }
-                        launchSingleTop = true
+                LoginScreen(
+                    initialError = loginError,
+                    onLoggedIn = {
+                        onLoggedIn()
+                        nav.navigate(Routes.INBOX) {
+                            popUpTo(Routes.LOGIN) { inclusive = true }
+                            launchSingleTop = true
+                        }
                     }
-                })
+                )
             }
             composable(Routes.INBOX) {
                 selected = Routes.INBOX
                 InboxScreen(
-                    sessions = FakeRepository.sessions,
                     onOpenDrawer = { scope.launch { drawer.open() } },
                     onOpenChat = { requireLogin(Routes.chat(it)) },
-                    onNewAgent = { requireLogin(Routes.NEW_AGENT) }
+                    onNewAgent = { requireLogin(Routes.NEW_AGENT) },
+                    onSessionExpired = { message ->
+                        scope.launch { drawer.close() }
+                        onSessionExpired(message)
+                        nav.navigate(Routes.LOGIN) {
+                            popUpTo(0) { inclusive = true }
+                            launchSingleTop = true
+                        }
+                    }
                 )
             }
             composable(Routes.NEW_AGENT) {
                 selected = Routes.NEW_AGENT
-                NewAgentScreen(onBack = { nav.popBackStack() }, onLaunched = { nav.navigate(Routes.chat(it)) })
+                NewAgentScreen(
+                    onBack = { nav.popBackStack() },
+                    onLaunched = { nav.navigate(Routes.chat(it)) },
+                    onSessionExpired = { message ->
+                        onSessionExpired(message)
+                        nav.navigate(Routes.LOGIN) {
+                            popUpTo(0) { inclusive = true }
+                            launchSingleTop = true
+                        }
+                    }
+                )
             }
             composable(Routes.SETTINGS) {
                 selected = Routes.SETTINGS
@@ -261,7 +296,18 @@ private fun MainScaffold(
                 arguments = listOf(navArgument("sessionId") { type = NavType.StringType })
             ) { backStack ->
                 val id = backStack.arguments?.getString("sessionId") ?: ""
-                ChatScreen(sessionId = id, onBack = { nav.popBackStack() }, onOpenReview = { nav.navigate(Routes.review(it)) })
+                ChatScreen(
+                    sessionId = id,
+                    onBack = { nav.popBackStack() },
+                    onOpenReview = { nav.navigate(Routes.review(it)) },
+                    onSessionExpired = { message ->
+                        onSessionExpired(message)
+                        nav.navigate(Routes.LOGIN) {
+                            popUpTo(0) { inclusive = true }
+                            launchSingleTop = true
+                        }
+                    }
+                )
             }
             composable(
                 Routes.REVIEW,

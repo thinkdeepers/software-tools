@@ -14,7 +14,12 @@ data class AgentSession(
     val machine: MachineKind,
     val updatedAt: String,
     val unread: Int = 0,
-    val source: String = "androidApp"
+    val source: String = "cursor-api",
+    val latestRunId: String = "",
+    val webUrl: String = "",
+    val prUrl: String = "",
+    val summary: String = "",
+    val updatedAtIso: String = ""
 )
 
 data class ChatMessage(

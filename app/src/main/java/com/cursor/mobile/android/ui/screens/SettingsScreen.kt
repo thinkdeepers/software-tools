@@ -33,6 +33,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.cursor.mobile.android.data.AgentStore
 import com.cursor.mobile.android.ui.components.Kicker
 import com.cursor.mobile.android.ui.theme.accentGradient
 
@@ -76,8 +77,8 @@ fun SettingsScreen(
                     Text("C", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 20.sp)
                 }
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("cook@demo", fontWeight = FontWeight.SemiBold)
-                    Text("Pro · 云端 Agent 可用（占位）", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(AgentStore.accountLabel.ifBlank { "已登录" }, fontWeight = FontWeight.SemiBold)
+                    Text("Cloud Agents API", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
 

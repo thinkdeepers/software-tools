@@ -21,6 +21,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,13 +46,16 @@ import com.cursor.mobile.android.ui.theme.accentGradient
 import kotlinx.coroutines.launch
 
 @Composable
-fun LoginScreen(onLoggedIn: () -> Unit) {
+fun LoginScreen(onLoggedIn: () -> Unit, initialError: String? = null) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var key by remember { mutableStateOf("") }
     var showKey by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
+    var error by remember { mutableStateOf(initialError) }
     var checking by remember { mutableStateOf(false) }
+    LaunchedEffect(initialError) {
+        if (!initialError.isNullOrBlank()) error = initialError
+    }
 
     Scaffold(containerColor = MaterialTheme.colorScheme.background) { padding ->
         Column(
@@ -75,7 +79,7 @@ fun LoginScreen(onLoggedIn: () -> Unit) {
                 modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
                 shape = RoundedCornerShape(16.dp),
                 label = { Text("sk-…") },
-                placeholder = { Text("粘贴后自动校验格式") },
+                placeholder = { Text("粘贴后向 Cursor 校验") },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                 visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
@@ -107,13 +111,13 @@ fun LoginScreen(onLoggedIn: () -> Unit) {
                     }
                     checking = true
                     scope.launch {
-                        val ok = AuthRepository.verifyWithApi(key)
+                        val failure = AuthRepository.verifyWithApi(key)
                         checking = false
-                        if (ok) {
+                        if (failure == null) {
                             AuthRepository.saveKey(context, key)
                             onLoggedIn()
                         } else {
-                            error = "校验未通过，请检查 Key 后重试"
+                            error = failure
                         }
                     }
                 },
@@ -126,7 +130,7 @@ fun LoginScreen(onLoggedIn: () -> Unit) {
                 else Text("验证并登录", fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(vertical = 4.dp))
             }
             Text(
-                "Key 经 EncryptedSharedPreferences 加密存储，仅本机使用；真实接口联调时在此页替换 verifyWithApi。",
+                "验证会请求 GET api.cursor.com/v1/agents。通过后 Key 用 EncryptedSharedPreferences 加密存在本机。",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 10.dp)

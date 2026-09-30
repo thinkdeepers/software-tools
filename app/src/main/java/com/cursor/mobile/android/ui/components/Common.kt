@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -22,6 +23,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -98,90 +100,97 @@ fun Kicker(text: String) {
 
 @Composable
 fun ChatBubble(msg: ChatMessage) {
-    val isUser = msg.sender == Sender.USER
-    if (isUser) {
-        Box(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
-            contentAlignment = Alignment.CenterEnd
+    val maxBubble = (LocalConfiguration.current.screenWidthDp * 0.72f).dp
+    val arrangement = when (msg.sender) {
+        Sender.USER -> Arrangement.End
+        Sender.SYSTEM -> Arrangement.Center
+        Sender.AGENT -> Arrangement.Start
+    }
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+        horizontalArrangement = arrangement
+    ) {
+        when (msg.sender) {
+            Sender.USER -> UserBubble(msg, maxBubble)
+            Sender.SYSTEM -> SystemChip(msg, maxBubble)
+            Sender.AGENT -> AgentBubble(msg, maxBubble)
+        }
+    }
+}
+
+@Composable
+private fun UserBubble(msg: ChatMessage, maxBubble: androidx.compose.ui.unit.Dp) {
+    Column(
+        modifier = Modifier
+            .widthIn(max = maxBubble)
+            .wrapContentWidth()
+            .clip(RoundedCornerShape(18.dp, 18.dp, 6.dp, 18.dp))
+            .background(Brush.linearGradient(listOf(Color(0xFF3B63F2), Color(0xFF7C3AED))))
+            .padding(horizontal = 8.dp, vertical = 6.dp)
+            .animateContentSize(),
+        verticalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        if (msg.time.isNotBlank()) {
+            Text("你 · ${msg.time}", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.8f))
+        }
+        Text(msg.text, color = Color.White, style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+@Composable
+private fun SystemChip(msg: ChatMessage, maxBubble: androidx.compose.ui.unit.Dp) {
+    Text(
+        msg.text,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier
+            .widthIn(max = maxBubble)
+            .wrapContentWidth()
+            .clip(RoundedCornerShape(999.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainer)
+            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(999.dp))
+            .padding(horizontal = 8.dp, vertical = 6.dp)
+    )
+}
+
+@Composable
+private fun AgentBubble(msg: ChatMessage, maxBubble: androidx.compose.ui.unit.Dp) {
+    Surface(
+        modifier = Modifier
+            .widthIn(max = maxBubble)
+            .wrapContentWidth()
+            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp, 16.dp, 16.dp, 6.dp)),
+        shape = RoundedCornerShape(16.dp, 16.dp, 16.dp, 6.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        tonalElevation = 1.dp
+    ) {
+        Column(
+            Modifier.padding(horizontal = 8.dp, vertical = 6.dp).animateContentSize(),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            Box(
-                modifier = Modifier
-                    .widthIn(max = 300.dp)
-                    .clip(RoundedCornerShape(18.dp, 18.dp, 6.dp, 18.dp))
-                    .background(
-                        Brush.linearGradient(
-                            listOf(Color(0xFF3B63F2), Color(0xFF7C3AED))
-                        )
-                    )
-                    .padding(horizontal = 11.dp, vertical = 8.dp)
-                    .animateContentSize()
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text("你 · ${msg.time}", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.8f))
-                    Text(msg.text, color = Color.White, style = MaterialTheme.typography.bodyMedium)
+                Box(
+                    modifier = Modifier
+                        .size(18.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(accentGradient()),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("◈", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                 }
+                Text(
+                    if (msg.time.isBlank()) "Agent" else "Agent · ${msg.time}",
+                    style = MaterialTheme.typography.labelMedium
+                )
+                if (msg.isStreaming) TypingDots()
             }
-        }
-    } else if (msg.sender == Sender.SYSTEM) {
-        Box(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp), contentAlignment = Alignment.Center) {
-            Text(
-                msg.text,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(999.dp))
-                    .background(MaterialTheme.colorScheme.surfaceContainer)
-                    .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(999.dp))
-                    .padding(horizontal = 12.dp, vertical = 6.dp)
-            )
-        }
-    } else {
-        Box(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
-            contentAlignment = Alignment.CenterStart
-        ) {
-            Surface(
-                modifier = Modifier
-                    .widthIn(max = 340.dp)
-                    .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp, 16.dp, 16.dp, 6.dp)),
-                shape = RoundedCornerShape(16.dp, 16.dp, 16.dp, 6.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant,
-                tonalElevation = 1.dp
-            ) {
-                Column(
-                    Modifier
-                        .padding(horizontal = 11.dp, vertical = 8.dp)
-                        .animateContentSize(),
-                    verticalArrangement = Arrangement.spacedBy(5.dp)
-                ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(7.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(22.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(accentGradient()),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text("◈", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        }
-                        Text("Agent · ${msg.time}", style = MaterialTheme.typography.labelMedium)
-                    }
-                    if (msg.isStreaming) TypingDots()
-                }
+            if (msg.text.isNotBlank()) {
                 Text(msg.text, style = MaterialTheme.typography.bodyMedium)
-                if (msg.attachment != null) {
-                    MiniCodeCard(msg.attachment)
-                }
-                }
             }
+            if (msg.attachment != null) MiniCodeCard(msg.attachment)
         }
     }
 }
@@ -190,7 +199,7 @@ fun ChatBubble(msg: ChatMessage) {
 fun MiniCodeCard(text: String) {
     Row(
         modifier = Modifier
-            .fillMaxWidth()
+            .wrapContentWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(MaterialTheme.colorScheme.background)
             .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp))

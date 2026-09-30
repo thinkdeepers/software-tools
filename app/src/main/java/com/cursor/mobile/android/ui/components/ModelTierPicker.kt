@@ -19,7 +19,7 @@ import androidx.compose.ui.unit.dp
 import com.cursor.mobile.android.data.ModelTier
 
 @Composable
-fun ModelTierPicker(selected: ModelTier, onSelect: (ModelTier) -> Unit) {
+fun ModelTierPicker(selected: ModelTier, modelLabel: String = selected.model, onSelect: (ModelTier) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(
             modifier = Modifier
@@ -52,7 +52,7 @@ fun ModelTierPicker(selected: ModelTier, onSelect: (ModelTier) -> Unit) {
             }
         }
         Text(
-            "${selected.model} · ${selected.hint}（已记住，下次直接用）",
+            "$modelLabel · ${selected.hint} · 强度会随请求发给 Cursor",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )

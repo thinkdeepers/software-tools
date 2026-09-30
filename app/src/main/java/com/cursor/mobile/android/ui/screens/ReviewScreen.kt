@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -33,15 +32,15 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.cursor.mobile.android.data.FakeRepository
-import com.cursor.mobile.android.ui.components.DiffRow
+import com.cursor.mobile.android.data.AgentStore
+import com.cursor.mobile.android.ui.components.EmptyState
 import com.cursor.mobile.android.ui.components.Kicker
 import com.cursor.mobile.android.ui.theme.CursorPalette
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ReviewScreen(sessionId: String, onBack: () -> Unit) {
-    val diffs = FakeRepository.diffsFor(sessionId)
+    val session = AgentStore.sessions.firstOrNull { it.id == sessionId }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -73,17 +72,26 @@ fun ReviewScreen(sessionId: String, onBack: () -> Unit) {
                         .padding(horizontal = 14.dp, vertical = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Kicker("Pull request · 对标 iOS Review 页")
-                    Text("fix/login-crash → main", style = MaterialTheme.typography.titleMedium)
+                    Kicker("Pull request")
+                    Text(
+                        listOf(session?.branch?.ifBlank { null } ?: "分支未知", session?.repo?.ifBlank { null } ?: "仓库未知").joinToString(" · "),
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    if (!session?.prUrl.isNullOrBlank()) {
+                        Text(session?.prUrl ?: "", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                    }
+                    if (!session?.summary.isNullOrBlank()) {
+                        Text(session?.summary ?: "", style = MaterialTheme.typography.bodySmall)
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         CiPill("CI 通过", CursorPalette.Success)
                         CiPill("2 approvals", CursorPalette.NeonViolet)
                         CiPill("可合并", CursorPalette.BrandBlue)
                     }
-                    Text("diff / commits / checks / 评论 / reviewer / auto-merge 全在这一页（占位）。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("分支和 PR 来自 Cloud Agents。文件 diff 仍在 Cursor Web 查看。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
-            items(diffs) { DiffRow(it) }
+            item { EmptyState("没有本地 diff", "打开会话链接可在 Cursor Web 看完整改动。") }
             item {
                 Column(
                     modifier = Modifier
