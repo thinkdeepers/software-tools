@@ -176,7 +176,14 @@ object CursorSession {
             append("\n")
             append(projectMetadataReport(enriched))
         }
-        ComposerSync(enriched, listed.projects, report, listed.code)
+        val (environments, envNote) = try {
+            listEnvironments(token)
+        } catch (_: Exception) {
+            emptyList<ProjectRef>() to "ListEnvironments 没有返回项目"
+        }
+        notes += envNote
+        val reportWithEnv = report + "\n" + envNote
+        ComposerSync(enriched, environments.ifEmpty { listed.projects }, reportWithEnv, listed.code)
     }
 
     private suspend fun enrich(accessToken: String, items: List<JSONObject>): List<JSONObject> = coroutineScope {
@@ -268,6 +275,58 @@ object CursorSession {
             append("composer ${merged.size} 条")
         }
         return Listed(merged.values.toList(), projects, lastCode, note)
+    }
+
+    private fun listEnvironments(accessToken: String): Pair<List<ProjectRef>, String> {
+        var code = 0
+        var parsed = emptyList<ProjectRef>()
+        listOf(JSONObject(), JSONObject().put("n", 100).put("includeArchived", true)).forEach { body ->
+            val res = try {
+                post("$API2/aiserver.v1.BackgroundComposerService/ListEnvironments", accessToken, body, 30_000)
+            } catch (_: IOException) {
+                return parsed to "ListEnvironments 网络失败"
+            }
+            code = res.code
+            if (res.code !in 200..299) return parsed to "ListEnvironments HTTP $code"
+            parsed = parseEnvironments(res.body)
+            if (parsed.isNotEmpty()) return parsed to "ListEnvironments HTTP $code，环境 ${parsed.size} 个"
+        }
+        return parsed to "ListEnvironments HTTP $code，环境 0 个"
+    }
+
+    private fun parseEnvironments(body: String): List<ProjectRef> {
+        val trimmed = body.trim()
+        if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return emptyList()
+        val found = mutableListOf<ProjectRef>()
+        fun take(obj: JSONObject) {
+            if (obj.optStr("bcId").isNotBlank() || obj.optStr("bc_id").isNotBlank()) return
+            val id = obj.optStr("publicId").ifBlank { obj.optStr("environmentPublicId") }
+                .ifBlank { obj.optStr("environmentId") }
+            val name = obj.optStr("displayName").ifBlank { obj.optStr("name") }.ifBlank { obj.optStr("title") }
+            if (name.isBlank() || id.isBlank()) return
+            if (found.none { it.name == name || (id.isNotBlank() && it.id == id) }) {
+                found += ProjectRef(name, id.ifBlank { name }, obj.optStr("repoUrl").ifBlank { obj.optStr("repository") })
+            }
+        }
+        fun walk(value: Any?, depth: Int) {
+            if (depth > 4 || found.size > 30) return
+            when (value) {
+                is JSONObject -> {
+                    take(value)
+                    val keys = value.keys()
+                    while (keys.hasNext()) walk(value.opt(keys.next()), depth + 1)
+                }
+                is JSONArray -> {
+                    for (i in 0 until value.length()) walk(value.opt(i), depth + 1)
+                }
+            }
+        }
+        try {
+            if (trimmed.startsWith("[")) walk(JSONArray(trimmed), 0) else walk(JSONObject(trimmed), 0)
+        } catch (_: Exception) {
+            return emptyList()
+        }
+        return found.filter { it.name.isNotBlank() && !it.name.startsWith("{") }
     }
 
     private data class WebList(val composers: List<JSONObject>, val projects: List<ProjectRef>, val code: Int, val raw: String)

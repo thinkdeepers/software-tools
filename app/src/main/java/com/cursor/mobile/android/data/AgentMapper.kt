@@ -54,7 +54,15 @@ internal fun mapV1Agent(obj: JSONObject, modelLabel: String = ""): AgentSession 
 // Projects 只收：composerType、type、kind、isProject、isCoordinator 标成项目的条目，
 // 或者整批里占少数、且没有仓库地址的协调项目（名字用它自己的 name，这才是左侧项目名）。
 // 分不清单批时，不要把全部会话放进 Projects。
-internal fun mapDesktopComposers(items: List<JSONObject>): List<AgentSession> = items.map { composerSession(it) }
+internal fun mapDesktopComposers(items: List<JSONObject>, environments: List<ProjectRef> = emptyList()): List<AgentSession> {
+    val envIds = items.map { environmentId(it) }.filter { it.isNotBlank() }.distinct()
+    val workflowIds = items.map { obj -> obj.optStr("workflowId").ifBlank { obj.optStr("workflow_id") } }.filter { it.isNotBlank() }.distinct()
+    val catalog = environments.filter { it.name.isNotBlank() }
+    val groupByEnvironment = catalog.size in 1..15 || (envIds.size in 1..12 && envIds.size < items.size)
+    val groupByWorkflow = !groupByEnvironment && catalog.isEmpty() && workflowIds.size in 1..12 && workflowIds.size < items.size
+    val names = catalog.associate { it.id to it.name }
+    return items.map { composerSession(it, names, groupByEnvironment, groupByWorkflow) }
+}
 
 internal fun projectMetadataReport(items: List<JSONObject>): String {
     val named = items.mapNotNull { projectMetadata(it)?.name }.distinct()
@@ -65,6 +73,10 @@ internal fun projectMetadataReport(items: List<JSONObject>): String {
         appendLine("projectMetadata 为空 ${items.size - filled} 条")
         appendLine("项目组 ${named.size} 个")
         if (named.isNotEmpty()) appendLine(named.joinToString("、"))
+        val envIds = items.map { environmentId(it) }.filter { it.isNotBlank() }.distinct()
+        val workflows = items.map { it.optStr("workflowId").ifBlank { it.optStr("workflow_id") } }.filter { it.isNotBlank() }.distinct()
+        appendLine("environmentPublicId ${envIds.size} 个不同值")
+        appendLine("workflowId ${workflows.size} 个不同值")
     }.trim()
 }
 
@@ -391,7 +403,16 @@ private fun readProject(obj: JSONObject): ProjectHit? {
 
 internal fun jsonHasProject(obj: JSONObject): Boolean = projectMetadata(obj) != null
 
-private fun composerSession(obj: JSONObject): AgentSession {
+private fun environmentId(obj: JSONObject): String =
+    obj.optStr("environmentPublicId").ifBlank { obj.optStr("environment_public_id") }
+        .ifBlank { obj.optStr("environmentId") }.ifBlank { obj.optStr("environment_id") }
+
+private fun composerSession(
+    obj: JSONObject,
+    environmentNames: Map<String, String>,
+    groupByEnvironment: Boolean,
+    groupByWorkflow: Boolean
+): AgentSession {
     val id = obj.optStr("bcId").ifBlank { obj.optStr("bc_id") }.ifBlank { obj.optStr("composerId") }.ifBlank { obj.optStr("id") }
     val repoUrl = readRepoUrl(obj)
     val branchName = obj.optStr("branchName").ifBlank { obj.optStr("branch_name") }
@@ -401,6 +422,20 @@ private fun composerSession(obj: JSONObject): AgentSession {
     val archived = obj.optBoolean("isArchived", false) || obj.optBoolean("is_archived", false)
     val statusRaw = obj.optStr("status").ifBlank { obj.optStr("composerStatus") }.ifBlank { if (archived) "ARCHIVED" else "" }
     val meta = projectMetadata(obj)
+    val envId = environmentId(obj)
+    val workflowId = obj.optStr("workflowId").ifBlank { obj.optStr("workflow_id") }
+    val projectName = meta?.name?.takeIf { it.isNotBlank() }
+        ?: environmentNames[envId]?.takeIf { groupByEnvironment }
+        ?: obj.optStr("environmentName").ifBlank { obj.optStr("environment_name") }.takeIf { groupByEnvironment && envId.isNotBlank() }
+    val projectId = meta?.id?.takeIf { it.isNotBlank() }
+        ?: envId.takeIf { groupByEnvironment && it.isNotBlank() }
+        ?: workflowId.takeIf { groupByWorkflow && projectName == null }
+    val label = projectName ?: when {
+        groupByEnvironment && envId.isNotBlank() -> envId.take(8)
+        groupByWorkflow && workflowId.isNotBlank() -> workflowId.take(8)
+        else -> ""
+    }
+    val inProject = label.isNotBlank() && (meta != null || groupByEnvironment && envId.isNotBlank() || groupByWorkflow && workflowId.isNotBlank())
     return AgentSession(
         id = id,
         title = title,
@@ -414,11 +449,11 @@ private fun composerSession(obj: JSONObject): AgentSession {
         webUrl = obj.optStr("url"),
         summary = obj.optStr("summary").ifBlank { obj.optStr("prompt") }.take(180),
         updatedAtIso = iso,
-        scope = if (meta != null) WorkScope.PROJECT else null,
-        envName = meta?.name.orEmpty(),
-        projectId = meta?.id.orEmpty(),
+        scope = if (inProject) WorkScope.PROJECT else null,
+        envName = if (inProject) label else "",
+        projectId = if (inProject) projectId.orEmpty() else "",
         repoUrl = repoUrl,
-        groupLabel = meta?.name.orEmpty(),
+        groupLabel = if (inProject) label else "",
         classified = true
     )
 }

@@ -110,7 +110,9 @@ fun InboxScreen(
     ) { padding ->
         val scope = AgentStore.scope
         val projectSessions = sessions.filter { it.scope == WorkScope.PROJECT }
-        val projectGroups = projectSessions.groupBy { it.groupLabel.ifBlank { "未命名项目" } }
+        val sessionGroups = projectSessions.groupBy { it.groupLabel.ifBlank { "未命名项目" } }
+        val projectLabels = (AgentStore.projects.map { it.name } + sessionGroups.keys).filter { it.isNotBlank() }.distinct()
+        val projectGroups = projectLabels.associateWith { label -> sessionGroups[label].orEmpty() }
         val repoList = AgentStore.repos
         val pending = sessions.count { !it.classified }
         Column(Modifier.fillMaxSize().padding(padding)) {
@@ -190,26 +192,40 @@ fun InboxScreen(
             if (scope == WorkScope.PROJECT) {
                 for ((label, grouped) in projectGroups) {
                     item(key = "group-$label") {
-                        Text(label, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            label,
+                            fontWeight = FontWeight.SemiBold,
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.clickable {
+                                grouped.maxByOrNull { it.updatedAtIso }?.let { onOpenChat(it.id) }
+                            }
+                        )
                     }
-                    items(grouped, key = { it.id }) { s ->
+                    items(grouped, key = { it.id.ifBlank { label + it.title } }) { s ->
                         SessionCard(s) { onOpenChat(s.id) }
                     }
                 }
             } else {
                 items(repoList, key = { it.url.ifBlank { it.name } }) { repo ->
+                    val session = sessions
+                        .filter { it.repoUrl.isNotBlank() && (it.repoUrl == repo.url || it.repoUrl.trimEnd('/') == repo.url.trimEnd('/')) }
+                        .maxByOrNull { it.updatedAtIso }
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(20.dp))
                             .background(MaterialTheme.colorScheme.surface)
                             .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(20.dp))
+                            .clickable { if (session != null) onOpenChat(session.id) }
                             .padding(horizontal = 14.dp, vertical = 12.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         Text(repo.name, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyLarge)
                         if (repo.url.isNotBlank()) {
                             Text(repo.url, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        if (session != null) {
+                            Text(session.title, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 }

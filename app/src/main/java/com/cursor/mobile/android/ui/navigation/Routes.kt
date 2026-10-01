@@ -8,6 +8,6 @@ object Routes {
     const val CHAT = "chat/{sessionId}"
     const val REVIEW = "review/{sessionId}"
 
-    fun chat(id: String) = "chat/$id"
-    fun review(id: String) = "review/$id"
+    fun chat(id: String) = "chat/${android.net.Uri.encode(id)}"
+    fun review(id: String) = "review/${android.net.Uri.encode(id)}"
 }

@@ -72,7 +72,7 @@ object AgentStore {
                     error = syncSummary
                     return@withLock
                 }
-                var merged = linkProjectNames(mapDesktopComposers(sync.composers))
+                var merged = linkProjectNames(mapDesktopComposers(sync.composers, sync.projects))
                 val key = AuthRepository.apiKey(context)
                 if (key != null) {
                     try {
