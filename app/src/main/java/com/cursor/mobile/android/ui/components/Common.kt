@@ -1,7 +1,9 @@
 package com.cursor.mobile.android.ui.components
 
 import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -110,8 +112,45 @@ private fun normalizeBreaks(raw: String): String =
         .replace("\\n", "\n")
         .replace("\\t", "\t")
 
+private val dropWholeBlock = listOf(
+    "timestamp",
+    "user_info",
+    "system_reminder",
+    "communication",
+    "rules",
+    "agent_skills",
+    "agent_skill",
+    "open_and_recently_viewed_files",
+    "attached_files",
+    "image_files"
+)
+
+internal fun cleanMessageForDisplay(raw: String): String {
+    var text = normalizeBreaks(raw)
+    dropWholeBlock.forEach { tag ->
+        text = Regex("(?is)<$tag\\b[^>]*>.*?</$tag>").replace(text, "")
+        text = Regex("(?is)<$tag\\b[^>]*>").replace(text, "")
+        text = Regex("(?is)</$tag>").replace(text, "")
+    }
+    text = Regex("(?is)</?[a-zA-Z][a-zA-Z0-9_:-]*(?:\\s[^>]*)?>").replace(text, "")
+    text = Regex("\\[([^\\]]+)]\\((https?://[^)\\s]+)\\)").replace(text) { match ->
+        val label = match.groupValues[1].trim()
+        val url = match.groupValues[2].trim()
+        if (label.isBlank() || label == url) url else "$label $url"
+    }
+    text = Regex("`(https?://[^`]+)`").replace(text) { it.groupValues[1] }
+    text = text.lineSequence()
+        .map { it.trim() }
+        .filterNot { line -> line.matches(Regex("^/task(?:-[A-Za-z0-9_]+)?$", RegexOption.IGNORE_CASE)) }
+        .filterNot { line -> line.equals("time.", ignoreCase = true) || line.equals("time", ignoreCase = true) }
+        .joinToString("\n")
+    text = Regex("[ \\t]{2,}").replace(text, " ")
+    text = Regex("\n{3,}").replace(text, "\n\n")
+    return text.trim()
+}
+
 private fun splitMessage(raw: String): List<TextPart> {
-    val text = normalizeBreaks(raw)
+    val text = cleanMessageForDisplay(raw)
     if (text.isEmpty()) return emptyList()
     val parts = mutableListOf<TextPart>()
     val fence = Regex("```[a-zA-Z0-9_-]*\\n?")
@@ -130,7 +169,10 @@ private fun splitMessage(raw: String): List<TextPart> {
     if (parts.size == 1 && !parts[0].code && looksLikeCode(parts[0].text)) {
         return listOf(TextPart(true, parts[0].text))
     }
-    return parts
+    return parts.map { part ->
+        val trimmed = part.text.trim()
+        if (part.code && trimmed.matches(Regex("https?://\\S+"))) TextPart(false, trimmed) else part
+    }.filter { it.text.isNotBlank() }
 }
 
 private fun looksLikeCode(text: String): Boolean {
@@ -200,7 +242,7 @@ private fun MarkdownBlock(
     style: TextStyle,
     textAlign: androidx.compose.ui.text.style.TextAlign
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         markdownLines(text).forEach { line ->
             when (line) {
                 is MdLine.Heading -> Text(
@@ -249,7 +291,6 @@ private fun inlineMarkdown(text: String, color: Color): androidx.compose.ui.text
             builder.pushStyle(
                 androidx.compose.ui.text.SpanStyle(
                     fontFamily = CodeFont,
-                    background = androidx.compose.ui.graphics.Color(0x14000000),
                     color = color
                 )
             )
@@ -295,7 +336,7 @@ private fun CodeScroll(text: String, color: Color) {
         color = color,
         fontFamily = CodeFont,
         fontSize = 12.sp,
-        lineHeight = 18.sp,
+        lineHeight = 16.sp,
         softWrap = false,
         overflow = TextOverflow.Visible,
         maxLines = Int.MAX_VALUE,
@@ -304,7 +345,7 @@ private fun CodeScroll(text: String, color: Color) {
             .background(MaterialTheme.colorScheme.background.copy(alpha = 0.55f))
             .then(if (long) Modifier.height(220.dp).verticalScroll(vertical) else Modifier)
             .horizontalScroll(horizontal)
-            .padding(8.dp)
+            .padding(horizontal = 8.dp, vertical = 4.dp)
     )
 }
 
@@ -312,9 +353,13 @@ val ChatPagePadding = 8.dp
 val ChatTextPadding = 28.dp
 private val chatBody = TextStyle(fontSize = 13.sp, lineHeight = 17.sp)
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ChatBubble(msg: ChatMessage) {
-    val align = androidx.compose.ui.text.style.TextAlign.Justify
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val cleaned = remember(msg.text) { cleanMessageForDisplay(msg.text) }
+    val align = androidx.compose.ui.text.style.TextAlign.Start
+    if (cleaned.isBlank() && msg.files.isEmpty() && msg.attachment == null && !msg.isStreaming) return
     val background = when (msg.sender) {
         Sender.USER -> MaterialTheme.colorScheme.primaryContainer
         Sender.SYSTEM -> MaterialTheme.colorScheme.surfaceContainer
@@ -335,11 +380,19 @@ fun ChatBubble(msg: ChatMessage) {
             .clip(RoundedCornerShape(12.dp))
             .background(background)
             .border(1.dp, border, RoundedCornerShape(12.dp))
-            .padding(horizontal = ChatTextPadding, vertical = 8.dp)
+            .combinedClickable(
+                onClick = {},
+                onLongClick = {
+                    val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    clipboard.setPrimaryClip(android.content.ClipData.newPlainText("消息", cleaned))
+                    android.widget.Toast.makeText(context, "已复制", android.widget.Toast.LENGTH_SHORT).show()
+                }
+            )
+            .padding(horizontal = ChatTextPadding, vertical = 6.dp)
             .animateContentSize()
     ) {
-        if (msg.text.isNotBlank()) {
-            MessageBody(msg.text, color, chatBody, partSpacing = 2.dp, textAlign = align)
+        if (cleaned.isNotBlank()) {
+            MessageBody(cleaned, color, chatBody, partSpacing = 2.dp, textAlign = align)
         }
         msg.files.forEach { file ->
             Text(
