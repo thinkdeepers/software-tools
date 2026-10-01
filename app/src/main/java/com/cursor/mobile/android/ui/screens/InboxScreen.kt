@@ -76,6 +76,7 @@ fun InboxScreen(
     val loading = AgentStore.loading
     val error = AgentStore.error
     var showSyncDetail by remember { mutableStateOf(false) }
+    var openedProject by remember { mutableStateOf<String?>(null) }
     fun reload() {
         scope.launch {
             try {
@@ -117,6 +118,7 @@ fun InboxScreen(
         val pending = sessions.count { !it.classified }
         Column(Modifier.fillMaxSize().padding(padding)) {
         ScopeSwitch(scope, projectGroups.size, repoList.size) {
+            openedProject = null
             AgentStore.choose(it)
         }
         LazyColumn(
@@ -184,26 +186,40 @@ fun InboxScreen(
                 item { EmptyState("正在补齐项目", "列表里的 projectMetadata 是空的，正在拉会话详情。") }
             }
             if (!loading && scope == WorkScope.PROJECT && projectGroups.isEmpty() && pending == 0 && error.isNullOrBlank()) {
-                item { EmptyState("还没有项目", summary.ifBlank { "projectMetadata 里还没有项目名称。" }) }
+                item { EmptyState("还没有项目", summary.ifBlank { "对不上的会话不会放进 Projects。" }) }
             }
             if (!loading && scope == WorkScope.REPOSITORY && repoList.isEmpty() && error.isNullOrBlank()) {
                 item { EmptyState("还没有仓库", "仓库来自会话的 repoUrl，每个地址只列一次。") }
             }
-            if (scope == WorkScope.PROJECT) {
-                for ((label, grouped) in projectGroups) {
-                    item(key = "group-$label") {
-                        Text(
-                            label,
-                            fontWeight = FontWeight.SemiBold,
-                            style = MaterialTheme.typography.titleMedium,
-                            modifier = Modifier.clickable {
-                                grouped.maxByOrNull { it.updatedAtIso }?.let { onOpenChat(it.id) }
-                            }
-                        )
+            if (scope == WorkScope.PROJECT && openedProject == null) {
+                items(projectGroups.entries.toList(), key = { "project-${it.key}" }) { (label, grouped) ->
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(MaterialTheme.colorScheme.surface)
+                            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(20.dp))
+                            .clickable { openedProject = label }
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(label, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyLarge)
+                        Text("${grouped.size} 条会话", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    items(grouped, key = { it.id.ifBlank { label + it.title } }) { s ->
-                        SessionCard(s) { onOpenChat(s.id) }
+                }
+            } else if (scope == WorkScope.PROJECT) {
+                val grouped = projectGroups[openedProject].orEmpty()
+                item(key = "back-$openedProject") {
+                    Column {
+                        TextButton(onClick = { openedProject = null }) { Text("返回项目") }
+                        Text(openedProject.orEmpty(), fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleMedium)
                     }
+                }
+                if (!loading && grouped.isEmpty()) {
+                    item { Text("这个项目下还没有对上的会话", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                }
+                items(grouped, key = { it.id.ifBlank { openedProject + it.title } }) { s ->
+                    SessionCard(s) { onOpenChat(s.id) }
                 }
             } else {
                 items(repoList, key = { it.url.ifBlank { it.name } }) { repo ->

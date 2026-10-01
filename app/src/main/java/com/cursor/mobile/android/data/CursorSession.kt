@@ -32,7 +32,8 @@ object CursorSession {
         val composers: List<JSONObject>,
         val projects: List<ProjectRef>,
         val report: String,
-        val httpCode: Int
+        val httpCode: Int,
+        val adoptedApi: String = ""
     )
 
     data class MintResult(val apiKey: String?, val email: String, val detail: String)
@@ -163,27 +164,247 @@ object CursorSession {
                 }
             }
         }
-        val enriched = if (listed.code in 200..299 && listed.composers.isNotEmpty()) {
-            enrich(token, listed.composers)
-        } else {
-            listed.composers
+        val enriched: List<JSONObject>
+        val discovered: Discovery
+        coroutineScope {
+            val enrichJob = async {
+                if (listed.code in 200..299 && listed.composers.isNotEmpty()) enrich(token, listed.composers) else listed.composers
+            }
+            val discoverJob = async { discoverProjects(token) }
+            enriched = enrichJob.await()
+            discovered = discoverJob.await()
         }
+        val patched = enriched.toMutableList()
+        val sampleNote = metadataSamples(token, patched)
+        val listProjects = listed.projects.filter { it.name.isNotBlank() }.distinctBy { it.name.lowercase() }
+        val listProjectOk = discovered.projects.isEmpty() && listProjects.size in 1..15 && !repoShaped(listProjects)
+        val projects = if (listProjectOk) listProjects else discovered.projects
+        val adoptedApi = if (listProjectOk) "ListBackgroundComposers.projects" else discovered.adoptedApi
         val report = buildString {
             notes.forEachIndexed { index, note ->
                 if (index > 0) append("\n")
                 append(note)
             }
             append("\n")
-            append(projectMetadataReport(enriched))
+            append(projectMetadataReport(patched))
+            append("\n")
+            append("ListBackgroundComposers.projects HTTP ${listed.code}，条目 ${listed.projects.size}")
+            if (listed.projects.size in 1..15 && listed.projects.isNotEmpty()) {
+                append("，名称：")
+                append(listed.projects.map { it.name }.distinct().joinToString("、"))
+            }
+            append(if (listProjectOk) "，采用" else "，未采用")
+            append("\n")
+            append(discovered.note)
+            if (sampleNote.isNotBlank()) {
+                append("\n")
+                append(sampleNote)
+            }
         }
-        val (environments, envNote) = try {
-            listEnvironments(token)
+        ComposerSync(patched, projects, report.trim(), listed.code, adoptedApi)
+    }
+
+    private data class ProbeSpec(val name: String, val url: String, val web: Boolean, val adopt: Boolean)
+
+    private data class Discovery(val projects: List<ProjectRef>, val adoptedApi: String, val note: String)
+
+    private suspend fun discoverProjects(accessToken: String): Discovery = coroutineScope {
+        val specs = projectProbes()
+        val gate = Semaphore(6)
+        val hits = specs.map { spec ->
+            async(Dispatchers.IO) {
+                gate.withPermit { probeOne(accessToken, spec) }
+            }
+        }.awaitAll()
+        val chosen = hits
+            .filter { it.adopt && it.code in 200..299 && it.projects.size in 1..15 && !repoShaped(it.projects) }
+            .minWithOrNull(compareBy({ kotlin.math.abs(it.projects.size - 5) }, { if (it.name.endsWith("ListProjects")) 0 else 1 }))
+        val note = hits.joinToString("\n") { it.line(chosen?.name == it.name) }
+        Discovery(chosen?.projects.orEmpty(), chosen?.name.orEmpty(), note)
+    }
+
+    private fun projectProbes(): List<ProbeSpec> {
+        fun api(service: String, method: String, adopt: Boolean) = ProbeSpec(
+            "$service/$method",
+            "$API2/aiserver.v1.$service/$method",
+            false,
+            adopt
+        )
+        fun web(path: String, adopt: Boolean) = ProbeSpec(path, "$WEB$path", true, adopt)
+        return listOf(
+            api("BackgroundComposerService", "ListProjects", true),
+            api("BackgroundComposerService", "ListAgentProjects", true),
+            api("BackgroundComposerService", "ListGlassProjects", true),
+            api("BackgroundComposerService", "GetProjects", true),
+            api("BackgroundComposerService", "ListBackgroundComposerProjects", true),
+            api("DashboardService", "ListProjects", true),
+            api("DashboardService", "ListTeamProjects", true),
+            api("DashboardService", "GetUserProjects", true),
+            api("AiService", "ListProjects", true),
+            api("ProjectService", "ListProjects", true),
+            api("GlassService", "ListProjects", true),
+            web("/api/background-composer/list-projects", true),
+            web("/api/dashboard/list-projects", true),
+            api("BackgroundComposerService", "ListEnvironments", false),
+            web("/api/background-composer/list-environments", false),
+            api("DashboardService", "GetTeamProjectsSettings", false),
+            api("DashboardService", "GetTeams", false),
+            api("DashboardService", "ListBackgroundComposerSecrets", false),
+            api("AutomationsService", "ListAutomations", false)
+        )
+    }
+
+    private data class ProbeHit(
+        val name: String,
+        val code: Int,
+        val rawCount: Int,
+        val projects: List<ProjectRef>,
+        val adopt: Boolean,
+        val html: Boolean,
+        val failure: String
+    ) {
+        fun line(adopted: Boolean): String {
+            if (failure.isNotBlank()) return "$name $failure"
+            if (html) return "$name HTTP $code，HTML，不是接口"
+            val names = projects.map { it.name }.distinct()
+            val detail = when {
+                rawCount in 1..15 && names.isNotEmpty() -> "，名称：${names.joinToString("、")}"
+                else -> ""
+            }
+            val used = when {
+                adopted -> "，采用"
+                code in 200..299 -> "，未采用"
+                else -> ""
+            }
+            return "$name HTTP $code，条目 $rawCount$detail$used"
+        }
+    }
+
+    private fun probeOne(accessToken: String, spec: ProbeSpec): ProbeHit {
+        val body = JSONObject().put("n", 100).put("includeArchived", true).put("includeStatus", true)
+        val res = try {
+            post(spec.url, accessToken, body, 12_000, if (spec.web) sessionCookie(accessToken) else emptyMap())
+        } catch (e: IOException) {
+            return ProbeHit(spec.name, 0, 0, emptyList(), spec.adopt, false, "网络失败：${e.message ?: "网络错误"}")
+        }
+        val html = res.body.contains("<html", true) || res.body.contains("[text/html]", true) || res.body.contains("<!DOCTYPE", true)
+        val parsed = if (res.code in 200..299 && !html) parseCatalog(res.body) else CatalogParse(0, emptyList())
+        return ProbeHit(spec.name, res.code, parsed.rawCount, parsed.projects, spec.adopt, html, "")
+    }
+
+    private data class CatalogParse(val rawCount: Int, val projects: List<ProjectRef>)
+
+    private fun parseCatalog(body: String): CatalogParse {
+        val trimmed = body.trim()
+        if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return CatalogParse(0, emptyList())
+        val found = mutableListOf<Pair<Int, List<ProjectRef>>>()
+        fun consider(arr: JSONArray) {
+            val objects = jsonArray(arr)
+            if (objects.isEmpty()) return
+            val projects = objects.mapNotNull { toProject(it) }.distinctBy { it.name.lowercase() }
+            found += objects.size to projects
+        }
+        fun walk(value: Any?, depth: Int) {
+            if (depth > 4) return
+            when (value) {
+                is JSONArray -> {
+                    if (value.length() > 0 && value.optJSONObject(0) != null) consider(value)
+                    if (value.length() <= 20) {
+                        for (i in 0 until value.length()) walk(value.opt(i), depth + 1)
+                    }
+                }
+                is JSONObject -> {
+                    val keys = value.keys()
+                    while (keys.hasNext()) walk(value.opt(keys.next()), depth + 1)
+                }
+            }
+        }
+        try {
+            if (trimmed.startsWith("[")) walk(JSONArray(trimmed), 0) else walk(JSONObject(trimmed), 0)
         } catch (_: Exception) {
-            emptyList<ProjectRef>() to "ListEnvironments 没有返回项目"
+            return CatalogParse(0, emptyList())
         }
-        notes += envNote
-        val reportWithEnv = report + "\n" + envNote
-        ComposerSync(enriched, environments.ifEmpty { listed.projects }, reportWithEnv, listed.code)
+        val chosen = found
+            .filter { it.second.size in 1..15 && it.first <= 15 }
+            .minByOrNull { kotlin.math.abs(it.second.size - 5) }
+            ?: found.maxByOrNull { it.first }
+        return CatalogParse(chosen?.first ?: 0, chosen?.second.orEmpty())
+    }
+
+    private fun toProject(obj: JSONObject): ProjectRef? {
+        if (looksLikeSession(obj)) return null
+        val name = obj.optStr("displayName").ifBlank { obj.optStr("name") }
+            .ifBlank { obj.optStr("title") }.ifBlank { obj.optStr("projectName") }.trim()
+        if (name.isBlank() || name.length > 80 || name.startsWith("http") || name.startsWith("{")) return null
+        val id = obj.optStr("id").ifBlank { obj.optStr("projectId") }.ifBlank { obj.optStr("project_id") }
+            .ifBlank { obj.optStr("publicId") }.ifBlank { name }
+        val repo = obj.optStr("repoUrl").ifBlank { obj.optStr("repository") }.ifBlank { obj.optStr("repo_url") }
+        return ProjectRef(name, id, repo)
+    }
+
+    private fun looksLikeSession(obj: JSONObject): Boolean {
+        val bc = obj.optStr("bcId").ifBlank { obj.optStr("bc_id") }.ifBlank { obj.optStr("composerId") }
+        if (bc.isNotBlank()) return true
+        if (obj.has("projectMetadata") || obj.has("project_metadata")) return true
+        if (obj.has("environmentPublicId") && obj.has("repoUrl")) return true
+        return false
+    }
+
+    private fun repoShaped(items: List<ProjectRef>): Boolean {
+        if (items.isEmpty()) return false
+        return items.all { ref ->
+            val repo = ref.repoUrl
+            repo.isNotBlank() && (shortRepo(repo).equals(ref.name, true) || ref.name.contains("/"))
+        }
+    }
+
+    private fun metadataSamples(accessToken: String, items: MutableList<JSONObject>): String {
+        if (items.isEmpty()) return "没有会话，无法写出 projectMetadata"
+        return items.take(2).mapIndexed { index, obj ->
+            buildString {
+                append("会话${index + 1} projectMetadata ")
+                append(rawProjectMetadata(obj))
+                if (!jsonHasProject(obj)) {
+                    val id = composerId(obj)
+                    val detail = detailMetadata(accessToken, id)
+                    append("\n会话${index + 1} 详情 GetBackgroundComposerInfo ")
+                    append(detail.note)
+                    val extra = detail.obj
+                    if (extra != null) items[index] = overlay(obj, extra)
+                }
+            }
+        }.joinToString("\n")
+    }
+
+    private data class DetailMeta(val note: String, val obj: JSONObject?)
+
+    private fun detailMetadata(accessToken: String, bcId: String): DetailMeta {
+        if (bcId.isBlank()) return DetailMeta("没有 bcId", null)
+        val body = JSONObject().put("bcId", bcId).put("bc_id", bcId)
+        val res = try {
+            post("$API2/aiserver.v1.BackgroundComposerService/GetBackgroundComposerInfo", accessToken, body, 12_000)
+        } catch (e: IOException) {
+            return DetailMeta("HTTP 0，网络失败：${e.message ?: "网络错误"}", null)
+        }
+        if (res.code !in 200..299) return DetailMeta("HTTP ${res.code}", null)
+        val obj = try {
+            flatten(JSONObject(res.body))
+        } catch (_: Exception) {
+            return DetailMeta("HTTP ${res.code}，不是 JSON", null)
+        }
+        return DetailMeta("HTTP ${res.code} projectMetadata ${rawProjectMetadata(obj)}", obj)
+    }
+
+    private fun sessionCookie(accessToken: String): Map<String, String> {
+        val userId = jwtPayload(accessToken)?.optStr("sub").orEmpty().ifBlank {
+            jwtPayload(accessToken)?.optStr("userId").orEmpty()
+        }
+        val cookieValue = if (userId.isNotBlank()) "$userId::$accessToken" else accessToken
+        return mapOf(
+            "Origin" to WEB,
+            "Referer" to "$WEB/",
+            "Cookie" to "WorkosCursorSessionToken=${enc(cookieValue)}"
+        )
     }
 
     private suspend fun enrich(accessToken: String, items: List<JSONObject>): List<JSONObject> = coroutineScope {
@@ -275,58 +496,6 @@ object CursorSession {
             append("composer ${merged.size} 条")
         }
         return Listed(merged.values.toList(), projects, lastCode, note)
-    }
-
-    private fun listEnvironments(accessToken: String): Pair<List<ProjectRef>, String> {
-        var code = 0
-        var parsed = emptyList<ProjectRef>()
-        listOf(JSONObject(), JSONObject().put("n", 100).put("includeArchived", true)).forEach { body ->
-            val res = try {
-                post("$API2/aiserver.v1.BackgroundComposerService/ListEnvironments", accessToken, body, 30_000)
-            } catch (_: IOException) {
-                return parsed to "ListEnvironments 网络失败"
-            }
-            code = res.code
-            if (res.code !in 200..299) return parsed to "ListEnvironments HTTP $code"
-            parsed = parseEnvironments(res.body)
-            if (parsed.isNotEmpty()) return parsed to "ListEnvironments HTTP $code，环境 ${parsed.size} 个"
-        }
-        return parsed to "ListEnvironments HTTP $code，环境 0 个"
-    }
-
-    private fun parseEnvironments(body: String): List<ProjectRef> {
-        val trimmed = body.trim()
-        if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return emptyList()
-        val found = mutableListOf<ProjectRef>()
-        fun take(obj: JSONObject) {
-            if (obj.optStr("bcId").isNotBlank() || obj.optStr("bc_id").isNotBlank()) return
-            val id = obj.optStr("publicId").ifBlank { obj.optStr("environmentPublicId") }
-                .ifBlank { obj.optStr("environmentId") }
-            val name = obj.optStr("displayName").ifBlank { obj.optStr("name") }.ifBlank { obj.optStr("title") }
-            if (name.isBlank() || id.isBlank()) return
-            if (found.none { it.name == name || (id.isNotBlank() && it.id == id) }) {
-                found += ProjectRef(name, id.ifBlank { name }, obj.optStr("repoUrl").ifBlank { obj.optStr("repository") })
-            }
-        }
-        fun walk(value: Any?, depth: Int) {
-            if (depth > 4 || found.size > 30) return
-            when (value) {
-                is JSONObject -> {
-                    take(value)
-                    val keys = value.keys()
-                    while (keys.hasNext()) walk(value.opt(keys.next()), depth + 1)
-                }
-                is JSONArray -> {
-                    for (i in 0 until value.length()) walk(value.opt(i), depth + 1)
-                }
-            }
-        }
-        try {
-            if (trimmed.startsWith("[")) walk(JSONArray(trimmed), 0) else walk(JSONObject(trimmed), 0)
-        } catch (_: Exception) {
-            return emptyList()
-        }
-        return found.filter { it.name.isNotBlank() && !it.name.startsWith("{") }
     }
 
     private data class WebList(val composers: List<JSONObject>, val projects: List<ProjectRef>, val code: Int, val raw: String)

@@ -65,6 +65,7 @@ object AgentStore {
                 val sync = CursorSession.sync(token, AuthRepository.apiKey(context))
                 syncReport = sync.report
                 syncSummary = summarizeSync(sync.httpCode, sync.composers.size, 0, 0)
+                val adoptedApi = sync.adoptedApi
                 if (sync.httpCode == 401 || sync.httpCode == 403) {
                     throw CursorApi.Unauthorized(syncSummary.ifBlank { "登录已失效（HTTP ${sync.httpCode}）" })
                 }
@@ -109,9 +110,22 @@ object AgentStore {
                 absorbTargets()
                 val projectCount = sessions.count { it.scope == WorkScope.PROJECT }
                 val repoCount = sessions.count { it.scope == WorkScope.REPOSITORY }
-                syncSummary = summarizeSync(sync.httpCode, sessions.size, projectCount, repoCount)
+                val names = projects.map { it.name }.filter { it.isNotBlank() }.distinct()
+                val ungrouped = sessions.count { it.scope != WorkScope.PROJECT }
+                val source = buildList {
+                    if (adoptedApi.isNotBlank()) add(adoptedApi)
+                    if (projectCount > 0) add("projectMetadata")
+                }.joinToString(" + ").ifBlank { "无" }
+                syncReport = buildString {
+                    appendLine("最终采用：$source")
+                    appendLine("项目 ${names.size} 个")
+                    appendLine("项目名：${if (names.isEmpty()) "无" else names.joinToString("、")}")
+                    appendLine("未能归组的会话 $ungrouped 条")
+                    append(sync.report.trim())
+                }
+                syncSummary = summarizeSync(sync.httpCode, sessions.size, names.size, repoCount)
                 if (!scopeTouched) {
-                    scope = if (projectCount == 0 && repoCount > 0) WorkScope.REPOSITORY else WorkScope.PROJECT
+                    scope = if (names.isNotEmpty() || repos.isEmpty()) WorkScope.PROJECT else WorkScope.REPOSITORY
                 }
             } catch (e: CursorApi.Unauthorized) {
                 throw e
@@ -275,7 +289,7 @@ object AgentStore {
         code !in 200..299 -> "列表请求失败（HTTP $code）。"
         total == 0 -> "服务器返回 0 条会话。"
         projects > 0 -> ""
-        projects == 0 && total > 0 -> "还没有从 projectMetadata 分出项目。"
+        projects == 0 && total > 0 -> "还没有对上的项目。打开同步详情可看每个接口的状态。"
         else -> "同步到 $total 条会话，但没有可归类的项目或仓库。"
     }
 

@@ -49,19 +49,42 @@ internal fun mapV1Agent(obj: JSONObject, modelLabel: String = ""): AgentSession 
     )
 }
 
-// 桌面左侧 Projects 不是「每条 composer 的 name」。
-// ListBackgroundComposers 里多数条目带 repoUrl / repository，那些是 Repositories，按仓库短名分组。
-// Projects 只收：composerType、type、kind、isProject、isCoordinator 标成项目的条目，
-// 或者整批里占少数、且没有仓库地址的协调项目（名字用它自己的 name，这才是左侧项目名）。
-// 分不清单批时，不要把全部会话放进 Projects。
-internal fun mapDesktopComposers(items: List<JSONObject>, environments: List<ProjectRef> = emptyList()): List<AgentSession> {
-    val envIds = items.map { environmentId(it) }.filter { it.isNotBlank() }.distinct()
-    val workflowIds = items.map { obj -> obj.optStr("workflowId").ifBlank { obj.optStr("workflow_id") } }.filter { it.isNotBlank() }.distinct()
-    val catalog = environments.filter { it.name.isNotBlank() }
-    val groupByEnvironment = catalog.size in 1..15 || (envIds.size in 1..12 && envIds.size < items.size)
-    val groupByWorkflow = !groupByEnvironment && catalog.isEmpty() && workflowIds.size in 1..12 && workflowIds.size < items.size
-    val names = catalog.associate { it.id to it.name }
-    return items.map { composerSession(it, names, groupByEnvironment, groupByWorkflow) }
+// 桌面左侧 Projects 大约几个名字。ListBackgroundComposers 的条目是会话。
+// 只有 projectMetadata 里真有 id 或名字，才把会话归进项目。
+// 空对象不分组。不同名字超过 15 个时，也不把会话标题或整批会话当成项目。
+// catalog 只用来把已经对上的 id 换成项目名，不能单独把会话塞进 Projects。
+internal fun mapDesktopComposers(items: List<JSONObject>, catalog: List<ProjectRef> = emptyList()): List<AgentSession> {
+    val byId = catalog.filter { it.id.isNotBlank() }.associate { it.id to it.name }
+    val byName = catalog.filter { it.name.isNotBlank() }.associate { it.name.lowercase() to it.name }
+    val hits = items.map { projectMetadata(it) }
+    val rawLabels = hits.map { hit ->
+        if (hit == null) {
+            ""
+        } else {
+            val fromId = byId[hit.id].orEmpty()
+            val fromName = byName[hit.name.lowercase()].orEmpty()
+            fromId.ifBlank { fromName }.ifBlank { hit.name }.ifBlank {
+                if (catalog.isEmpty()) hit.id else ""
+            }
+        }
+    }
+    val distinct = rawLabels.filter { it.isNotBlank() }.distinct()
+    val union = (catalog.map { it.name } + distinct).filter { it.isNotBlank() }.distinct()
+    val metadataTrusted = distinct.size in 1..15 && union.size <= 15
+    val labels = rawLabels.map { label ->
+        val inCatalog = label.isNotBlank() && catalog.any { it.name.equals(label, true) }
+        if (inCatalog || (metadataTrusted && label.isNotBlank())) label else ""
+    }
+    return items.mapIndexed { index, obj -> composerSession(obj, labels[index], hits[index]) }
+}
+
+internal fun rawProjectMetadata(obj: JSONObject): String {
+    val raw = obj.opt("projectMetadata") ?: obj.opt("project_metadata")
+    return when (raw) {
+        null -> "缺失"
+        is JSONObject -> if (raw.length() == 0) "空对象 {}" else raw.toString()
+        else -> raw.toString()
+    }
 }
 
 internal fun projectMetadataReport(items: List<JSONObject>): String {
@@ -69,14 +92,14 @@ internal fun projectMetadataReport(items: List<JSONObject>): String {
     val filled = items.count { projectMetadata(it) != null }
     return buildString {
         appendLine("composer ${items.size} 条")
-        appendLine("projectMetadata 有名称 $filled 条")
-        appendLine("projectMetadata 为空 ${items.size - filled} 条")
-        appendLine("项目组 ${named.size} 个")
-        if (named.isNotEmpty()) appendLine(named.joinToString("、"))
+        appendLine("projectMetadata 有 id 或名字 $filled 条")
+        appendLine("projectMetadata 为空或没有 id/名字 ${items.size - filled} 条")
+        if (named.size in 1..15) appendLine("projectMetadata 分组 ${named.size} 个：${named.joinToString("、")}")
+        else appendLine("projectMetadata 不同名称 ${named.size} 个，未当作项目列表")
         val envIds = items.map { environmentId(it) }.filter { it.isNotBlank() }.distinct()
         val workflows = items.map { it.optStr("workflowId").ifBlank { it.optStr("workflow_id") } }.filter { it.isNotBlank() }.distinct()
-        appendLine("environmentPublicId ${envIds.size} 个不同值")
-        appendLine("workflowId ${workflows.size} 个不同值")
+        appendLine("environmentPublicId ${envIds.size} 个不同值，未当作项目")
+        appendLine("workflowId ${workflows.size} 个不同值，未当作项目")
     }.trim()
 }
 
@@ -302,6 +325,8 @@ internal fun mergeDesktop(desktop: List<AgentSession>, api: List<AgentSession>):
                 repo = "",
                 branch = ""
             )
+        } else if (merged.scope == WorkScope.PROJECT) {
+            merged.copy(scope = existing.scope, envName = existing.envName, projectId = existing.projectId, groupLabel = existing.groupLabel)
         } else {
             merged
         }
@@ -407,12 +432,7 @@ private fun environmentId(obj: JSONObject): String =
     obj.optStr("environmentPublicId").ifBlank { obj.optStr("environment_public_id") }
         .ifBlank { obj.optStr("environmentId") }.ifBlank { obj.optStr("environment_id") }
 
-private fun composerSession(
-    obj: JSONObject,
-    environmentNames: Map<String, String>,
-    groupByEnvironment: Boolean,
-    groupByWorkflow: Boolean
-): AgentSession {
+private fun composerSession(obj: JSONObject, label: String, hit: ProjectHit?): AgentSession {
     val id = obj.optStr("bcId").ifBlank { obj.optStr("bc_id") }.ifBlank { obj.optStr("composerId") }.ifBlank { obj.optStr("id") }
     val repoUrl = readRepoUrl(obj)
     val branchName = obj.optStr("branchName").ifBlank { obj.optStr("branch_name") }
@@ -421,21 +441,7 @@ private fun composerSession(
     val title = obj.optStr("name").ifBlank { obj.optStr("title") }.ifBlank { obj.optStr("summary") }.ifBlank { "未命名会话" }
     val archived = obj.optBoolean("isArchived", false) || obj.optBoolean("is_archived", false)
     val statusRaw = obj.optStr("status").ifBlank { obj.optStr("composerStatus") }.ifBlank { if (archived) "ARCHIVED" else "" }
-    val meta = projectMetadata(obj)
-    val envId = environmentId(obj)
-    val workflowId = obj.optStr("workflowId").ifBlank { obj.optStr("workflow_id") }
-    val projectName = meta?.name?.takeIf { it.isNotBlank() }
-        ?: environmentNames[envId]?.takeIf { groupByEnvironment }
-        ?: obj.optStr("environmentName").ifBlank { obj.optStr("environment_name") }.takeIf { groupByEnvironment && envId.isNotBlank() }
-    val projectId = meta?.id?.takeIf { it.isNotBlank() }
-        ?: envId.takeIf { groupByEnvironment && it.isNotBlank() }
-        ?: workflowId.takeIf { groupByWorkflow && projectName == null }
-    val label = projectName ?: when {
-        groupByEnvironment && envId.isNotBlank() -> envId.take(8)
-        groupByWorkflow && workflowId.isNotBlank() -> workflowId.take(8)
-        else -> ""
-    }
-    val inProject = label.isNotBlank() && (meta != null || groupByEnvironment && envId.isNotBlank() || groupByWorkflow && workflowId.isNotBlank())
+    val inProject = hit != null && label.isNotBlank()
     return AgentSession(
         id = id,
         title = title,
@@ -451,7 +457,7 @@ private fun composerSession(
         updatedAtIso = iso,
         scope = if (inProject) WorkScope.PROJECT else null,
         envName = if (inProject) label else "",
-        projectId = if (inProject) projectId.orEmpty() else "",
+        projectId = if (inProject) hit.id else "",
         repoUrl = repoUrl,
         groupLabel = if (inProject) label else "",
         classified = true
@@ -462,17 +468,54 @@ private fun projectMetadata(obj: JSONObject): ProjectHit? {
     val raw = obj.opt("projectMetadata") ?: obj.opt("project_metadata") ?: return null
     val meta = when (raw) {
         is JSONObject -> raw
+        is JSONArray -> raw.optJSONObject(0)
         is String -> if (raw.trim().startsWith("{")) try { JSONObject(raw) } catch (_: Exception) { null } else null
         else -> null
     } ?: return null
     if (meta.length() == 0) return null
-    val nested = meta.optJSONObject("project") ?: meta
-    val id = nested.optStr("id").ifBlank { nested.optStr("projectId") }.ifBlank { nested.optStr("project_id") }
-        .ifBlank { meta.optStr("id") }.ifBlank { meta.optStr("projectId") }
-    val name = nested.optStr("displayName").ifBlank { nested.optStr("name") }.ifBlank { nested.optStr("title") }
-        .ifBlank { meta.optStr("displayName") }.ifBlank { meta.optStr("name") }.ifBlank { meta.optStr("projectName") }
+    var id = ""
+    var name = ""
+    fun take(key: String, text: String, depth: Int) {
+        val value = text.trim()
+        if (value.isBlank() || value == "null" || value.equals("true", true) || value.equals("false", true)) return
+        if (value.length > 80 || value.startsWith("http") || value.startsWith("{") || value.startsWith("[")) return
+        if (id.isBlank() && isProjectIdKey(key, depth)) id = value
+        if (name.isBlank() && isProjectNameKey(key)) name = value
+    }
+    fun walk(value: Any?, depth: Int) {
+        if (depth > 4) return
+        when (value) {
+            is JSONObject -> {
+                val keys = value.keys()
+                while (keys.hasNext()) {
+                    val key = keys.next()
+                    when (val child = value.opt(key)) {
+                        is String -> take(key, child, depth)
+                        is JSONObject, is JSONArray -> walk(child, depth + 1)
+                    }
+                }
+            }
+            is JSONArray -> {
+                for (i in 0 until value.length()) walk(value.opt(i), depth + 1)
+            }
+        }
+    }
+    walk(meta, 0)
     if (id.isBlank() && name.isBlank()) return null
     return ProjectHit(id.ifBlank { name }, name.ifBlank { id })
+}
+
+private fun isProjectIdKey(key: String, depth: Int): Boolean {
+    val k = key.lowercase()
+    if (k.contains("bc") || k.contains("workflow") || k.contains("environment") || k.contains("user") || k.contains("session") || k.contains("agent")) return false
+    if (k == "id" || k == "projectid" || k == "project_id") return depth <= 1
+    return k.contains("project") && k.contains("id")
+}
+
+private fun isProjectNameKey(key: String): Boolean {
+    val k = key.lowercase()
+    if (k.contains("model") || k.contains("file") || k.contains("path") || k.contains("url") || k.contains("email") || k.contains("repo")) return false
+    return k == "displayname" || k == "display_name" || k == "name" || k == "title" || k == "projectname" || k == "project_name" || k == "label"
 }
 
 private fun scanProjectFields(obj: JSONObject): Pair<String, String>? {
@@ -556,27 +599,9 @@ private fun epochIso(n: Long): String {
 }
 
 internal fun linkProjectNames(sessions: List<AgentSession>): List<AgentSession> {
-    val titles = sessions.associate { it.id to it.title }
-    val referenced = sessions.map { it.projectId }.filter { it.isNotBlank() }.toSet()
     return sessions.map { session ->
-        val coordinator = session.id.isNotBlank() && session.id in referenced
-        if (session.scope != WorkScope.PROJECT && !coordinator) return@map session
-        val projectId = session.projectId.ifBlank { if (coordinator) session.id else "" }
-        val parentTitle = titles[projectId]
-            ?.takeIf { projectId != session.id && it.isNotBlank() && it != "未命名会话" }
-            .orEmpty()
-        val label = session.envName.ifBlank { parentTitle }.ifBlank {
-            if (projectId == session.id) session.title else projectId
-        }
-        session.copy(
-            scope = WorkScope.PROJECT,
-            projectId = projectId,
-            envName = label,
-            groupLabel = label.ifBlank { session.groupLabel },
-            repo = "",
-            branch = "",
-            classified = true
-        )
+        if (session.scope != WorkScope.PROJECT || session.groupLabel.isBlank()) return@map session
+        session.copy(repo = "", branch = "")
     }
 }
 
