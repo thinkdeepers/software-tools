@@ -12,8 +12,8 @@ android {
         applicationId = "com.cursor.mobile.android"
         minSdk = 26
         targetSdk = 34
-        versionCode = 17
-        versionName = "1.17.0"
+        versionCode = 18
+        versionName = "1.18.0"
 
         vectorDrawables {
             useSupportLibrary = true

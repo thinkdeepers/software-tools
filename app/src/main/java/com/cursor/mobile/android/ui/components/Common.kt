@@ -21,9 +21,14 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -127,7 +132,12 @@ private val dropWholeBlock = listOf(
     "image_files"
 )
 
+private val cleanCache = object : LinkedHashMap<String, String>(128, 0.75f, true) {
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?) = size > 160
+}
+
 internal fun cleanMessageForDisplay(raw: String): String {
+    synchronized(cleanCache) { cleanCache[raw]?.let { return it } }
     var text = normalizeBreaks(raw)
     dropWholeBlock.forEach { tag ->
         text = Regex("(?is)<$tag\\b[^>]*>.*?</$tag>").replace(text, "")
@@ -150,7 +160,9 @@ internal fun cleanMessageForDisplay(raw: String): String {
     text = Regex("(?<=[\\u4e00-\\u9fff\\u3000-\\u303f\\uff00-\\uffef]) +(?=[\\u4e00-\\u9fff\\u3000-\\u303f\\uff00-\\uffef])").replace(text, "")
     text = Regex(" +(?=[，。！？、；：])").replace(text, "")
     text = Regex("\n{3,}").replace(text, "\n\n")
-    return text.trim()
+    val cleaned = text.trim()
+    synchronized(cleanCache) { cleanCache[raw] = cleaned }
+    return cleaned
 }
 
 private fun splitMessage(raw: String): List<TextPart> {
@@ -190,12 +202,18 @@ fun MessageBody(
     color: Color,
     style: TextStyle,
     partSpacing: androidx.compose.ui.unit.Dp = 6.dp,
-    textAlign: androidx.compose.ui.text.style.TextAlign = androidx.compose.ui.text.style.TextAlign.Start
+    textAlign: androidx.compose.ui.text.style.TextAlign = androidx.compose.ui.text.style.TextAlign.Start,
+    justify: Boolean = false,
+    contentWidthPx: Int = 0
 ) {
     val parts = remember(text) { splitMessage(text) }
     Column(verticalArrangement = Arrangement.spacedBy(partSpacing)) {
         parts.forEach { part ->
-            if (part.code) CodeScroll(part.text, color) else MarkdownBlock(part.text, color, style, textAlign)
+            when {
+                part.code -> CodeScroll(part.text, color)
+                justify -> MarkdownBlock(part.text, color, style, textAlign, contentWidthPx)
+                else -> PlainScroll(part.text, color, style, textAlign)
+            }
         }
     }
 }
@@ -248,7 +266,8 @@ private fun MarkdownBlock(
     text: String,
     color: Color,
     style: TextStyle,
-    textAlign: androidx.compose.ui.text.style.TextAlign
+    textAlign: androidx.compose.ui.text.style.TextAlign,
+    contentWidthPx: Int
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         markdownLines(text).forEach { line ->
@@ -263,10 +282,11 @@ private fun MarkdownBlock(
                             2 -> 15.sp
                             else -> 14.sp
                         }
-                    )
+                    ),
+                    contentWidthPx
                 )
-                is MdLine.Bullet -> JustifiedText("• ${line.text}", color, style)
-                is MdLine.Paragraph -> JustifiedText(line.text, color, style)
+                is MdLine.Bullet -> JustifiedText("• ${line.text}", color, style, contentWidthPx)
+                is MdLine.Paragraph -> JustifiedText(line.text, color, style, contentWidthPx)
             }
         }
     }
@@ -412,14 +432,15 @@ private fun breakLines(text: String, maxWidth: Int, styleKey: Int, widthOf: (Pie
 }
 
 @Composable
-private fun JustifiedText(text: String, color: Color, style: TextStyle) {
+private fun JustifiedText(text: String, color: Color, style: TextStyle, contentWidthPx: Int) {
     val measurer = rememberTextMeasurer()
     val drawStyle = style.copy(
         color = color,
         platformStyle = PlatformTextStyle(includeFontPadding = false)
     )
+    val fallback = if (contentWidthPx > 0) contentWidthPx else 0
     BoxWithConstraints(Modifier.fillMaxWidth()) {
-        val maxWidth = constraints.maxWidth
+        val maxWidth = if (fallback > 0) fallback else constraints.maxWidth
         val lines = remember(text, maxWidth, drawStyle) {
             val styleKey = drawStyle.fontSize.hashCode() xor (drawStyle.fontWeight?.weight ?: 400)
             breakLines(text, maxWidth, styleKey) { piece ->
@@ -574,8 +595,14 @@ val ChatTextPadding = 28.dp
 private val chatBody = TextStyle(fontSize = 13.sp, lineHeight = 17.sp)
 
 @Composable
-fun ChatBubble(msg: ChatMessage) {
+fun ChatBubble(msg: ChatMessage, deferFrames: Int = 1, contentWidthPx: Int = 0) {
     val cleaned = remember(msg.text) { cleanMessageForDisplay(msg.text) }
+    var ready by remember(msg.id) { mutableStateOf(false) }
+    var selecting by remember(msg.id) { mutableStateOf(false) }
+    LaunchedEffect(msg.id, deferFrames) {
+        repeat(deferFrames.coerceAtLeast(1)) { kotlinx.coroutines.delay(16) }
+        ready = true
+    }
     val align = androidx.compose.ui.text.style.TextAlign.Start
     if (cleaned.isBlank() && msg.files.isEmpty() && msg.attachment == null && !msg.isStreaming) return
     val background = when (msg.sender) {
@@ -598,12 +625,25 @@ fun ChatBubble(msg: ChatMessage) {
             .clip(RoundedCornerShape(12.dp))
             .background(background)
             .border(1.dp, border, RoundedCornerShape(12.dp))
+            .then(
+                if (selecting) Modifier else Modifier.pointerInput(msg.id) {
+                    detectTapGestures(onLongPress = { selecting = true })
+                }
+            )
             .padding(horizontal = ChatTextPadding, vertical = 6.dp)
     ) {
-        SelectionContainer {
-        if (cleaned.isNotBlank()) {
-            MessageBody(cleaned, color, chatBody, partSpacing = 2.dp, textAlign = align)
-        }
+        val body = @Composable {
+            if (cleaned.isNotBlank()) {
+                MessageBody(
+                    cleaned,
+                    color,
+                    chatBody,
+                    partSpacing = 2.dp,
+                    textAlign = align,
+                    justify = ready,
+                    contentWidthPx = contentWidthPx
+                )
+            }
         msg.files.forEach { file ->
             Text(
                 "${file.name} · ${file.mime}",
@@ -626,6 +666,7 @@ fun ChatBubble(msg: ChatMessage) {
         }
         if (msg.attachment != null) MiniCodeCard(msg.attachment)
         }
+        if (selecting) SelectionContainer { body() } else body()
     }
 }
 

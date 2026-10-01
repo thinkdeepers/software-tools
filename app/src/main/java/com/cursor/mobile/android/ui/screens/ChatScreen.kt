@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -20,6 +21,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -37,6 +39,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -295,13 +298,24 @@ fun ChatScreen(
         },
         containerColor = MaterialTheme.colorScheme.background
     ) { padding ->
+        BoxWithConstraints(Modifier.fillMaxSize().padding(padding).padding(horizontal = ChatPagePadding)) {
+        var stableWidth by remember { mutableIntStateOf(0) }
+        val incoming = constraints.maxWidth
+        if (stableWidth == 0 && incoming > 0) stableWidth = incoming
+        LaunchedEffect(incoming) {
+            if (kotlin.math.abs(incoming - stableWidth) > 48) stableWidth = incoming
+        }
         LazyColumn(
             state = listState,
             reverseLayout = true,
-            modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = ChatPagePadding)
+            modifier = Modifier.fillMaxSize()
         ) {
-            items(messages.asReversed(), key = { it.id }) { message ->
-                ChatBubble(message)
+            itemsIndexed(messages.asReversed(), key = { _, message -> message.id }) { index, message ->
+                ChatBubble(
+                    message,
+                    deferFrames = if (index < 4) 1 else index,
+                    contentWidthPx = stableWidth
+                )
             }
             if (!loading && messages.isEmpty() && loadError.isNullOrBlank()) {
                 item {
@@ -330,6 +344,7 @@ fun ChatScreen(
                     }
                 }
             }
+        }
         }
     }
 }
