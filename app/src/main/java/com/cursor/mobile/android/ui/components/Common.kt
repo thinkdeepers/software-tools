@@ -4,8 +4,6 @@ import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -149,6 +147,8 @@ internal fun cleanMessageForDisplay(raw: String): String {
         .filterNot { line -> line.equals("time.", ignoreCase = true) || line.equals("time", ignoreCase = true) }
         .joinToString("\n")
     text = Regex("[ \\t]{2,}").replace(text, " ")
+    text = Regex("(?<=[\\u4e00-\\u9fff\\u3000-\\u303f\\uff00-\\uffef]) +(?=[\\u4e00-\\u9fff\\u3000-\\u303f\\uff00-\\uffef])").replace(text, "")
+    text = Regex(" +(?=[，。！？、；：])").replace(text, "")
     text = Regex("\n{3,}").replace(text, "\n\n")
     return text.trim()
 }
@@ -230,7 +230,11 @@ private fun markdownLines(raw: String): List<MdLine> {
                 out += MdLine.Bullet(bullet.groupValues[2])
             }
             else -> {
-                if (paragraph.isNotEmpty()) paragraph.append(' ')
+                if (paragraph.isNotEmpty()) {
+                    val prev = paragraph.last()
+                    val next = trimmed.first()
+                    if (!isCjk(prev) && !isCjk(next)) paragraph.append(' ')
+                }
                 paragraph.append(trimmed)
             }
         }
@@ -294,16 +298,27 @@ private fun tokenize(text: String): List<Piece> {
         if (text.startsWith("https://", i) || text.startsWith("http://", i)) {
             val end = (i until text.length).firstOrNull { text[it].isWhitespace() } ?: text.length
             val url = text.substring(i, end)
-            var start = 0
-            url.forEachIndexed { index, ch ->
-                if (ch == '/' || ch == '?' || ch == '&' || ch == '=' || ch == '#') {
-                    if (index > start) out += Piece(url.substring(start, index), glue = true)
-                    out += Piece(ch.toString(), glue = true)
-                    start = index + 1
+            val scheme = url.indexOf("://").let { if (it < 0) 0 else it + 3 }
+            val path = url.indexOf('/', scheme)
+            if (path < 0) {
+                out += Piece(url, glue = true)
+            } else {
+                out += Piece(url.substring(0, path), glue = true)
+                var cursor = path
+                while (cursor < url.length) {
+                    val next = url.indexOf('/', cursor + 1).let { if (it < 0) url.length else it }
+                    out += Piece(url.substring(cursor, next), glue = true)
+                    cursor = next
                 }
             }
-            if (start < url.length) out += Piece(url.substring(start), glue = true)
             i = end
+            continue
+        }
+        if (c == '/') {
+            val start = i
+            i++
+            while (i < text.length && (text[i].isLetterOrDigit() || text[i] == '_' || text[i] == '-' || text[i] == '.')) i++
+            out += Piece(text.substring(start, i), glue = true)
             continue
         }
         if (isCjk(c)) {
@@ -346,15 +361,23 @@ private fun styledPieces(text: String): List<Piece> {
     }
 }
 
-private fun breakLines(text: String, maxWidth: Int, widthOf: (Piece) -> Int): List<List<Piece>> {
+private data class LaidLine(val pieces: List<Piece>, val contentWidth: Int)
+
+private val lineCache = object : LinkedHashMap<String, List<LaidLine>>(128, 0.75f, true) {
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<LaidLine>>?) = size > 120
+}
+
+private fun breakLines(text: String, maxWidth: Int, styleKey: Int, widthOf: (Piece) -> Int): List<LaidLine> {
+    val key = "$styleKey|$maxWidth|$text"
+    synchronized(lineCache) { lineCache[key]?.let { return it } }
     val pieces = styledPieces(text).filter { it.text.isNotEmpty() }
     if (pieces.isEmpty() || maxWidth <= 0) return emptyList()
-    val lines = mutableListOf<List<Piece>>()
+    val lines = mutableListOf<LaidLine>()
     var current = mutableListOf<Piece>()
     var width = 0
     fun flush() {
         if (current.isNotEmpty() && current.last().text == " ") current.removeAt(current.lastIndex)
-        if (current.isNotEmpty()) lines += current.toList()
+        if (current.isNotEmpty()) lines += LaidLine(current.toList(), width)
         current = mutableListOf()
         width = 0
     }
@@ -369,7 +392,8 @@ private fun breakLines(text: String, maxWidth: Int, widthOf: (Piece) -> Int): Li
             while (start < raw.length) {
                 var end = start + 1
                 while (end < raw.length && widthOf(part.copy(text = raw.substring(start, end + 1))) <= maxWidth) end++
-                lines += listOf(part.copy(text = raw.substring(start, end)))
+                val slice = part.copy(text = raw.substring(start, end))
+                lines += LaidLine(listOf(slice), widthOf(slice))
                 start = end
             }
             continue
@@ -383,6 +407,7 @@ private fun breakLines(text: String, maxWidth: Int, widthOf: (Piece) -> Int): Li
         width += partWidth
     }
     flush()
+    synchronized(lineCache) { lineCache[key] = lines }
     return lines
 }
 
@@ -396,7 +421,8 @@ private fun JustifiedText(text: String, color: Color, style: TextStyle) {
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val maxWidth = constraints.maxWidth
         val lines = remember(text, maxWidth, drawStyle) {
-            breakLines(text, maxWidth) { piece ->
+            val styleKey = drawStyle.fontSize.hashCode() xor (drawStyle.fontWeight?.weight ?: 400)
+            breakLines(text, maxWidth, styleKey) { piece ->
                 val pieceStyle = drawStyle.copy(
                     fontWeight = if (piece.bold) FontWeight.Bold else drawStyle.fontWeight,
                     fontFamily = if (piece.mono) CodeFont else drawStyle.fontFamily
@@ -410,10 +436,9 @@ private fun JustifiedText(text: String, color: Color, style: TextStyle) {
                 ).size.width
             }
         }
-        val lineHeight = if (drawStyle.lineHeight.value.isNaN()) 17.sp else drawStyle.lineHeight
         Column {
             lines.forEachIndexed { index, line ->
-                PieceLine(line, drawStyle, color, lineHeight, justify = index != lines.lastIndex)
+                PieceLine(line, drawStyle, color, maxWidth, justify = index != lines.lastIndex)
             }
         }
     }
@@ -421,38 +446,53 @@ private fun JustifiedText(text: String, color: Color, style: TextStyle) {
 
 @Composable
 private fun PieceLine(
-    pieces: List<Piece>,
+    line: LaidLine,
     style: TextStyle,
     color: Color,
-    lineHeight: androidx.compose.ui.unit.TextUnit,
+    maxWidth: Int,
     justify: Boolean
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        pieces.forEachIndexed { index, piece ->
-            Text(
-                piece.text,
-                color = color,
-                style = style.copy(
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val gaps = if (justify) justifyGaps(line.pieces) else 0
+    val extra = if (gaps > 0) (maxWidth - line.contentWidth).coerceAtLeast(0).toFloat() / gaps else 0f
+    val extraSp = with(density) { extra.toSp() }
+    val annotated = androidx.compose.ui.text.AnnotatedString.Builder().apply {
+        line.pieces.forEachIndexed { index, piece ->
+            val expand = justify && index != line.pieces.lastIndex && expands(line.pieces, index)
+            pushStyle(
+                androidx.compose.ui.text.SpanStyle(
+                    color = color,
                     fontWeight = if (piece.bold) FontWeight.Bold else style.fontWeight,
-                    fontFamily = if (piece.mono) CodeFont else style.fontFamily
-                ),
-                softWrap = false,
-                overflow = TextOverflow.Visible,
-                maxLines = 1
+                    fontFamily = if (piece.mono) CodeFont else style.fontFamily,
+                    letterSpacing = if (expand && piece.text.length == 1) extraSp else 0.sp
+                )
             )
-            if (!justify) return@forEachIndexed
-            val next = pieces.getOrNull(index + 1) ?: return@forEachIndexed
-            val gluePair = piece.glue && next.glue
-            if (piece.text == " ") {
-                Spacer(Modifier.weight(1f))
-            } else if (!gluePair && next.text != " ") {
-                Spacer(Modifier.weight(1f))
-            }
+            append(piece.text)
+            pop()
         }
-    }
+    }.toAnnotatedString()
+    Text(
+        annotated,
+        style = style,
+        softWrap = false,
+        overflow = TextOverflow.Visible,
+        maxLines = 1,
+        modifier = Modifier.fillMaxWidth()
+    )
+}
+
+private fun justifyGaps(pieces: List<Piece>): Int {
+    var count = 0
+    for (index in 0 until pieces.lastIndex) if (expands(pieces, index)) count++
+    return count
+}
+
+private fun expands(pieces: List<Piece>, index: Int): Boolean {
+    val piece = pieces[index]
+    val next = pieces.getOrNull(index + 1) ?: return false
+    if (piece.glue && next.glue) return false
+    if (piece.text.length > 1 && piece.text != " ") return false
+    return true
 }
 
 private fun inlineMarkdown(text: String, color: Color): androidx.compose.ui.text.AnnotatedString {
@@ -559,7 +599,6 @@ fun ChatBubble(msg: ChatMessage) {
             .background(background)
             .border(1.dp, border, RoundedCornerShape(12.dp))
             .padding(horizontal = ChatTextPadding, vertical = 6.dp)
-            .animateContentSize()
     ) {
         SelectionContainer {
         if (cleaned.isNotBlank()) {
