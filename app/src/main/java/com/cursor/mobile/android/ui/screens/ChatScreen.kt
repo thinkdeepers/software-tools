@@ -300,7 +300,8 @@ fun ChatScreen(
     ) { padding ->
         BoxWithConstraints(Modifier.fillMaxSize().padding(padding).padding(horizontal = ChatPagePadding)) {
         var stableWidth by remember { mutableIntStateOf(0) }
-        val incoming = constraints.maxWidth
+        val textInset = with(LocalDensity.current) { (ChatTextPadding * 2).roundToPx() }
+        val incoming = (constraints.maxWidth - textInset).coerceAtLeast(0)
         if (stableWidth == 0 && incoming > 0) stableWidth = incoming
         LaunchedEffect(incoming) {
             if (kotlin.math.abs(incoming - stableWidth) > 48) stableWidth = incoming

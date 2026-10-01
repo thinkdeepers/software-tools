@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.wrapContentWidth
@@ -440,7 +441,11 @@ private fun JustifiedText(text: String, color: Color, style: TextStyle, contentW
     )
     val fallback = if (contentWidthPx > 0) contentWidthPx else 0
     BoxWithConstraints(Modifier.fillMaxWidth()) {
-        val maxWidth = if (fallback > 0) fallback else constraints.maxWidth
+        val maxWidth = when {
+            constraints.maxWidth <= 0 -> fallback
+            fallback <= 0 -> constraints.maxWidth
+            else -> minOf(fallback, constraints.maxWidth)
+        }
         val lines = remember(text, maxWidth, drawStyle) {
             val styleKey = drawStyle.fontSize.hashCode() xor (drawStyle.fontWeight?.weight ?: 400)
             breakLines(text, maxWidth, styleKey) { piece ->
@@ -475,7 +480,8 @@ private fun PieceLine(
 ) {
     val density = androidx.compose.ui.platform.LocalDensity.current
     val gaps = if (justify) justifyGaps(line.pieces) else 0
-    val extra = if (gaps > 0) (maxWidth - line.contentWidth).coerceAtLeast(0).toFloat() / gaps else 0f
+    val budget = (maxWidth - line.contentWidth - 2).coerceAtLeast(0)
+    val extra = if (gaps > 0) budget.toFloat() / gaps else 0f
     val extraSp = with(density) { extra.toSp() }
     val annotated = androidx.compose.ui.text.AnnotatedString.Builder().apply {
         line.pieces.forEachIndexed { index, piece ->
@@ -496,9 +502,9 @@ private fun PieceLine(
         annotated,
         style = style,
         softWrap = false,
-        overflow = TextOverflow.Visible,
+        overflow = TextOverflow.Clip,
         maxLines = 1,
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier.width(with(density) { maxWidth.toDp() })
     )
 }
 
@@ -582,6 +588,7 @@ private fun CodeScroll(text: String, color: Color) {
         overflow = TextOverflow.Visible,
         maxLines = Int.MAX_VALUE,
         modifier = Modifier
+            .fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
             .background(MaterialTheme.colorScheme.background.copy(alpha = 0.55f))
             .then(if (long) Modifier.height(220.dp).verticalScroll(vertical) else Modifier)
