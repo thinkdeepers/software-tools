@@ -49,13 +49,9 @@ import androidx.compose.ui.unit.sp
 import com.cursor.mobile.android.data.AgentSession
 import com.cursor.mobile.android.data.AgentStore
 import com.cursor.mobile.android.data.CursorApi
-import com.cursor.mobile.android.data.MachineKind
 import com.cursor.mobile.android.ui.components.EmptyState
 import com.cursor.mobile.android.ui.components.Kicker
-import com.cursor.mobile.android.ui.components.MessageBody
-import com.cursor.mobile.android.ui.components.StatusChip
 import com.cursor.mobile.android.ui.theme.CursorPalette
-import com.cursor.mobile.android.ui.theme.accentGradient
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -165,10 +161,18 @@ fun InboxScreen(
 }
 
 private fun repoShort(s: AgentSession): String {
-    val fromUrl = com.cursor.mobile.android.data.shortRepo(s.repoUrl)
-    if (fromUrl.isNotBlank() && !fromUrl.startsWith("http")) return fromUrl
-    if (s.repo.isNotBlank() && !s.repo.startsWith("http")) return s.repo
+    ownerRepo(s.repoUrl)?.let { return it }
+    ownerRepo(s.repo)?.let { return it }
     return "未归类"
+}
+
+private fun ownerRepo(raw: String): String? {
+    val text = raw.trim().removeSuffix(".git")
+    if (text.isBlank() || text.length > 160 || text.contains('{') || text.contains('[')) return null
+    val hosted = Regex("(?:github\\.com|gitlab\\.com)[:/]([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)").find(text)
+    if (hosted != null) return hosted.groupValues[1]
+    if (text.matches(Regex("[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"))) return text
+    return null
 }
 
 @Composable
@@ -186,52 +190,20 @@ private fun SessionCard(s: AgentSession, repo: String, onClick: () -> Unit) {
             .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
-            Column(Modifier.weight(1f).padding(end = 8.dp)) {
-                MessageBody(
-                    s.title,
-                    MaterialTheme.colorScheme.onSurface,
-                    MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold)
-                )
-            }
-            StatusChip(s.status)
-        }
-        val summary = s.summary.trim()
-        if (summary.isNotBlank() && summary != s.title && !summary.startsWith("http")) {
-            MessageBody(summary, MaterialTheme.colorScheme.onSurfaceVariant, MaterialTheme.typography.bodySmall)
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                listOf(s.model, machineLabel(s), s.updatedAt).filter { it.isNotBlank() }.joinToString(" · "),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            if (s.unread > 0) {
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(999.dp))
-                        .background(accentGradient())
-                        .padding(horizontal = 9.dp, vertical = 3.dp)
-                ) {
-                    Text("${s.unread} 条新消息", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-                }
-            }
-        }
+        Text(
+            s.title.ifBlank { "未命名会话" },
+            maxLines = 2,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            fontWeight = FontWeight.SemiBold,
+            style = MaterialTheme.typography.bodyLarge
+        )
         Text(
             repo,
-            fontSize = 11.sp,
-            lineHeight = 14.sp,
+            maxLines = 1,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            fontSize = 12.sp,
+            lineHeight = 16.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
-}
-
-private fun machineLabel(s: AgentSession) = when (s.machine) {
-    MachineKind.CLOUD -> "Cloud"
-    MachineKind.TEAM_POOL -> "Team Pool"
-    MachineKind.MY_MACHINE -> "My Machine"
 }

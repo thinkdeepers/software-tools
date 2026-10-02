@@ -12,8 +12,8 @@ android {
         applicationId = "com.cursor.mobile.android"
         minSdk = 26
         targetSdk = 34
-        versionCode = 22
-        versionName = "1.22.0"
+        versionCode = 23
+        versionName = "1.23.0"
 
         vectorDrawables {
             useSupportLibrary = true
@@ -66,6 +66,7 @@ dependencies {
     implementation("androidx.security:security-crypto:1.1.0")
     implementation("com.caverock:androidsvg-aar:1.4")
 
+    testImplementation("junit:junit:4.13.2")
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }

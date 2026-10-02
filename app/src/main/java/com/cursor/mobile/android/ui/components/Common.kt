@@ -217,68 +217,18 @@ private fun visibleLinkText(text: String): String =
         match.groupValues[1].trim().ifBlank { "链接" }
     }
 
-private fun displayBlocks(raw: String): List<RenderBlock> {
-    val text = normalizeBreaks(raw)
-    val pattern = Regex("(?is)(<image_files\\b[^>]*>.*?</image_files>)|(<svg\\b[^>]*>.*?</svg>)|(<img\\b[^>]*>)|(!\\[([^\\]]*)]\\(([^)]+)\\))|(```(?:svg|xml)\\s*\\n[\\s\\S]*?```)")
-    val blocks = mutableListOf<RenderBlock>()
-    var index = 0
-    pattern.findAll(text).forEach { match ->
-        val before = text.substring(index, match.range.first)
-        val cleaned = cleanMessageForDisplay(before)
-        if (cleaned.isNotBlank()) blocks += RenderBlock.Words(cleaned)
-        picturesIn(match.value).forEach { blocks += RenderBlock.Picture(it) }
-        index = match.range.last + 1
-    }
-    val tail = cleanMessageForDisplay(text.substring(index))
-    if (tail.isNotBlank()) blocks += RenderBlock.Words(tail)
-    return blocks
-}
-
-private fun picturesIn(token: String): List<ChatPic> {
-    val trimmed = token.trim()
-    if (trimmed.startsWith("<image_files", true)) {
-        val found = mutableListOf<ChatPic>()
-        Regex("(?is)<svg\\b[^>]*>.*?</svg>").findAll(trimmed).forEach { found += ChatPic.Svg(it.value) }
-        Regex("!\\[([^\\]]*)]\\(([^)]+)\\)").findAll(trimmed).forEach { found += picFromUrl(it.groupValues[2]) }
-        Regex("https?://[^\\s<>\"']+").findAll(trimmed).forEach { found += picFromUrl(it.value) }
-        Regex("data:image/[^\\s<>\"']+").findAll(trimmed).forEach { found += picFromUrl(it.value) }
-        return found.distinctBy { it.toString() }
-    }
-    if (trimmed.startsWith("<svg", true)) return listOf(ChatPic.Svg(trimmed))
-    if (trimmed.startsWith("<img", true)) {
-        val src = Regex("(?i)\\bsrc\\s*=\\s*['\"]([^'\"]+)['\"]").find(trimmed)?.groupValues?.get(1).orEmpty()
-        return if (src.isBlank()) emptyList() else listOf(picFromUrl(src))
-    }
-    if (trimmed.startsWith("```")) {
-        val inner = trimmed.removePrefix("```").substringAfter('\n').removeSuffix("```").trim()
-        return when {
-            inner.contains("<svg", true) -> listOf(ChatPic.Svg(inner.substring(inner.indexOf("<svg", ignoreCase = true))))
-            inner.startsWith("http") || inner.startsWith("data:image") -> listOf(picFromUrl(inner.lineSequence().first().trim()))
-            else -> emptyList()
+private fun displayBlocks(raw: String): List<RenderBlock> =
+    splitMessageBlocks(raw, ::cleanMessageForDisplay).map { piece ->
+        when (piece) {
+            is MessagePiece.Words -> RenderBlock.Words(piece.text)
+            is MessagePiece.Picture -> RenderBlock.Picture(piece.pic.toChatPic())
         }
     }
-    val md = Regex("!\\[([^\\]]*)]\\(([^)]+)\\)").find(trimmed)
-    if (md != null) return listOf(picFromUrl(md.groupValues[2]))
-    return emptyList()
-}
 
-private fun picFromUrl(raw: String): ChatPic {
-    val url = raw.trim().trim('"').substringBefore(" ").substringBefore("\"")
-    if (url.startsWith("data:image/svg", true)) {
-        val payload = url.substringAfter(",", "")
-        val markup = if (url.contains(";base64", true)) {
-            String(android.util.Base64.decode(payload, android.util.Base64.DEFAULT), Charsets.UTF_8)
-        } else {
-            java.net.URLDecoder.decode(payload, Charsets.UTF_8.name())
-        }
-        return ChatPic.Svg(markup)
-    }
-    if (url.startsWith("data:image/", true)) {
-        val mime = url.substringAfter("data:").substringBefore(";")
-        return ChatPic.Bytes(url.substringAfter(",", ""), mime.ifBlank { "image/png" })
-    }
-    if (url.endsWith(".svg", true) || url.contains(".svg?", true)) return ChatPic.Remote(url)
-    return ChatPic.Remote(url)
+private fun PiecePic.toChatPic(): ChatPic = when (this) {
+    is PiecePic.Remote -> ChatPic.Remote(url)
+    is PiecePic.Svg -> ChatPic.Svg(markup)
+    is PiecePic.Bytes -> ChatPic.Bytes(base64, mime)
 }
 
 @Composable
@@ -297,11 +247,12 @@ fun MessageBody(
             when (block) {
                 is RenderBlock.Picture -> ChatPicture(block.pic)
                 is RenderBlock.Words -> {
-                    val parts = remember(block.text) { splitMessage(block.text) }
+                    val parts = remember(block.text) { splitMessage(block.text.take(12_000)) }
+                    val allowJustify = justify && block.text.length <= 4_000
                     parts.forEach { part ->
                         when {
-                            part.code -> CodeScroll(part.text, color)
-                            justify -> MarkdownBlock(part.text, color, style, textAlign, contentWidthPx)
+                            part.code -> CodeScroll(part.text.take(8_000), color)
+                            allowJustify -> MarkdownBlock(part.text, color, style, textAlign, contentWidthPx)
                             else -> PlainScroll(visibleLinkText(part.text), color, style, textAlign)
                         }
                     }
@@ -780,20 +731,22 @@ fun ChatBubble(msg: ChatMessage, deferFrames: Int = 1, contentWidthPx: Int = 0) 
                 )
             }
         msg.files.forEach { file ->
-            val image = file.mime.startsWith("image/") && !file.data.isNullOrBlank()
-            if (image) {
-                val pic = if (file.mime.contains("svg")) {
-                    val markup = try {
-                        String(android.util.Base64.decode(file.data, android.util.Base64.DEFAULT), Charsets.UTF_8)
-                    } catch (_: Exception) {
-                        ""
+            val name = file.name.lowercase()
+            val visual = file.mime.startsWith("image/") || name.endsWith(".svg") || name.endsWith(".md") ||
+                name.endsWith(".markdown") || file.mime.contains("svg") || file.mime.contains("markdown")
+            val payload = file.data
+            if (visual && !payload.isNullOrBlank()) {
+                val svgText = if (name.endsWith(".svg") || file.mime.contains("svg")) decodeMaybeText(payload) else ""
+                when {
+                    svgText.contains("<svg", true) -> ChatPicture(ChatPic.Svg(svgText))
+                    name.endsWith(".md") || name.endsWith(".markdown") || file.mime.contains("markdown") -> {
+                        MessageBody(decodeMaybeText(payload), color, chatBody, partSpacing = 2.dp, textAlign = align, justify = false, contentWidthPx = contentWidthPx)
                     }
-                    if (markup.contains("<svg", true)) ChatPic.Svg(markup) else ChatPic.Bytes(file.data.orEmpty(), file.mime)
-                } else {
-                    ChatPic.Bytes(file.data.orEmpty(), file.mime)
+                    else -> ChatPicture(ChatPic.Bytes(payload, file.mime.ifBlank { "image/png" }))
                 }
-                ChatPicture(pic)
-            } else if (!file.mime.startsWith("image/")) {
+            } else if (visual) {
+                ChatPicture(ChatPic.Remote("preview://${file.name}"))
+            } else {
                 Text(
                     "${file.name} · ${file.mime}",
                     color = color,
@@ -816,7 +769,8 @@ fun ChatBubble(msg: ChatMessage, deferFrames: Int = 1, contentWidthPx: Int = 0) 
         }
         if (msg.attachment != null) MiniCodeCard(msg.attachment)
         }
-        if (selecting) SelectionContainer { body() } else body()
+        val canSelect = selecting && msg.text.length <= 8_000 && blocks.none { it is RenderBlock.Picture }
+        if (canSelect) SelectionContainer { body() } else body()
     }
 }
 
@@ -826,7 +780,17 @@ private fun ChatPicture(pic: ChatPic) {
     var failed by remember(pic) { mutableStateOf(false) }
     var preview by remember(pic) { mutableStateOf(false) }
     LaunchedEffect(pic) {
-        val decoded = withContext(Dispatchers.IO) { decodeChatPic(pic) }
+        val decoded = try {
+            withContext(Dispatchers.IO) {
+                try {
+                    decodeChatPic(pic)
+                } catch (_: Throwable) {
+                    null
+                }
+            }
+        } catch (_: Throwable) {
+            null
+        }
         if (decoded != null) bitmap = decoded else failed = true
     }
     val image = bitmap
@@ -852,7 +816,7 @@ private fun ChatPicture(pic: ChatPic) {
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     TextButton(onClick = { preview = false }) { Text("关闭") }
-                    val remote = (pic as? ChatPic.Remote)?.url
+                    val remote = (pic as? ChatPic.Remote)?.url?.takeIf { it.startsWith("http://") || it.startsWith("https://") }
                     if (!remote.isNullOrBlank()) {
                         val context = LocalContext.current
                         TextButton(onClick = {
@@ -876,8 +840,15 @@ private fun ChatPicture(pic: ChatPic) {
     }
 }
 
+private fun decodeMaybeText(data: String): String = try {
+    val bytes = android.util.Base64.decode(data, android.util.Base64.DEFAULT)
+    String(bytes, Charsets.UTF_8)
+} catch (_: Throwable) {
+    data
+}
+
 private fun previewPayload(pic: ChatPic): Pair<String, String> = when (pic) {
-    is ChatPic.Svg -> pic.markup to "image/svg+xml"
+    is ChatPic.Svg -> pic.markup.take(300_000).ifBlank { "<svg xmlns=\"http://www.w3.org/2000/svg\"><text y=\"20\">无法读取这张图</text></svg>" } to "image/svg+xml"
     is ChatPic.Remote -> """<html><body style="margin:0"><img src="${pic.url}" style="max-width:100%;height:auto"></body></html>""" to "text/html"
     is ChatPic.Bytes -> """<html><body style="margin:0"><img src="data:${pic.mime};base64,${pic.base64}" style="max-width:100%;height:auto"></body></html>""" to "text/html"
 }
@@ -899,19 +870,31 @@ private fun decodeChatPic(pic: ChatPic): android.graphics.Bitmap? = when (pic) {
 
 private fun decodeBase64Image(data: String): android.graphics.Bitmap? = try {
     val bytes = android.util.Base64.decode(data, android.util.Base64.DEFAULT)
-    android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-} catch (_: Exception) {
+    decodeBounded(bytes)
+} catch (_: Throwable) {
     null
 }
 
+private fun decodeBounded(bytes: ByteArray): android.graphics.Bitmap? {
+    if (bytes.isEmpty() || bytes.size > 8_000_000) return null
+    val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+    var sample = 1
+    while (bounds.outWidth / sample > 1280 || bounds.outHeight / sample > 1280) sample *= 2
+    val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+    return android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+}
+
 private fun decodeRemote(url: String): android.graphics.Bitmap? {
-    if (url.endsWith(".svg", true) || url.contains(".svg?", true)) {
-        return fetchBytes(url)?.let { bytes -> renderSvg(String(bytes, Charsets.UTF_8)) }
-    }
+    if (!url.startsWith("http://") && !url.startsWith("https://")) return null
     val fetched = fetchBytes(url) ?: return null
     val head = String(fetched, 0, minOf(180, fetched.size), Charsets.UTF_8).trimStart()
-    return if (head.startsWith("<svg", true)) renderSvg(String(fetched, Charsets.UTF_8))
-    else android.graphics.BitmapFactory.decodeByteArray(fetched, 0, fetched.size)
+    return if (url.endsWith(".svg", true) || url.contains(".svg?", true) || head.startsWith("<svg", true) || head.startsWith("<?xml", true)) {
+        renderSvg(String(fetched, Charsets.UTF_8))
+    } else {
+        decodeBounded(fetched)
+    }
 }
 
 private fun fetchBytes(url: String): ByteArray? {
@@ -930,17 +913,20 @@ private fun fetchBytes(url: String): ByteArray? {
     }
 }
 
-private fun renderSvg(markup: String): android.graphics.Bitmap? = try {
-    val svg = com.caverock.androidsvg.SVG.getFromString(markup)
-    if (svg.documentWidth <= 0f) svg.setDocumentWidth(1080f)
-    if (svg.documentHeight <= 0f) svg.setDocumentHeight(720f)
-    val width = svg.documentWidth.toInt().coerceIn(64, 1080)
-    val height = svg.documentHeight.toInt().coerceIn(64, 1600)
-    val bitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
-    svg.renderToCanvas(android.graphics.Canvas(bitmap))
-    bitmap
-} catch (_: Exception) {
-    null
+private fun renderSvg(markup: String): android.graphics.Bitmap? {
+    if (markup.isBlank()) return null
+    return try {
+        val svg = com.caverock.androidsvg.SVG.getFromString(markup.take(500_000))
+        svg.setDocumentWidth(960f)
+        val natural = svg.documentAspectRatio
+        val height = if (natural > 0f) (960f / natural).toInt().coerceIn(64, 960) else 540
+        svg.setDocumentHeight(height.toFloat())
+        val bitmap = android.graphics.Bitmap.createBitmap(960, height, android.graphics.Bitmap.Config.ARGB_8888)
+        svg.renderToCanvas(android.graphics.Canvas(bitmap))
+        bitmap
+    } catch (_: Throwable) {
+        null
+    }
 }
 
 @Composable
