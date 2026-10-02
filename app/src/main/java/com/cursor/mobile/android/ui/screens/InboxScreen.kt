@@ -21,7 +21,6 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
@@ -35,10 +34,8 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -53,7 +50,6 @@ import com.cursor.mobile.android.data.AgentSession
 import com.cursor.mobile.android.data.AgentStore
 import com.cursor.mobile.android.data.CursorApi
 import com.cursor.mobile.android.data.MachineKind
-import com.cursor.mobile.android.data.WorkScope
 import com.cursor.mobile.android.ui.components.EmptyState
 import com.cursor.mobile.android.ui.components.Kicker
 import com.cursor.mobile.android.ui.components.MessageBody
@@ -75,8 +71,6 @@ fun InboxScreen(
     val sessions = AgentStore.sessions
     val loading = AgentStore.loading
     val error = AgentStore.error
-    var showSyncDetail by remember { mutableStateOf(false) }
-    var openedProject by remember { mutableStateOf<String?>(null) }
     fun reload() {
         scope.launch {
             try {
@@ -109,18 +103,8 @@ fun InboxScreen(
         },
         containerColor = MaterialTheme.colorScheme.background
     ) { padding ->
-        val scope = AgentStore.scope
-        val projectSessions = sessions.filter { it.scope == WorkScope.PROJECT }
-        val sessionGroups = projectSessions.groupBy { it.groupLabel.ifBlank { "未命名项目" } }
-        val projectLabels = (AgentStore.projects.map { it.name } + sessionGroups.keys).filter { it.isNotBlank() }.distinct()
-        val projectGroups = projectLabels.associateWith { label -> sessionGroups[label].orEmpty() }
-        val repoList = AgentStore.repos
-        val pending = sessions.count { !it.classified }
+        val grouped = sessions.sortedByDescending { it.updatedAtIso }.groupBy { repoShort(it) }
         Column(Modifier.fillMaxSize().padding(padding)) {
-        ScopeSwitch(scope, projectGroups.size, repoList.size) {
-            openedProject = null
-            AgentStore.choose(it)
-        }
         LazyColumn(
             modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -141,8 +125,7 @@ fun InboxScreen(
                     Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
                         Kicker("Cloud Agents")
                         Text(
-                            if (scope == WorkScope.PROJECT) "Projects · ${projectGroups.size} 个项目"
-                            else "Repositories · ${repoList.size} 个仓库",
+                            "会话 · ${sessions.size}",
                             style = MaterialTheme.typography.bodySmall,
                             color = CursorPalette.LightMuted
                         )
@@ -156,24 +139,7 @@ fun InboxScreen(
                     }
                 }
             }
-            val summary = AgentStore.syncSummary
-            val report = AgentStore.syncReport
-            if (summary.isNotBlank() && scope == WorkScope.PROJECT && projectGroups.isEmpty()) {
-                item { Text(summary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-            }
-            if (report.isNotBlank()) {
-                item {
-                    Column {
-                        TextButton(onClick = { showSyncDetail = !showSyncDetail }) {
-                            Text(if (showSyncDetail) "收起同步详情" else "查看同步详情")
-                        }
-                        if (showSyncDetail) {
-                            Text(report, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-                }
-            }
-            if (!error.isNullOrBlank() && error != summary) {
+            if (!error.isNullOrBlank()) {
                 item {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
@@ -181,68 +147,15 @@ fun InboxScreen(
                     }
                 }
             }
-            if (!loading && scope == WorkScope.PROJECT && projectGroups.isEmpty() && pending > 0) {
-                item { EmptyState("正在补齐项目", "列表里的 projectMetadata 是空的，正在拉会话详情。") }
+            if (!loading && sessions.isEmpty() && error.isNullOrBlank()) {
+                item { EmptyState("还没有会话", "同步完成后会按仓库列在这里。") }
             }
-            if (!loading && scope == WorkScope.PROJECT && projectGroups.isEmpty() && pending == 0 && error.isNullOrBlank()) {
-                item { EmptyState("还没有分出项目", "每个探测接口的状态和条数在同步详情里。对不上的会话不会放进 Projects。") }
-            }
-            if (!loading && scope == WorkScope.REPOSITORY && repoList.isEmpty() && error.isNullOrBlank()) {
-                item { EmptyState("还没有仓库", "仓库来自会话的 repoUrl，每个地址只列一次。") }
-            }
-            if (scope == WorkScope.PROJECT && openedProject == null) {
-                items(projectGroups.entries.toList(), key = { "project-${it.key}" }) { (label, grouped) ->
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(20.dp))
-                            .background(MaterialTheme.colorScheme.surface)
-                            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(20.dp))
-                            .clickable { openedProject = label }
-                            .padding(horizontal = 14.dp, vertical = 12.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Text(label, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyLarge)
-                        Text("${grouped.size} 条会话", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
+            for ((repo, rows) in grouped) {
+                item(key = "repo-$repo") {
+                    Text(repo, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleSmall)
                 }
-            } else if (scope == WorkScope.PROJECT) {
-                val grouped = projectGroups[openedProject].orEmpty()
-                item(key = "back-$openedProject") {
-                    Column {
-                        TextButton(onClick = { openedProject = null }) { Text("返回项目") }
-                        Text(openedProject.orEmpty(), fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleMedium)
-                    }
-                }
-                if (!loading && grouped.isEmpty()) {
-                    item { Text("这个项目下还没有对上的会话", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                }
-                items(grouped, key = { it.id.ifBlank { openedProject + it.title } }) { s ->
-                    SessionCard(s) { onOpenChat(s.id) }
-                }
-            } else {
-                items(repoList, key = { it.url.ifBlank { it.name } }) { repo ->
-                    val session = sessions
-                        .filter { it.repoUrl.isNotBlank() && (it.repoUrl == repo.url || it.repoUrl.trimEnd('/') == repo.url.trimEnd('/')) }
-                        .maxByOrNull { it.updatedAtIso }
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(20.dp))
-                            .background(MaterialTheme.colorScheme.surface)
-                            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(20.dp))
-                            .clickable { if (session != null) onOpenChat(session.id) }
-                            .padding(horizontal = 14.dp, vertical = 12.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Text(repo.name, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyLarge)
-                        if (repo.url.isNotBlank()) {
-                            Text(repo.url, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        if (session != null) {
-                            Text(session.title, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
+                items(rows, key = { it.id.ifBlank { repo + it.title } }) { s ->
+                    SessionCard(s, repo) { onOpenChat(s.id) }
                 }
             }
             item { Box(Modifier.size(72.dp)) }
@@ -251,38 +164,15 @@ fun InboxScreen(
     }
 }
 
-@Composable
-private fun ScopeSwitch(selected: WorkScope, projects: Int, repositories: Int, onSelect: (WorkScope) -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        ScopeChip("Projects", projects, selected == WorkScope.PROJECT, Modifier.weight(1f)) { onSelect(WorkScope.PROJECT) }
-        ScopeChip("Repositories", repositories, selected == WorkScope.REPOSITORY, Modifier.weight(1f)) { onSelect(WorkScope.REPOSITORY) }
-    }
+private fun repoShort(s: AgentSession): String {
+    val fromUrl = com.cursor.mobile.android.data.shortRepo(s.repoUrl)
+    if (fromUrl.isNotBlank() && !fromUrl.startsWith("http")) return fromUrl
+    if (s.repo.isNotBlank() && !s.repo.startsWith("http")) return s.repo
+    return "未归类"
 }
 
 @Composable
-private fun ScopeChip(label: String, count: Int, active: Boolean, modifier: Modifier, onClick: () -> Unit) {
-    Column(
-        modifier = modifier
-            .clip(RoundedCornerShape(16.dp))
-            .background(if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface)
-            .border(1.dp, if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 10.dp)
-    ) {
-        Text(label, fontWeight = FontWeight.SemiBold, color = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface)
-        Text(
-            "$count",
-            style = MaterialTheme.typography.labelSmall,
-            color = if (active) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    }
-}
-
-@Composable
-private fun SessionCard(s: AgentSession, onClick: () -> Unit) {
+private fun SessionCard(s: AgentSession, repo: String, onClick: () -> Unit) {
     val press = remember { MutableInteractionSource() }
     val isPressed by press.collectIsPressedAsState()
     Column(
@@ -306,18 +196,10 @@ private fun SessionCard(s: AgentSession, onClick: () -> Unit) {
             }
             StatusChip(s.status)
         }
-        if (s.summary.isNotBlank() && s.summary != s.title) {
-            MessageBody(s.summary, MaterialTheme.colorScheme.onSurfaceVariant, MaterialTheme.typography.bodySmall)
+        val summary = s.summary.trim()
+        if (summary.isNotBlank() && summary != s.title && !summary.startsWith("http")) {
+            MessageBody(summary, MaterialTheme.colorScheme.onSurfaceVariant, MaterialTheme.typography.bodySmall)
         }
-        Text(
-            when (s.scope) {
-                WorkScope.PROJECT -> s.groupLabel.ifBlank { "Project" }
-                WorkScope.REPOSITORY -> listOf(s.repo.ifBlank { s.groupLabel }, s.branch.ifBlank { "分支同步中" }).joinToString(" · ")
-                null -> "正在识别分类"
-            },
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -339,6 +221,12 @@ private fun SessionCard(s: AgentSession, onClick: () -> Unit) {
                 }
             }
         }
+        Text(
+            repo,
+            fontSize = 11.sp,
+            lineHeight = 14.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 

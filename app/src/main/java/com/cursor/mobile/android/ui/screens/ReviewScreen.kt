@@ -81,10 +81,9 @@ fun ReviewScreen(sessionId: String, onBack: () -> Unit) {
                 ) {
                     Kicker("Pull request")
                     Text(
-                        listOf(
-                            if (session?.scope == com.cursor.mobile.android.data.WorkScope.PROJECT) "Projects" else "Repositories",
-                            session?.groupLabel?.ifBlank { null } ?: session?.repo?.ifBlank { null } ?: "未归类"
-                        ).joinToString(" · "),
+                        session?.repoUrl?.let { com.cursor.mobile.android.data.shortRepo(it) }?.takeIf { it.isNotBlank() && !it.startsWith("http") }
+                            ?: session?.repo?.takeIf { it.isNotBlank() && !it.startsWith("http") }
+                            ?: "未归类",
                         style = MaterialTheme.typography.titleMedium
                     )
                     if (!session?.prUrl.isNullOrBlank()) {

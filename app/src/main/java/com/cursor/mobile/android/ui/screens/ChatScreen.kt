@@ -89,7 +89,7 @@ private fun prepareAttachment(context: android.content.Context, item: ComposerAt
     if (bytes == null || bytes.isEmpty()) return MessageFile(item.name, mime, "文件是空的，没有提交") to null
     if (bytes.size > 15 * 1024 * 1024) return MessageFile(item.name, mime, "图片超过 15MB，没有提交") to null
     val encoded = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
-    return MessageFile(item.name, mime) to PromptImage(encoded, mime)
+    return MessageFile(item.name, mime, data = encoded) to PromptImage(encoded, mime)
 }
 
 private fun attachmentName(context: android.content.Context, uri: Uri): String {
@@ -188,10 +188,11 @@ fun ChatScreen(
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background)
             )
-            val place = session?.groupLabel?.ifBlank { null } ?: session?.repo?.ifBlank { null } ?: "未归类"
-            val kind = if (session?.scope == com.cursor.mobile.android.data.WorkScope.PROJECT) "Projects" else "Repositories"
+            val place = session?.repoUrl?.let { com.cursor.mobile.android.data.shortRepo(it) }?.takeIf { it.isNotBlank() && !it.startsWith("http") }
+                ?: session?.repo?.takeIf { it.isNotBlank() && !it.startsWith("http") }
+                ?: "未归类"
             Text(
-                "$kind · $place",
+                place,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 fontSize = 12.sp,

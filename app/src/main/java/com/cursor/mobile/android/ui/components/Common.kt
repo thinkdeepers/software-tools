@@ -1,6 +1,7 @@
 package com.cursor.mobile.android.ui.components
 
 import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -12,6 +13,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -22,6 +24,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -34,6 +37,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -48,6 +55,8 @@ import com.cursor.mobile.android.data.Sender
 import com.cursor.mobile.android.ui.theme.CodeFont
 import com.cursor.mobile.android.ui.theme.CursorPalette
 import com.cursor.mobile.android.ui.theme.accentGradient
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 fun statusColor(status: AgentStatus): Color = when (status) {
     AgentStatus.WORKING -> CursorPalette.NeonCyan
@@ -146,11 +155,6 @@ internal fun cleanMessageForDisplay(raw: String): String {
         text = Regex("(?is)</$tag>").replace(text, "")
     }
     text = Regex("(?is)</?[a-zA-Z][a-zA-Z0-9_:-]*(?:\\s[^>]*)?>").replace(text, "")
-    text = Regex("\\[([^\\]]+)]\\((https?://[^)\\s]+)\\)").replace(text) { match ->
-        val label = match.groupValues[1].trim()
-        val url = match.groupValues[2].trim()
-        if (label.isBlank() || label == url) url else "$label $url"
-    }
     text = Regex("`(https?://[^`]+)`").replace(text) { it.groupValues[1] }
     text = text.lineSequence()
         .map { it.trim() }
@@ -197,6 +201,86 @@ private fun looksLikeCode(text: String): Boolean {
     return trimmed.startsWith("diff ") || trimmed.startsWith("@@") || trimmed.contains("\n@@")
 }
 
+private sealed class RenderBlock {
+    data class Words(val text: String) : RenderBlock()
+    data class Picture(val pic: ChatPic) : RenderBlock()
+}
+
+private sealed class ChatPic {
+    data class Remote(val url: String) : ChatPic()
+    data class Svg(val markup: String) : ChatPic()
+    data class Bytes(val base64: String, val mime: String) : ChatPic()
+}
+
+private fun visibleLinkText(text: String): String =
+    text.replace(Regex("\\[([^\\]]+)]\\((https?://[^)\\s]+)\\)")) { match ->
+        match.groupValues[1].trim().ifBlank { "链接" }
+    }
+
+private fun displayBlocks(raw: String): List<RenderBlock> {
+    val text = normalizeBreaks(raw)
+    val pattern = Regex("(?is)(<image_files\\b[^>]*>.*?</image_files>)|(<svg\\b[^>]*>.*?</svg>)|(<img\\b[^>]*>)|(!\\[([^\\]]*)]\\(([^)]+)\\))|(```(?:svg|xml)\\s*\\n[\\s\\S]*?```)")
+    val blocks = mutableListOf<RenderBlock>()
+    var index = 0
+    pattern.findAll(text).forEach { match ->
+        val before = text.substring(index, match.range.first)
+        val cleaned = cleanMessageForDisplay(before)
+        if (cleaned.isNotBlank()) blocks += RenderBlock.Words(cleaned)
+        picturesIn(match.value).forEach { blocks += RenderBlock.Picture(it) }
+        index = match.range.last + 1
+    }
+    val tail = cleanMessageForDisplay(text.substring(index))
+    if (tail.isNotBlank()) blocks += RenderBlock.Words(tail)
+    return blocks
+}
+
+private fun picturesIn(token: String): List<ChatPic> {
+    val trimmed = token.trim()
+    if (trimmed.startsWith("<image_files", true)) {
+        val found = mutableListOf<ChatPic>()
+        Regex("(?is)<svg\\b[^>]*>.*?</svg>").findAll(trimmed).forEach { found += ChatPic.Svg(it.value) }
+        Regex("!\\[([^\\]]*)]\\(([^)]+)\\)").findAll(trimmed).forEach { found += picFromUrl(it.groupValues[2]) }
+        Regex("https?://[^\\s<>\"']+").findAll(trimmed).forEach { found += picFromUrl(it.value) }
+        Regex("data:image/[^\\s<>\"']+").findAll(trimmed).forEach { found += picFromUrl(it.value) }
+        return found.distinctBy { it.toString() }
+    }
+    if (trimmed.startsWith("<svg", true)) return listOf(ChatPic.Svg(trimmed))
+    if (trimmed.startsWith("<img", true)) {
+        val src = Regex("(?i)\\bsrc\\s*=\\s*['\"]([^'\"]+)['\"]").find(trimmed)?.groupValues?.get(1).orEmpty()
+        return if (src.isBlank()) emptyList() else listOf(picFromUrl(src))
+    }
+    if (trimmed.startsWith("```")) {
+        val inner = trimmed.removePrefix("```").substringAfter('\n').removeSuffix("```").trim()
+        return when {
+            inner.contains("<svg", true) -> listOf(ChatPic.Svg(inner.substring(inner.indexOf("<svg", ignoreCase = true))))
+            inner.startsWith("http") || inner.startsWith("data:image") -> listOf(picFromUrl(inner.lineSequence().first().trim()))
+            else -> emptyList()
+        }
+    }
+    val md = Regex("!\\[([^\\]]*)]\\(([^)]+)\\)").find(trimmed)
+    if (md != null) return listOf(picFromUrl(md.groupValues[2]))
+    return emptyList()
+}
+
+private fun picFromUrl(raw: String): ChatPic {
+    val url = raw.trim().trim('"').substringBefore(" ").substringBefore("\"")
+    if (url.startsWith("data:image/svg", true)) {
+        val payload = url.substringAfter(",", "")
+        val markup = if (url.contains(";base64", true)) {
+            String(android.util.Base64.decode(payload, android.util.Base64.DEFAULT), Charsets.UTF_8)
+        } else {
+            java.net.URLDecoder.decode(payload, Charsets.UTF_8.name())
+        }
+        return ChatPic.Svg(markup)
+    }
+    if (url.startsWith("data:image/", true)) {
+        val mime = url.substringAfter("data:").substringBefore(";")
+        return ChatPic.Bytes(url.substringAfter(",", ""), mime.ifBlank { "image/png" })
+    }
+    if (url.endsWith(".svg", true) || url.contains(".svg?", true)) return ChatPic.Remote(url)
+    return ChatPic.Remote(url)
+}
+
 @Composable
 fun MessageBody(
     text: String,
@@ -207,13 +291,21 @@ fun MessageBody(
     justify: Boolean = false,
     contentWidthPx: Int = 0
 ) {
-    val parts = remember(text) { splitMessage(text) }
+    val blocks = remember(text) { displayBlocks(text) }
     Column(verticalArrangement = Arrangement.spacedBy(partSpacing)) {
-        parts.forEach { part ->
-            when {
-                part.code -> CodeScroll(part.text, color)
-                justify -> MarkdownBlock(part.text, color, style, textAlign, contentWidthPx)
-                else -> PlainScroll(part.text, color, style, textAlign)
+        blocks.forEach { block ->
+            when (block) {
+                is RenderBlock.Picture -> ChatPicture(block.pic)
+                is RenderBlock.Words -> {
+                    val parts = remember(block.text) { splitMessage(block.text) }
+                    parts.forEach { part ->
+                        when {
+                            part.code -> CodeScroll(part.text, color)
+                            justify -> MarkdownBlock(part.text, color, style, textAlign, contentWidthPx)
+                            else -> PlainScroll(visibleLinkText(part.text), color, style, textAlign)
+                        }
+                    }
+                }
             }
         }
     }
@@ -297,7 +389,8 @@ private data class Piece(
     val text: String,
     val glue: Boolean,
     val bold: Boolean = false,
-    val mono: Boolean = false
+    val mono: Boolean = false,
+    val link: String? = null
 )
 
 private fun isCjk(c: Char): Boolean {
@@ -322,13 +415,13 @@ private fun tokenize(text: String): List<Piece> {
             val scheme = url.indexOf("://").let { if (it < 0) 0 else it + 3 }
             val path = url.indexOf('/', scheme)
             if (path < 0) {
-                out += Piece(url, glue = true)
+                out += Piece(url, glue = true, link = url)
             } else {
-                out += Piece(url.substring(0, path), glue = true)
+                out += Piece(url.substring(0, path), glue = true, link = url)
                 var cursor = path
                 while (cursor < url.length) {
                     val next = url.indexOf('/', cursor + 1).let { if (it < 0) url.length else it }
-                    out += Piece(url.substring(cursor, next), glue = true)
+                    out += Piece(url.substring(cursor, next), glue = true, link = url)
                     cursor = next
                 }
             }
@@ -366,6 +459,20 @@ private fun tokenize(text: String): List<Piece> {
 }
 
 private fun styledPieces(text: String): List<Piece> {
+    val link = Regex("\\[([^\\]]+)]\\((https?://[^)\\s]+)\\)")
+    val out = mutableListOf<Piece>()
+    var index = 0
+    link.findAll(text).forEach { match ->
+        if (match.range.first > index) out += inlinePieces(text.substring(index, match.range.first), null)
+        val label = match.groupValues[1].trim().ifBlank { "链接" }
+        out += inlinePieces(label, match.groupValues[2].trim())
+        index = match.range.last + 1
+    }
+    if (index < text.length) out += inlinePieces(text.substring(index), null)
+    return out
+}
+
+private fun inlinePieces(text: String, link: String?): List<Piece> {
     val pattern = Regex("\\*\\*(.+?)\\*\\*|`([^`]+)`")
     val spans = mutableListOf<Triple<String, Boolean, Boolean>>()
     var index = 0
@@ -378,7 +485,7 @@ private fun styledPieces(text: String): List<Piece> {
     }
     if (index < text.length) spans += Triple(text.substring(index), false, false)
     return spans.flatMap { (value, bold, mono) ->
-        tokenize(value).map { it.copy(bold = bold || it.bold, mono = mono || it.mono) }
+        tokenize(value).map { it.copy(bold = bold || it.bold, mono = mono || it.mono, link = link ?: it.link) }
     }
 }
 
@@ -483,19 +590,36 @@ private fun PieceLine(
     val budget = (maxWidth - line.contentWidth - 2).coerceAtLeast(0)
     val extra = if (gaps > 0) budget.toFloat() / gaps else 0f
     val extraSp = with(density) { extra.toSp() }
+    val linkColor = MaterialTheme.colorScheme.primary
     val annotated = androidx.compose.ui.text.AnnotatedString.Builder().apply {
         line.pieces.forEachIndexed { index, piece ->
             val expand = justify && index != line.pieces.lastIndex && expands(line.pieces, index)
+            val pieceColor = if (piece.link != null) linkColor else color
+            if (piece.link != null) {
+                pushLink(
+                    androidx.compose.ui.text.LinkAnnotation.Url(
+                        piece.link,
+                        androidx.compose.ui.text.TextLinkStyles(
+                            androidx.compose.ui.text.SpanStyle(
+                                color = linkColor,
+                                textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline
+                            )
+                        )
+                    )
+                )
+            }
             pushStyle(
                 androidx.compose.ui.text.SpanStyle(
-                    color = color,
+                    color = pieceColor,
                     fontWeight = if (piece.bold) FontWeight.Bold else style.fontWeight,
                     fontFamily = if (piece.mono) CodeFont else style.fontFamily,
-                    letterSpacing = if (expand && piece.text.length == 1) extraSp else 0.sp
+                    letterSpacing = if (expand && piece.text.length == 1) extraSp else 0.sp,
+                    textDecoration = if (piece.link != null) androidx.compose.ui.text.style.TextDecoration.Underline else null
                 )
             )
             append(piece.text)
             pop()
+            if (piece.link != null) pop()
         }
     }.toAnnotatedString()
     Text(
@@ -604,7 +728,10 @@ private val chatBody = TextStyle(fontSize = 13.sp, lineHeight = 17.sp)
 
 @Composable
 fun ChatBubble(msg: ChatMessage, deferFrames: Int = 1, contentWidthPx: Int = 0) {
-    val cleaned = remember(msg.text) { cleanMessageForDisplay(msg.text) }
+    val blocks = remember(msg.text) { displayBlocks(msg.text) }
+    val hasBody = blocks.any { block ->
+        block is RenderBlock.Picture || (block is RenderBlock.Words && block.text.isNotBlank())
+    }
     var ready by remember(msg.id) { mutableStateOf(false) }
     var selecting by remember(msg.id) { mutableStateOf(false) }
     LaunchedEffect(msg.id, deferFrames) {
@@ -612,7 +739,7 @@ fun ChatBubble(msg: ChatMessage, deferFrames: Int = 1, contentWidthPx: Int = 0) 
         ready = true
     }
     val align = androidx.compose.ui.text.style.TextAlign.Start
-    if (cleaned.isBlank() && msg.files.isEmpty() && msg.attachment == null && !msg.isStreaming) return
+    if (!hasBody && msg.files.isEmpty() && msg.attachment == null && !msg.isStreaming) return
     val background = when (msg.sender) {
         Sender.USER -> MaterialTheme.colorScheme.primaryContainer
         Sender.SYSTEM -> MaterialTheme.colorScheme.surfaceContainer
@@ -641,9 +768,9 @@ fun ChatBubble(msg: ChatMessage, deferFrames: Int = 1, contentWidthPx: Int = 0) 
             .padding(horizontal = ChatCardPadding, vertical = 6.dp)
     ) {
         val body = @Composable {
-            if (cleaned.isNotBlank()) {
+            if (hasBody) {
                 MessageBody(
-                    cleaned,
+                    msg.text,
                     color,
                     chatBody,
                     partSpacing = 2.dp,
@@ -653,13 +780,28 @@ fun ChatBubble(msg: ChatMessage, deferFrames: Int = 1, contentWidthPx: Int = 0) 
                 )
             }
         msg.files.forEach { file ->
-            Text(
-                "${file.name} · ${file.mime}",
-                color = color,
-                fontSize = 12.sp,
-                lineHeight = 16.sp,
-                modifier = Modifier.padding(top = 4.dp)
-            )
+            val image = file.mime.startsWith("image/") && !file.data.isNullOrBlank()
+            if (image) {
+                val pic = if (file.mime.contains("svg")) {
+                    val markup = try {
+                        String(android.util.Base64.decode(file.data, android.util.Base64.DEFAULT), Charsets.UTF_8)
+                    } catch (_: Exception) {
+                        ""
+                    }
+                    if (markup.contains("<svg", true)) ChatPic.Svg(markup) else ChatPic.Bytes(file.data.orEmpty(), file.mime)
+                } else {
+                    ChatPic.Bytes(file.data.orEmpty(), file.mime)
+                }
+                ChatPicture(pic)
+            } else if (!file.mime.startsWith("image/")) {
+                Text(
+                    "${file.name} · ${file.mime}",
+                    color = color,
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
             if (!file.error.isNullOrBlank()) {
                 Text(
                     file.error,
@@ -676,6 +818,129 @@ fun ChatBubble(msg: ChatMessage, deferFrames: Int = 1, contentWidthPx: Int = 0) 
         }
         if (selecting) SelectionContainer { body() } else body()
     }
+}
+
+@Composable
+private fun ChatPicture(pic: ChatPic) {
+    var bitmap by remember(pic) { mutableStateOf<android.graphics.Bitmap?>(null) }
+    var failed by remember(pic) { mutableStateOf(false) }
+    var preview by remember(pic) { mutableStateOf(false) }
+    LaunchedEffect(pic) {
+        val decoded = withContext(Dispatchers.IO) { decodeChatPic(pic) }
+        if (decoded != null) bitmap = decoded else failed = true
+    }
+    val image = bitmap
+    if (image != null) {
+        Image(
+            bitmap = image.asImageBitmap(),
+            contentDescription = "图片",
+            contentScale = ContentScale.Fit,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 240.dp)
+                .clip(RoundedCornerShape(8.dp))
+        )
+    } else if (failed) {
+        TextButton(onClick = { preview = true }) { Text("打开预览") }
+        if (preview) {
+            androidx.compose.ui.window.Dialog(onDismissRequest = { preview = false }) {
+                Column(
+                    Modifier
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(MaterialTheme.colorScheme.surface)
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    TextButton(onClick = { preview = false }) { Text("关闭") }
+                    val remote = (pic as? ChatPic.Remote)?.url
+                    if (!remote.isNullOrBlank()) {
+                        val context = LocalContext.current
+                        TextButton(onClick = {
+                            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(remote))
+                            context.startActivity(intent)
+                        }) { Text("用浏览器打开") }
+                    }
+                    AndroidView(
+                        factory = { ctx ->
+                            android.webkit.WebView(ctx).apply {
+                                settings.javaScriptEnabled = false
+                                val (body, mime) = previewPayload(pic)
+                                loadDataWithBaseURL(null, body, mime, "utf-8", null)
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth().height(320.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun previewPayload(pic: ChatPic): Pair<String, String> = when (pic) {
+    is ChatPic.Svg -> pic.markup to "image/svg+xml"
+    is ChatPic.Remote -> """<html><body style="margin:0"><img src="${pic.url}" style="max-width:100%;height:auto"></body></html>""" to "text/html"
+    is ChatPic.Bytes -> """<html><body style="margin:0"><img src="data:${pic.mime};base64,${pic.base64}" style="max-width:100%;height:auto"></body></html>""" to "text/html"
+}
+
+private fun decodeChatPic(pic: ChatPic): android.graphics.Bitmap? = when (pic) {
+    is ChatPic.Svg -> renderSvg(pic.markup)
+    is ChatPic.Bytes -> if (pic.mime.contains("svg")) {
+        val markup = try {
+            String(android.util.Base64.decode(pic.base64, android.util.Base64.DEFAULT), Charsets.UTF_8)
+        } catch (_: Exception) {
+            ""
+        }
+        if (markup.contains("<svg", true)) renderSvg(markup) else decodeBase64Image(pic.base64)
+    } else {
+        decodeBase64Image(pic.base64)
+    }
+    is ChatPic.Remote -> decodeRemote(pic.url)
+}
+
+private fun decodeBase64Image(data: String): android.graphics.Bitmap? = try {
+    val bytes = android.util.Base64.decode(data, android.util.Base64.DEFAULT)
+    android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+} catch (_: Exception) {
+    null
+}
+
+private fun decodeRemote(url: String): android.graphics.Bitmap? {
+    if (url.endsWith(".svg", true) || url.contains(".svg?", true)) {
+        return fetchBytes(url)?.let { bytes -> renderSvg(String(bytes, Charsets.UTF_8)) }
+    }
+    val fetched = fetchBytes(url) ?: return null
+    val head = String(fetched, 0, minOf(180, fetched.size), Charsets.UTF_8).trimStart()
+    return if (head.startsWith("<svg", true)) renderSvg(String(fetched, Charsets.UTF_8))
+    else android.graphics.BitmapFactory.decodeByteArray(fetched, 0, fetched.size)
+}
+
+private fun fetchBytes(url: String): ByteArray? {
+    val conn = (java.net.URL(url).openConnection() as java.net.HttpURLConnection)
+    conn.connectTimeout = 10_000
+    conn.readTimeout = 15_000
+    conn.instanceFollowRedirects = true
+    return try {
+        if (conn.responseCode !in 200..299) return null
+        val bytes = conn.inputStream.use { it.readBytes() }
+        if (bytes.size > 8_000_000) null else bytes
+    } catch (_: Exception) {
+        null
+    } finally {
+        conn.disconnect()
+    }
+}
+
+private fun renderSvg(markup: String): android.graphics.Bitmap? = try {
+    val svg = com.caverock.androidsvg.SVG.getFromString(markup)
+    if (svg.documentWidth <= 0f) svg.setDocumentWidth(1080f)
+    if (svg.documentHeight <= 0f) svg.setDocumentHeight(720f)
+    val width = svg.documentWidth.toInt().coerceIn(64, 1080)
+    val height = svg.documentHeight.toInt().coerceIn(64, 1600)
+    val bitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
+    svg.renderToCanvas(android.graphics.Canvas(bitmap))
+    bitmap
+} catch (_: Exception) {
+    null
 }
 
 @Composable

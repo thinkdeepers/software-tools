@@ -25,7 +25,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.ExitToApp
-import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.DrawerValue
@@ -212,11 +211,7 @@ private fun MainScaffold(
                     Spacer(Modifier.height(16.dp))
                     DrawerEntry("收件箱 Inbox", selected == Routes.INBOX, Icons.Filled.Home) { open(Routes.INBOX) }
                     Text("分类", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp, bottom = 4.dp))
-                    DrawerEntry("Projects", selected == Routes.INBOX && AgentStore.scope == WorkScope.PROJECT, Icons.Filled.Folder) {
-                        AgentStore.choose(WorkScope.PROJECT)
-                        open(Routes.INBOX)
-                    }
-                    DrawerEntry("Repositories", selected == Routes.INBOX && AgentStore.scope == WorkScope.REPOSITORY, Icons.Filled.Code) {
+                    DrawerEntry("Repositories", selected == Routes.INBOX, Icons.Filled.Code) {
                         AgentStore.choose(WorkScope.REPOSITORY)
                         open(Routes.INBOX)
                     }
@@ -239,9 +234,16 @@ private fun MainScaffold(
                         }
                     }
                     Spacer(Modifier.weight(1f))
+                    androidx.compose.material3.HorizontalDivider(
+                        modifier = Modifier.padding(top = 12.dp),
+                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.28f)
+                    )
                     Text(
                         "从口袋里指挥全部 Agent",
+                        modifier = Modifier.padding(top = 10.dp, bottom = 2.dp),
                         fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                        letterSpacing = 0.6.sp,
                         lineHeight = 14.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

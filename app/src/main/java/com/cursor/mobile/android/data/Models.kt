@@ -29,7 +29,7 @@ data class AgentSession(
     val classified: Boolean = false
 )
 
-data class MessageFile(val name: String, val mime: String, val error: String? = null)
+data class MessageFile(val name: String, val mime: String, val error: String? = null, val data: String? = null)
 
 data class PromptImage(val base64: String, val mimeType: String)
 
