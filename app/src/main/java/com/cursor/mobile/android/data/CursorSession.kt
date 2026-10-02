@@ -493,7 +493,8 @@ object CursorSession {
         val note = buildString {
             appendLine("ListBackgroundComposers")
             appendLine("HTTP $lastCode")
-            append("composer ${merged.size} 条")
+            appendLine("composer ${merged.size} 条")
+            append(rootShape(lastBody))
         }
         return Listed(merged.values.toList(), projects, lastCode, note)
     }
@@ -575,16 +576,49 @@ object CursorSession {
             return Triple(emptyList(), emptyList(), null)
         }
         val composers = findComposers(root)
-        val projects = jsonArray(root.optJSONArray("projects")).mapNotNull { obj ->
-            val name = obj.optStr("displayName").ifBlank { obj.optStr("name") }.ifBlank { obj.optStr("projectName") }
-            val id = obj.optStr("id").ifBlank { obj.optStr("projectId") }.ifBlank { obj.optStr("project_id") }
-            if (name.isBlank() && id.isBlank()) return@mapNotNull null
-            if (composerId(obj).isNotBlank() && name.isBlank()) return@mapNotNull null
-            ProjectRef(name.ifBlank { id }, id.ifBlank { name }, obj.optStr("repoUrl").ifBlank { obj.optStr("repository") })
+        val projects = mutableListOf<ProjectRef>()
+        val rootKeys = root.keys()
+        while (rootKeys.hasNext()) {
+            val key = rootKeys.next()
+            if (!key.contains("project", true) || key.contains("environment", true)) continue
+            val arr = root.optJSONArray(key) ?: continue
+            if (arr.length() !in 1..12) continue
+            jsonArray(arr).forEach { obj ->
+                if (looksLikeSession(obj)) return@forEach
+                val name = obj.optStr("displayName").ifBlank { obj.optStr("name") }.ifBlank { obj.optStr("projectName") }.trim()
+                if (name.isBlank() || name.length > 80) return@forEach
+                val id = obj.optStr("id").ifBlank { obj.optStr("projectId") }.ifBlank { obj.optStr("project_id") }.ifBlank { name }
+                if (projects.none { it.name.equals(name, true) }) {
+                    projects += ProjectRef(name, id, obj.optStr("repoUrl").ifBlank { obj.optStr("repository") })
+                }
+            }
         }
         val next = root.optStr("nextCursor").ifBlank { root.optStr("nextPageToken") }.ifBlank { root.optStr("cursor") }
             .takeIf { it.isNotBlank() && !it.equals("null", true) }
         return Triple(composers, projects, next)
+    }
+
+    private fun rootShape(body: String): String {
+        val trimmed = body.trim()
+        if (!trimmed.startsWith("{")) return "顶层不是对象"
+        val root = try {
+            JSONObject(trimmed)
+        } catch (_: Exception) {
+            return "顶层不是 JSON"
+        }
+        val parts = mutableListOf<String>()
+        val keys = root.keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            val value = root.opt(key)
+            val count = when (value) {
+                is JSONArray -> value.length()
+                is JSONObject -> value.length()
+                else -> -1
+            }
+            parts += if (count >= 0) "$key:$count" else key
+        }
+        return "顶层 " + parts.joinToString(" ")
     }
 
     private fun findComposers(root: JSONObject): List<JSONObject> {

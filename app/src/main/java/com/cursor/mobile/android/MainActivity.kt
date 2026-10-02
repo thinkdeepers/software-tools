@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -195,7 +196,7 @@ private fun MainScaffold(
         drawerState = drawer,
         drawerContent = {
             ModalDrawerSheet {
-                Column(Modifier.padding(18.dp)) {
+                Column(Modifier.fillMaxHeight().padding(18.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         Box(
                             modifier = Modifier.size(44.dp).clip(RoundedCornerShape(15.dp)).background(accentGradient()),
@@ -237,6 +238,13 @@ private fun MainScaffold(
                             }
                         }
                     }
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        "从口袋里指挥全部 Agent",
+                        fontSize = 11.sp,
+                        lineHeight = 14.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
         }

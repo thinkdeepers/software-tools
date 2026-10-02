@@ -140,7 +140,6 @@ fun InboxScreen(
                 ) {
                     Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
                         Kicker("Cloud Agents")
-                        Text("从口袋里指挥全部 Agent", style = MaterialTheme.typography.titleLarge)
                         Text(
                             if (scope == WorkScope.PROJECT) "Projects · ${projectGroups.size} 个项目"
                             else "Repositories · ${repoList.size} 个仓库",
@@ -186,7 +185,7 @@ fun InboxScreen(
                 item { EmptyState("正在补齐项目", "列表里的 projectMetadata 是空的，正在拉会话详情。") }
             }
             if (!loading && scope == WorkScope.PROJECT && projectGroups.isEmpty() && pending == 0 && error.isNullOrBlank()) {
-                item { EmptyState("还没有项目", summary.ifBlank { "对不上的会话不会放进 Projects。" }) }
+                item { EmptyState("还没有分出项目", "每个探测接口的状态和条数在同步详情里。对不上的会话不会放进 Projects。") }
             }
             if (!loading && scope == WorkScope.REPOSITORY && repoList.isEmpty() && error.isNullOrBlank()) {
                 item { EmptyState("还没有仓库", "仓库来自会话的 repoUrl，每个地址只列一次。") }

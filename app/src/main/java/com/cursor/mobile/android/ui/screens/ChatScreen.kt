@@ -63,8 +63,8 @@ import com.cursor.mobile.android.data.PrefsRepository
 import com.cursor.mobile.android.data.Sender
 import com.cursor.mobile.android.data.modelChoices
 import com.cursor.mobile.android.ui.components.ChatBubble
+import com.cursor.mobile.android.ui.components.ChatCardPadding
 import com.cursor.mobile.android.ui.components.ChatPagePadding
-import com.cursor.mobile.android.ui.components.ChatTextPadding
 import com.cursor.mobile.android.ui.components.ComposerAttachment
 import com.cursor.mobile.android.ui.components.ComposerBar
 import com.cursor.mobile.android.ui.components.ModelPicker
@@ -300,7 +300,7 @@ fun ChatScreen(
     ) { padding ->
         BoxWithConstraints(Modifier.fillMaxSize().padding(padding).padding(horizontal = ChatPagePadding)) {
         var stableWidth by remember { mutableIntStateOf(0) }
-        val textInset = with(LocalDensity.current) { (ChatTextPadding * 2).roundToPx() }
+        val textInset = with(LocalDensity.current) { (ChatCardPadding * 2).roundToPx() }
         val incoming = (constraints.maxWidth - textInset).coerceAtLeast(0)
         if (stableWidth == 0 && incoming > 0) stableWidth = incoming
         LaunchedEffect(incoming) {

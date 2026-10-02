@@ -597,7 +597,8 @@ private fun CodeScroll(text: String, color: Color) {
     )
 }
 
-val ChatPagePadding = 8.dp
+val ChatPagePadding = 4.dp
+val ChatCardPadding = 4.dp
 val ChatTextPadding = 28.dp
 private val chatBody = TextStyle(fontSize = 13.sp, lineHeight = 17.sp)
 
@@ -637,7 +638,7 @@ fun ChatBubble(msg: ChatMessage, deferFrames: Int = 1, contentWidthPx: Int = 0) 
                     detectTapGestures(onLongPress = { selecting = true })
                 }
             )
-            .padding(horizontal = ChatTextPadding, vertical = 6.dp)
+            .padding(horizontal = ChatCardPadding, vertical = 6.dp)
     ) {
         val body = @Composable {
             if (cleaned.isNotBlank()) {

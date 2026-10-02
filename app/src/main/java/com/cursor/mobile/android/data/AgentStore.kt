@@ -112,9 +112,11 @@ object AgentStore {
                 val repoCount = sessions.count { it.scope == WorkScope.REPOSITORY }
                 val names = projects.map { it.name }.filter { it.isNotBlank() }.distinct()
                 val ungrouped = sessions.count { it.scope != WorkScope.PROJECT }
+                val field = projectFieldSplit(sync.composers)?.first.orEmpty()
                 val source = buildList {
                     if (adoptedApi.isNotBlank()) add(adoptedApi)
-                    if (projectCount > 0) add("projectMetadata")
+                    if (projectCount > 0 && sync.composers.any { jsonHasProject(it) }) add("projectMetadata")
+                    else if (projectCount > 0 && field.isNotBlank()) add(field)
                 }.joinToString(" + ").ifBlank { "无" }
                 syncReport = buildString {
                     appendLine("最终采用：$source")
@@ -289,7 +291,7 @@ object AgentStore {
         code !in 200..299 -> "列表请求失败（HTTP $code）。"
         total == 0 -> "服务器返回 0 条会话。"
         projects > 0 -> ""
-        projects == 0 && total > 0 -> "还没有对上的项目。打开同步详情可看每个接口的状态。"
+        projects == 0 && total > 0 -> ""
         else -> "同步到 $total 条会话，但没有可归类的项目或仓库。"
     }
 

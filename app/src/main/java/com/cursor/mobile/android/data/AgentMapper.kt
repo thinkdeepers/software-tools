@@ -75,7 +75,91 @@ internal fun mapDesktopComposers(items: List<JSONObject>, catalog: List<ProjectR
         val inCatalog = label.isNotBlank() && catalog.any { it.name.equals(label, true) }
         if (inCatalog || (metadataTrusted && label.isNotBlank())) label else ""
     }
-    return items.mapIndexed { index, obj -> composerSession(obj, labels[index], hits[index]) }
+    val mapped = items.mapIndexed { index, obj -> composerSession(obj, labels[index], hits[index]) }
+    if (mapped.any { it.scope == WorkScope.PROJECT } || catalog.isNotEmpty()) return mapped
+    val split = projectFieldSplit(items) ?: return mapped
+    return items.mapIndexed { index, obj ->
+        val label = split.second[index]
+        composerSession(obj, label, if (label.isBlank()) null else ProjectHit(label, label))
+    }
+}
+
+internal fun projectFieldSplit(items: List<JSONObject>): Pair<String, List<String>>? {
+    val best = projectFieldCandidates(items).minByOrNull {
+        kotlin.math.abs(it.labels.filter { value -> value.isNotBlank() }.distinct().size - 5)
+    } ?: return null
+    return best.key to best.labels
+}
+
+internal fun projectFieldReport(items: List<JSONObject>): String {
+    val keys = items.firstOrNull()?.let { metadataKeyList(it) } ?: "没有会话"
+    val candidates = projectFieldCandidates(items)
+    val chosen = projectFieldSplit(items)?.first
+    return buildString {
+        appendLine("projectMetadata 键：$keys")
+        if (candidates.isEmpty()) append("带 project 的名字没有分成 2 到 8 个，会话不放进 Projects")
+        else candidates.forEach { hit ->
+            val names = hit.labels.filter { it.isNotBlank() }.distinct()
+            val mark = if (hit.key == chosen) "，采用" else ""
+            appendLine("${hit.key} ${names.size} 个：${names.joinToString("、")}$mark")
+        }
+    }.trim()
+}
+
+private data class FieldHit(val key: String, val labels: List<String>)
+
+private fun projectFieldCandidates(items: List<JSONObject>): List<FieldHit> {
+    if (items.size < 6) return emptyList()
+    val paths = linkedSetOf<String>()
+    val perItem = items.map { obj ->
+        val found = linkedMapOf<String, String>()
+        fun walk(value: JSONObject, prefix: String, depth: Int) {
+            if (depth > 3) return
+            val keys = value.keys()
+            while (keys.hasNext()) {
+                val key = keys.next()
+                val path = if (prefix.isBlank()) key else "$prefix.$key"
+                if (path.contains("environment", true) || path.contains("repo", true) || path.contains("url", true) || path.contains("workflow", true)) continue
+                when (val child = value.opt(key)) {
+                    is String -> {
+                        val parentIsProject = prefix.contains("project", true)
+                        val keyIsProject = key.contains("project", true)
+                        val sessionTitle = prefix.isBlank() && key.equals("name", true)
+                        if (!sessionTitle && (keyIsProject || parentIsProject) && looksLikeProjectName(child)) {
+                            found.putIfAbsent(path, child.trim())
+                            paths += path
+                        }
+                    }
+                    is JSONObject -> if (!key.equals("modelDetails", true)) walk(child, path, depth + 1)
+                }
+            }
+        }
+        walk(obj, "", 0)
+        found
+    }
+    return paths.map { path -> FieldHit(path, perItem.map { it[path].orEmpty() }) }.filter { hit ->
+        val names = hit.labels.filter { it.isNotBlank() }.distinct()
+        names.size in 2..8 && hit.labels.count { it.isNotBlank() } * 2 >= items.size
+    }
+}
+
+private fun looksLikeProjectName(value: String): Boolean {
+    val text = value.trim()
+    if (text.length !in 2..40) return false
+    if (text.startsWith("http") || text.startsWith("bc-") || text.startsWith("{")) return false
+    if (text.matches(Regex("[0-9a-fA-F-]{16,}"))) return false
+    if (!text.any { it.isLetter() }) return false
+    return true
+}
+
+private fun metadataKeyList(obj: JSONObject): String {
+    val raw = obj.opt("projectMetadata") ?: obj.opt("project_metadata") ?: return "缺失"
+    if (raw !is JSONObject) return "不是对象"
+    if (raw.length() == 0) return "空对象"
+    val names = mutableListOf<String>()
+    val keys = raw.keys()
+    while (keys.hasNext() && names.size < 12) names += keys.next()
+    return names.joinToString("、")
 }
 
 internal fun rawProjectMetadata(obj: JSONObject): String {
@@ -100,6 +184,7 @@ internal fun projectMetadataReport(items: List<JSONObject>): String {
         val workflows = items.map { it.optStr("workflowId").ifBlank { it.optStr("workflow_id") } }.filter { it.isNotBlank() }.distinct()
         appendLine("environmentPublicId ${envIds.size} 个不同值，未当作项目")
         appendLine("workflowId ${workflows.size} 个不同值，未当作项目")
+        append(projectFieldReport(items))
     }.trim()
 }
 
