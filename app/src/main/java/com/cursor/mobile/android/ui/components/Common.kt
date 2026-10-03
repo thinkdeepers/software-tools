@@ -24,7 +24,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -732,20 +731,24 @@ fun ChatBubble(msg: ChatMessage, deferFrames: Int = 1, contentWidthPx: Int = 0) 
             }
         msg.files.forEach { file ->
             val name = file.name.lowercase()
-            val visual = file.mime.startsWith("image/") || name.endsWith(".svg") || name.endsWith(".md") ||
-                name.endsWith(".markdown") || file.mime.contains("svg") || file.mime.contains("markdown")
+            val vector = name.endsWith(".svg") || name.endsWith(".avg") || file.mime.contains("svg")
+            val markdown = name.endsWith(".md") || name.endsWith(".markdown") || file.mime.contains("markdown")
+            val visual = vector || markdown || file.mime.startsWith("image/")
             val payload = file.data
             if (visual && !payload.isNullOrBlank()) {
-                val svgText = if (name.endsWith(".svg") || file.mime.contains("svg")) decodeMaybeText(payload) else ""
+                val text = decodeMaybeText(payload)
                 when {
-                    svgText.contains("<svg", true) -> ChatPicture(ChatPic.Svg(svgText))
-                    name.endsWith(".md") || name.endsWith(".markdown") || file.mime.contains("markdown") -> {
-                        MessageBody(decodeMaybeText(payload), color, chatBody, partSpacing = 2.dp, textAlign = align, justify = false, contentWidthPx = contentWidthPx)
-                    }
+                    vector || text.contains("<svg", true) -> ChatPicture(ChatPic.Svg(text))
+                    markdown -> MessageBody(text, color, chatBody, partSpacing = 2.dp, textAlign = align, justify = false, contentWidthPx = contentWidthPx)
                     else -> ChatPicture(ChatPic.Bytes(payload, file.mime.ifBlank { "image/png" }))
                 }
             } else if (visual) {
-                ChatPicture(ChatPic.Remote("preview://${file.name}"))
+                Text(
+                    "图片加载失败：没有图数据",
+                    color = MaterialTheme.colorScheme.error,
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp
+                )
             } else {
                 Text(
                     "${file.name} · ${file.mime}",
@@ -774,70 +777,76 @@ fun ChatBubble(msg: ChatMessage, deferFrames: Int = 1, contentWidthPx: Int = 0) 
     }
 }
 
+private sealed class LoadDrawn {
+    data class Bitmap(val image: android.graphics.Bitmap) : LoadDrawn()
+    data class Markup(val svg: String) : LoadDrawn()
+    data class Failed(val reason: String) : LoadDrawn()
+}
+
 @Composable
 private fun ChatPicture(pic: ChatPic) {
+    val context = LocalContext.current
     var bitmap by remember(pic) { mutableStateOf<android.graphics.Bitmap?>(null) }
-    var failed by remember(pic) { mutableStateOf(false) }
-    var preview by remember(pic) { mutableStateOf(false) }
+    var markup by remember(pic) { mutableStateOf<String?>(null) }
+    var reason by remember(pic) { mutableStateOf<String?>(null) }
     LaunchedEffect(pic) {
-        val decoded = try {
-            withContext(Dispatchers.IO) {
-                try {
-                    decodeChatPic(pic)
-                } catch (_: Throwable) {
-                    null
-                }
-            }
-        } catch (_: Throwable) {
-            null
+        val token = com.cursor.mobile.android.data.AuthRepository.accessToken(context)
+        val loaded = try {
+            withContext(Dispatchers.IO) { loadDrawn(pic, token) }
+        } catch (t: Throwable) {
+            LoadDrawn.Failed("图片加载失败：${t.message ?: "无法绘制"}")
         }
-        if (decoded != null) bitmap = decoded else failed = true
+        when (loaded) {
+            is LoadDrawn.Bitmap -> bitmap = loaded.image
+            is LoadDrawn.Markup -> markup = loaded.svg
+            is LoadDrawn.Failed -> reason = loaded.reason
+        }
     }
     val image = bitmap
-    if (image != null) {
-        Image(
+    val svg = markup
+    val err = reason
+    when {
+        image != null -> Image(
             bitmap = image.asImageBitmap(),
             contentDescription = "图片",
             contentScale = ContentScale.Fit,
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(max = 240.dp)
-                .clip(RoundedCornerShape(8.dp))
+            modifier = Modifier.fillMaxWidth().heightIn(max = 240.dp).clip(RoundedCornerShape(8.dp))
         )
-    } else if (failed) {
-        TextButton(onClick = { preview = true }) { Text("打开预览") }
-        if (preview) {
-            androidx.compose.ui.window.Dialog(onDismissRequest = { preview = false }) {
-                Column(
-                    Modifier
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(MaterialTheme.colorScheme.surface)
-                        .padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    TextButton(onClick = { preview = false }) { Text("关闭") }
-                    val remote = (pic as? ChatPic.Remote)?.url?.takeIf { it.startsWith("http://") || it.startsWith("https://") }
-                    if (!remote.isNullOrBlank()) {
-                        val context = LocalContext.current
-                        TextButton(onClick = {
-                            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(remote))
-                            context.startActivity(intent)
-                        }) { Text("用浏览器打开") }
-                    }
-                    AndroidView(
-                        factory = { ctx ->
-                            android.webkit.WebView(ctx).apply {
-                                settings.javaScriptEnabled = false
-                                val (body, mime) = previewPayload(pic)
-                                loadDataWithBaseURL(null, body, mime, "utf-8", null)
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth().height(320.dp)
-                    )
-                }
-            }
+        svg != null -> SvgInCard(svg) {
+            reason = it
+            markup = null
+        }
+        err != null -> Text(err, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, lineHeight = 16.sp)
+        else -> Box(Modifier.fillMaxWidth().height(36.dp), contentAlignment = Alignment.Center) {
+            androidx.compose.material3.CircularProgressIndicator(Modifier.size(16.dp))
         }
     }
+}
+
+@Composable
+private fun SvgInCard(markup: String, onError: (String) -> Unit) {
+    AndroidView(
+        modifier = Modifier.fillMaxWidth().height(200.dp).clip(RoundedCornerShape(8.dp)),
+        factory = { ctx ->
+            android.webkit.WebView(ctx).apply {
+                settings.javaScriptEnabled = false
+                settings.loadsImagesAutomatically = true
+                setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                webViewClient = object : android.webkit.WebViewClient() {
+                    override fun onReceivedError(
+                        view: android.webkit.WebView,
+                        request: android.webkit.WebResourceRequest,
+                        error: android.webkit.WebResourceError
+                    ) {
+                        if (request.isForMainFrame) onError("图片加载失败：${error.description}")
+                    }
+                }
+                val page = """<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width"/></head><body style="margin:0">${markup.take(300_000)}</body></html>"""
+                loadDataWithBaseURL(null, page, "text/html", "utf-8", null)
+            }
+        },
+        onRelease = { it.destroy() }
+    )
 }
 
 private fun decodeMaybeText(data: String): String = try {
@@ -847,25 +856,62 @@ private fun decodeMaybeText(data: String): String = try {
     data
 }
 
-private fun previewPayload(pic: ChatPic): Pair<String, String> = when (pic) {
-    is ChatPic.Svg -> pic.markup.take(300_000).ifBlank { "<svg xmlns=\"http://www.w3.org/2000/svg\"><text y=\"20\">无法读取这张图</text></svg>" } to "image/svg+xml"
-    is ChatPic.Remote -> """<html><body style="margin:0"><img src="${pic.url}" style="max-width:100%;height:auto"></body></html>""" to "text/html"
-    is ChatPic.Bytes -> """<html><body style="margin:0"><img src="data:${pic.mime};base64,${pic.base64}" style="max-width:100%;height:auto"></body></html>""" to "text/html"
+private fun loadDrawn(pic: ChatPic, token: String?, depth: Int = 0): LoadDrawn {
+    if (depth > 2) return LoadDrawn.Failed("图片加载失败：嵌套太深")
+    return when (pic) {
+        is ChatPic.Svg -> markupOrBitmap(pic.markup)
+        is ChatPic.Bytes -> {
+            val text = decodeMaybeText(pic.base64)
+            if (pic.mime.contains("svg") || text.contains("<svg", true)) markupOrBitmap(text)
+            else decodeBase64Image(pic.base64)?.let { LoadDrawn.Bitmap(it) }
+                ?: LoadDrawn.Failed("图片加载失败：无法解码 ${pic.mime.ifBlank { "图片" }}")
+        }
+        is ChatPic.Remote -> loadRemote(pic.url, token, depth)
+    }
 }
 
-private fun decodeChatPic(pic: ChatPic): android.graphics.Bitmap? = when (pic) {
-    is ChatPic.Svg -> renderSvg(pic.markup)
-    is ChatPic.Bytes -> if (pic.mime.contains("svg")) {
-        val markup = try {
-            String(android.util.Base64.decode(pic.base64, android.util.Base64.DEFAULT), Charsets.UTF_8)
-        } catch (_: Exception) {
-            ""
-        }
-        if (markup.contains("<svg", true)) renderSvg(markup) else decodeBase64Image(pic.base64)
-    } else {
-        decodeBase64Image(pic.base64)
+private fun markupOrBitmap(markup: String): LoadDrawn {
+    if (!markup.contains("<svg", true)) return LoadDrawn.Failed("图片加载失败：没有可绘制的 SVG")
+    val bitmap = renderSvg(markup)
+    return if (bitmap != null) LoadDrawn.Bitmap(bitmap) else LoadDrawn.Markup(markup)
+}
+
+private fun loadRemote(url: String, token: String?, depth: Int): LoadDrawn {
+    if (!url.startsWith("http://") && !url.startsWith("https://")) {
+        return LoadDrawn.Failed("图片加载失败：地址无法从手机访问")
     }
-    is ChatPic.Remote -> decodeRemote(pic.url)
+    val conn = (java.net.URL(url).openConnection() as java.net.HttpURLConnection)
+    conn.connectTimeout = 12_000
+    conn.readTimeout = 20_000
+    conn.instanceFollowRedirects = true
+    conn.setRequestProperty("User-Agent", "CursorMobile-Android/24")
+    conn.setRequestProperty("Accept", "image/avif,image/webp,image/png,image/jpeg,image/gif,image/svg+xml,image/*,*/*")
+    if (!token.isNullOrBlank() && (url.contains("cursor.com") || url.contains("cursor.sh"))) {
+        conn.setRequestProperty("Authorization", "Bearer $token")
+    }
+    return try {
+        val code = conn.responseCode
+        if (code !in 200..299) return LoadDrawn.Failed("图片加载失败：HTTP $code")
+        val bytes = conn.inputStream.use { it.readBytes() }
+        if (bytes.size > 8_000_000) return LoadDrawn.Failed("图片加载失败：文件超过 8MB")
+        val type = conn.contentType.orEmpty()
+        val head = String(bytes, 0, minOf(240, bytes.size), Charsets.UTF_8).trimStart()
+        val vector = url.endsWith(".svg", true) || url.endsWith(".avg", true) ||
+            url.contains(".svg?", true) || url.contains(".avg?", true) ||
+            type.contains("svg") || head.startsWith("<svg", true) || head.startsWith("<?xml", true)
+        if (vector) return markupOrBitmap(String(bytes, Charsets.UTF_8))
+        if (url.endsWith(".md", true) || url.endsWith(".markdown", true) || type.contains("markdown") || head.contains("![")) {
+            val inner = splitMessageBlocks(String(bytes, Charsets.UTF_8)) { "" }.filterIsInstance<MessagePiece.Picture>().firstOrNull()
+            if (inner != null) return loadDrawn(inner.pic.toChatPic(), token, depth + 1)
+            return LoadDrawn.Failed("图片加载失败：这份 Markdown 里没有可显示的图")
+        }
+        decodeBounded(bytes)?.let { LoadDrawn.Bitmap(it) }
+            ?: LoadDrawn.Failed("图片加载失败：无法解码${if (type.isBlank()) "" else "（$type）"}")
+    } catch (t: Throwable) {
+        LoadDrawn.Failed("图片加载失败：${t.message ?: "网络错误"}")
+    } finally {
+        conn.disconnect()
+    }
 }
 
 private fun decodeBase64Image(data: String): android.graphics.Bitmap? = try {
@@ -884,33 +930,6 @@ private fun decodeBounded(bytes: ByteArray): android.graphics.Bitmap? {
     while (bounds.outWidth / sample > 1280 || bounds.outHeight / sample > 1280) sample *= 2
     val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
     return android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
-}
-
-private fun decodeRemote(url: String): android.graphics.Bitmap? {
-    if (!url.startsWith("http://") && !url.startsWith("https://")) return null
-    val fetched = fetchBytes(url) ?: return null
-    val head = String(fetched, 0, minOf(180, fetched.size), Charsets.UTF_8).trimStart()
-    return if (url.endsWith(".svg", true) || url.contains(".svg?", true) || head.startsWith("<svg", true) || head.startsWith("<?xml", true)) {
-        renderSvg(String(fetched, Charsets.UTF_8))
-    } else {
-        decodeBounded(fetched)
-    }
-}
-
-private fun fetchBytes(url: String): ByteArray? {
-    val conn = (java.net.URL(url).openConnection() as java.net.HttpURLConnection)
-    conn.connectTimeout = 10_000
-    conn.readTimeout = 15_000
-    conn.instanceFollowRedirects = true
-    return try {
-        if (conn.responseCode !in 200..299) return null
-        val bytes = conn.inputStream.use { it.readBytes() }
-        if (bytes.size > 8_000_000) null else bytes
-    } catch (_: Exception) {
-        null
-    } finally {
-        conn.disconnect()
-    }
 }
 
 private fun renderSvg(markup: String): android.graphics.Bitmap? {

@@ -105,7 +105,7 @@ private fun findFence(text: String, from: Int): Hit? {
     val close = text.indexOf("```", headerEnd + 1)
     if (close < 0) return null
     val body = text.substring(headerEnd, close)
-    val visual = lang == "svg" || lang == "xml" || lang == "html" || lang == "md" || lang == "markdown" ||
+    val visual = lang == "svg" || lang == "avg" || lang == "xml" || lang == "html" || lang == "md" || lang == "markdown" ||
         body.contains("<svg", true) || body.contains("![")
     if (!visual) return null
     val inner = picturesInside(body)

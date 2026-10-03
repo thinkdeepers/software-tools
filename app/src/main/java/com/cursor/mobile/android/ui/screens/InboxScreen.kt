@@ -2,7 +2,8 @@ package com.cursor.mobile.android.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -33,6 +34,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -49,6 +51,7 @@ import androidx.compose.ui.unit.sp
 import com.cursor.mobile.android.data.AgentSession
 import com.cursor.mobile.android.data.AgentStore
 import com.cursor.mobile.android.data.CursorApi
+import com.cursor.mobile.android.data.PrefsRepository
 import com.cursor.mobile.android.ui.components.EmptyState
 import com.cursor.mobile.android.ui.components.Kicker
 import com.cursor.mobile.android.ui.theme.CursorPalette
@@ -99,7 +102,10 @@ fun InboxScreen(
         },
         containerColor = MaterialTheme.colorScheme.background
     ) { padding ->
-        val grouped = sessions.sortedByDescending { it.updatedAtIso }.groupBy { repoShort(it) }
+        val pins by PrefsRepository.pinsFlow(context).collectAsState(initial = emptySet())
+        val rows = sessions.sortedWith(
+            compareByDescending<AgentSession> { pins.contains(it.id) }.thenByDescending { it.updatedAtIso }
+        )
         Column(Modifier.fillMaxSize().padding(padding)) {
         LazyColumn(
             modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp),
@@ -144,15 +150,16 @@ fun InboxScreen(
                 }
             }
             if (!loading && sessions.isEmpty() && error.isNullOrBlank()) {
-                item { EmptyState("还没有会话", "同步完成后会按仓库列在这里。") }
+                item { EmptyState("还没有会话", "同步完成后会列在这里。") }
             }
-            for ((repo, rows) in grouped) {
-                item(key = "repo-$repo") {
-                    Text(repo, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleSmall)
-                }
-                items(rows, key = { it.id.ifBlank { repo + it.title } }) { s ->
-                    SessionCard(s, repo) { onOpenChat(s.id) }
-                }
+            items(rows, key = { it.id.ifBlank { it.title } }) { s ->
+                SessionCard(
+                    s,
+                    repoShort(s),
+                    pinned = pins.contains(s.id),
+                    onClick = { onOpenChat(s.id) },
+                    onLongClick = { scope.launch { PrefsRepository.togglePin(context, s.id) } }
+                )
             }
             item { Box(Modifier.size(72.dp)) }
         }
@@ -175,8 +182,15 @@ private fun ownerRepo(raw: String): String? {
     return null
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun SessionCard(s: AgentSession, repo: String, onClick: () -> Unit) {
+private fun SessionCard(
+    s: AgentSession,
+    repo: String,
+    pinned: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit
+) {
     val press = remember { MutableInteractionSource() }
     val isPressed by press.collectIsPressedAsState()
     Column(
@@ -185,18 +199,29 @@ private fun SessionCard(s: AgentSession, repo: String, onClick: () -> Unit) {
             .graphicsLayer { scaleX = if (isPressed) 0.985f else 1f; scaleY = if (isPressed) 0.985f else 1f }
             .clip(RoundedCornerShape(20.dp))
             .background(MaterialTheme.colorScheme.surface)
-            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(20.dp))
-            .clickable(interactionSource = press, indication = null, onClick = onClick)
+            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = if (pinned) 0.9f else 1f), RoundedCornerShape(20.dp))
+            .combinedClickable(interactionSource = press, indication = null, onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 14.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
+        verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        Text(
-            s.title.ifBlank { "未命名会话" },
-            maxLines = 2,
-            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-            fontWeight = FontWeight.SemiBold,
-            style = MaterialTheme.typography.bodyLarge
-        )
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                s.title.ifBlank { "未命名会话" },
+                modifier = Modifier.weight(1f),
+                maxLines = 2,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                fontWeight = FontWeight.SemiBold,
+                style = MaterialTheme.typography.bodyLarge
+            )
+            if (pinned) {
+                Text(
+                    "置顶",
+                    fontSize = 10.sp,
+                    lineHeight = 12.sp,
+                    color = MaterialTheme.colorScheme.outline
+                )
+            }
+        }
         Text(
             repo,
             maxLines = 1,
